@@ -11,7 +11,25 @@ const framework = createCore(coreConfig, {
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // (populated during build — every property gets JSDoc: description + allowed values + @example)
+    /**
+     * tauri — the `@tauri-apps/cli` subprocess seam.
+     * - `spawnImpl`: injectable spawn for tests; `undefined` → real detached process-group spawn.
+     * - `nodePath`: explicit `node` binary path; `undefined` → PATH-walk resolution (never
+     *   `process.execPath`, which is bun here).
+     * - `readiness`: `tauri.dev()`'s devUrl poll cadence — no stdout "ready" marker exists
+     *   (tauri#4740), so polling is the only readiness signal.
+     *
+     * @example
+     * ```ts
+     * createApp({ pluginConfigs: { tauri: { readiness: { intervalMs: 100, timeoutMs: 30_000 } } } });
+     * ```
+     */
+    tauri: {
+      spawnImpl: undefined,
+      nodePath: undefined,
+      readiness: { intervalMs: 250, timeoutMs: 60_000 }
+    }
+    // (doctor/cli seams land with their build waves)
   }
 });
 

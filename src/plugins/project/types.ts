@@ -1,7 +1,8 @@
 /**
  * @file project plugin — type definitions.
  */
-import type { CapabilityConfigMap, Target } from "../../config";
+import type { LogApi } from "@moku-labs/common";
+import type { CapabilityConfigMap, Config, Target } from "../../config";
 
 /** Result of a write-if-changed generation pass. */
 export type GenerateResult = { written: string[]; unchanged: string[]; skipped: string[] };
@@ -46,6 +47,17 @@ export type ResolvedCapability = RegistryRow & {
   conf: TauriConfFragment;
   sidecarPlist: readonly PlistEntry[];
   manifest: readonly ManifestEntry[];
+};
+
+/**
+ * Domain context for the project plugin's API factory. This plugin has no per-plugin
+ * config/state — it consumes global config only (D-005) — so this is deliberately
+ * narrower than the kernel's full `PluginContext`: just `global` + the injected `log`
+ * core API (MC2).
+ */
+export type ProjectContext = {
+  readonly global: Readonly<Config>;
+  readonly log: LogApi;
 };
 
 /** Public API of the project plugin. */
