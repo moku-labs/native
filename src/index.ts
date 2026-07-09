@@ -28,8 +28,22 @@ const framework = createCore(coreConfig, {
       spawnImpl: undefined,
       nodePath: undefined,
       readiness: { intervalMs: 250, timeoutMs: 60_000 }
+    },
+    /**
+     * doctor — the diagnosis probe seam.
+     * - `probeImpl`: injectable probe runner for tests; `undefined` → real `which`/`--version`
+     *   subprocess probes. The one tauri-CLI probe goes through `tauri.version()` instead
+     *   (subprocess-seam ownership stays with the tauri plugin — D-013).
+     *
+     * @example
+     * ```ts
+     * createApp({ pluginConfigs: { doctor: { probeImpl: fakeProbe } } });
+     * ```
+     */
+    doctor: {
+      probeImpl: undefined
     }
-    // (doctor/cli seams land with their build waves)
+    // (cli seam lands with its build wave)
   }
 });
 

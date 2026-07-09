@@ -20,5 +20,17 @@ export const doctorPlugin = createPlugin("doctor", {
   events: register => ({
     "doctor:check": register<CheckResult>("A diagnosis check completed (cli renders these live)")
   }),
-  api: createDoctorApi
+  /**
+   * Wires the real plugin context into `createDoctorApi` (not a direct factory reference —
+   * `DoctorContext`'s narrow `emit`/`require` types need this call's own contextual
+   * inference to correctly merge this plugin's declared `events` into its own ctx type).
+   *
+   * @param ctx - The real plugin context (global/config/log/env/emit/require).
+   * @returns The `doctor` plugin's public API.
+   * @example
+   * ```ts
+   * api: ctx => createDoctorApi(ctx)
+   * ```
+   */
+  api: ctx => createDoctorApi(ctx)
 });
