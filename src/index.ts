@@ -42,8 +42,23 @@ const framework = createCore(coreConfig, {
      */
     doctor: {
       probeImpl: undefined
+    },
+    /**
+     * cli — the branded-output render/confirm seams (MC1).
+     * - `renderImpl`: injectable render sink for tests; `undefined` → branded console
+     *   (`@moku-labs/common/cli` `createBrandConsole`).
+     * - `confirmImpl`: injectable confirm for tests; `undefined` → styled branded confirm
+     *   (gates `cli.clean()` without a target — full projectDir wipe).
+     *
+     * @example
+     * ```ts
+     * createApp({ pluginConfigs: { cli: { renderImpl: line => lines.push(line) } } });
+     * ```
+     */
+    cli: {
+      renderImpl: undefined,
+      confirmImpl: undefined
     }
-    // (cli seam lands with its build wave)
   }
 });
 
