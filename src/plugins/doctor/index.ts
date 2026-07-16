@@ -1,8 +1,3 @@
-/**
- * Complex tier — per-target toolchain/completeness/version-skew diagnosis via a checks/ registry.
- *
- * @see README.md
- */
 import { createPlugin } from "../../config";
 import { projectPlugin } from "../project";
 import { tauriPlugin } from "../tauri";
@@ -13,6 +8,16 @@ const defaultConfig: Config = {
   probeImpl: undefined
 };
 
+/**
+ * Complex tier — per-target toolchain/completeness/version-skew diagnosis via a checks/ registry.
+ * Emits `doctor:check` per completed check (cli renders these live).
+ *
+ * @see README.md
+ * @example
+ * ```ts
+ * const app = createApp({ plugins: [projectPlugin, tauriPlugin, doctorPlugin] });
+ * ```
+ */
 export const doctorPlugin = createPlugin("doctor", {
   depends: [projectPlugin, tauriPlugin],
   config: defaultConfig,

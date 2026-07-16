@@ -1,12 +1,3 @@
-/**
- * Standard tier — typed verb surface (build/dev/doctor/clean), branded rendering (MC1),
- * live progress via hooks. dev() awaits tauri's DevHandle but never holds it (D-002).
- * `api`/`hooks` use the wrapper-call form (not a bare factory reference) so this call's
- * own contextual inference merges the doctor depends edge's `doctor:check` event into ctx
- * (mirrors doctor/index.ts's `api: ctx => createDoctorApi(ctx)` precedent).
- *
- * @see README.md
- */
 import { createPlugin } from "../../config";
 import { buildPlugin } from "../build";
 import { doctorPlugin } from "../doctor";
@@ -22,13 +13,26 @@ const defaultConfig: Config = {
   confirmImpl: undefined
 };
 
+/**
+ * Standard tier — typed verb surface (build/dev/doctor/clean), branded rendering (MC1),
+ * live progress via hooks. dev() awaits tauri's DevHandle but never holds it (D-002).
+ * `api`/`hooks` use the wrapper-call form (not a bare factory reference) so this call's
+ * own contextual inference merges the doctor depends edge's `doctor:check` event into ctx
+ * (mirrors doctor/index.ts's `api: ctx => createDoctorApi(ctx)` precedent).
+ *
+ * @see README.md
+ * @example
+ * ```ts
+ * const app = createApp({ plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin] });
+ * ```
+ */
 export const cliPlugin = createPlugin("cli", {
   depends: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin],
   config: defaultConfig,
   createState: createCliState,
   /**
-   * Wires the real plugin context into `createCliApi` (wrapper form — see the module
-   * comment above).
+   * Wires the real plugin context into `createCliApi` (wrapper form — see the plugin
+   * JSDoc above).
    *
    * @param ctx - The real plugin context (global/config/state/require).
    * @returns The `cli` plugin's public API.
@@ -39,8 +43,8 @@ export const cliPlugin = createPlugin("cli", {
    */
   api: ctx => createCliApi(ctx),
   /**
-   * Wires the real plugin context into `createCliHandlers` (wrapper form — see the module
-   * comment above).
+   * Wires the real plugin context into `createCliHandlers` (wrapper form — see the plugin
+   * JSDoc above).
    *
    * @param ctx - The real plugin context (global/config/state).
    * @returns The `cli` plugin's hook map.
