@@ -1,16 +1,16 @@
 /**
  * @file build plugin — per-target phase pipeline: scaffold → codegen → icons → compile →
  * bundle → collect, with timing, native:phase/native:complete emission, the mobile
- * scaffold gate, and the compile/bundle single-subprocess split (spec/03 §Phase semantics).
+ * init/completeness gate inside codegen (B6), the icons freshness rule (B5/A8) and the
+ * live compile→bundle transition split (N1/A15).
  */
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
+import path from "node:path";
 import type { NativePhase, Target } from "../../config";
-import { projectPlugin } from "../project";
-import { tauriPlugin } from "../tauri";
 import { collectArtifacts } from "./collect";
-import type { BuildContext, BuildResult } from "./types";
+import type { BuildContext, BuildDeps, BuildResult, PhaseTiming, RunOptions } from "./types";
 
-/** Mobile packaging targets — the only two with a `gen/<platform>` scaffold gate. */
+/** Mobile packaging targets — the only two with a `gen/<platform>` init + completeness gate. */
 const MOBILE_TARGETS: ReadonlySet<Target> = new Set(["ios", "android"]);
 
 /**
@@ -29,8 +29,8 @@ function isMobileTarget(target: Target): target is "ios" | "android" {
 
 /**
  * Builds the `[native]`-formatted fix-it error for a partial mobile `gen/` tree — the
- * scaffold gate never re-initializes a partial tree, so this points at diagnosis/reset
- * instead (S4 refinement: `tauri#13902` can leave a partial init).
+ * gate never re-initializes a partial tree, so this points at diagnosis/reset instead
+ * (S4 refinement: `tauri#13902` can leave a partial init).
  *
  * @param target - The mobile target whose tree is incomplete.
  * @param missing - The required files/directories that are absent.
@@ -47,71 +47,125 @@ function incompleteMobileTreeError(target: Target, missing: readonly string[]): 
 }
 
 /**
- * Runs the `scaffold` phase. Desktop targets only ensure `projectDir` exists; mobile
- * targets gate on `project.completeness()` — a `"not-initialized"` tree is initialized
- * once via `tauri.mobileInit()` and re-checked, but a partial (`"incomplete"`) tree fails
- * fast, before any further subprocess runs, rather than being silently re-initialized.
+ * Runs the `scaffold` phase: ensures `projectDir` exists. Nothing else — the mobile
+ * `gen/` tree is initialized in `codegen`, because `tauri ios|android init --ci` refuses
+ * to run before `tauri.conf.json` exists on disk (B6).
  *
  * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target being scaffolded.
  * @returns Nothing.
+ * @example
+ * ```ts
+ * await runScaffold(ctx);
+ * ```
+ */
+export async function runScaffold(ctx: BuildContext): Promise<void> {
+  await mkdir(ctx.global.projectDir, { recursive: true });
+}
+
+/** What the codegen phase reports to the icons phase that follows it. */
+export type CodegenResult = { mobileInitRan: boolean };
+
+/**
+ * Runs the `codegen` phase — `project.generate()` first (mobile init needs the generated
+ * `tauri.conf.json`), then for a mobile target: `tauri.mobileInit()` when the `gen/` tree
+ * is absent, the completeness gate (a partial tree fails fast, never silently
+ * re-initialized), and the idempotent `project.patchMobile()` pass carrying
+ * `tauri.runner()` — Tauri's own generated build phase calls a `node tauri` command that
+ * does not exist (B10).
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param target - The packaging target being generated for.
+ * @returns Whether this pass initialized the mobile tree (the icons phase needs it).
  * @throws {Error} When a mobile target's `gen/` tree is present but incomplete.
  * @example
  * ```ts
- * await runScaffold(ctx, "android");
+ * const { mobileInitRan } = await runCodegen(ctx, deps, "ios");
  * ```
  */
-export async function runScaffold(ctx: BuildContext, target: Target): Promise<void> {
-  if (!isMobileTarget(target)) {
-    await mkdir(ctx.global.projectDir, { recursive: true });
-    return;
-  }
+export async function runCodegen(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  target: Target
+): Promise<CodegenResult> {
+  await deps.project.generate({ target });
+  if (!isMobileTarget(target)) return { mobileInitRan: false };
 
-  const project = ctx.require(projectPlugin);
-  let status = project.completeness({ target });
+  let status = deps.project.completeness({ target });
+  let mobileInitRan = false;
   if (status.status === "not-initialized") {
-    await ctx.require(tauriPlugin).mobileInit({ target });
-    status = project.completeness({ target });
+    await deps.tauri.mobileInit({ target });
+    mobileInitRan = true;
+    status = deps.project.completeness({ target });
   }
   if (status.status === "incomplete") {
     throw incompleteMobileTreeError(target, status.missing);
   }
+
+  await deps.project.patchMobile({ target, runner: deps.tauri.runner() });
+  ctx.log.debug("build:codegen", { target, mobileInitRan });
+  return { mobileInitRan };
 }
 
 /**
- * Runs the `codegen` phase — `project.generate()`, plus the idempotent
- * `project.patchMobile()` pass (Android signing state only, re-applied every build; D-012)
- * for mobile targets.
+ * Reads a path's modification time, treating an absent path as "no mtime" rather than
+ * an error — a missing generated icon simply means the set has to be regenerated.
  *
- * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target being generated for.
- * @returns Nothing.
+ * @param target - The path to stat.
+ * @returns The modification time in milliseconds, or undefined when the path is absent.
  * @example
  * ```ts
- * await runCodegen(ctx, "macos");
+ * const mtime = await modifiedAt("/app/.moku/tauri/src-tauri/icons/icon.png");
  * ```
  */
-export async function runCodegen(ctx: BuildContext, target: Target): Promise<void> {
-  const project = ctx.require(projectPlugin);
-  await project.generate({ target });
-  if (isMobileTarget(target)) {
-    await project.patchMobile({ target });
+async function modifiedAt(target: string): Promise<number | undefined> {
+  try {
+    const stats = await stat(target);
+    return stats.mtimeMs;
+  } catch {
+    return undefined;
   }
 }
 
 /**
- * Runs the `icons` phase. v1 wires no icon-source config field on any plugin's `Config`,
- * so there is nothing to regenerate `tauri icon` from — always reports `"skipped"` rather
- * than guessing a source path or invoking the CLI without one.
+ * Runs the `icons` phase: resolves the icon source through `project.ensureIconSource()`
+ * (the configured `app.icon`, or a generated placeholder) and regenerates the full icon
+ * set with `tauri.icon()`. The set is left alone ONLY when the generated
+ * `src-tauri/icons/icon.png` is newer than the source AND this pass did not run
+ * `mobileInit` — a fresh `gen/` tree ships Tauri's own default icons, which must be
+ * overwritten (B5/A8).
  *
- * @returns The phase detail to attach to the `native:phase` "done" event.
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param opts - Phase input.
+ * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
+ * @returns The phase detail: `"up to date"`, `"generated"` or `"placeholder"`.
  * @example
  * ```ts
- * const { detail } = await runIcons();
+ * const { detail } = await runIcons(ctx, deps, { mobileInitRan: false });
  * ```
  */
-export function runIcons(): Promise<{ detail: string }> {
-  return Promise.resolve({ detail: "skipped" });
+export async function runIcons(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  opts: { mobileInitRan: boolean }
+): Promise<{ detail: string }> {
+  const source = await deps.project.ensureIconSource();
+  const generatedIcon = path.join(ctx.global.projectDir, "src-tauri", "icons", "icon.png");
+  const [generatedAt, sourceAt] = await Promise.all([
+    modifiedAt(generatedIcon),
+    modifiedAt(source)
+  ]);
+
+  const isFresh = generatedAt !== undefined && sourceAt !== undefined && generatedAt > sourceAt;
+  if (isFresh && !opts.mobileInitRan) {
+    ctx.log.debug("build:icons", { action: "skipped", source });
+    return { detail: "up to date" };
+  }
+
+  await deps.tauri.icon({ source });
+  ctx.log.debug("build:icons", { action: "generated", source });
+  return { detail: ctx.global.app.icon ? "generated" : "placeholder" };
 }
 
 /** Matches a tauri build output line signalling the compile→bundle transition. */
@@ -171,33 +225,38 @@ function emitPhase(
 
 /**
  * Runs the shared `tauri build` subprocess that covers BOTH the `compile` and `bundle`
- * phases (one process — D-013). `compile` carries the live `onTick` progress stream;
- * `bundle`'s duration is derived from the first scrubbed output line matching the
- * compile→bundle transition, with a zero-duration fallback when no such line appears.
- * A failure is always attributed to `compile` (the phase that always starts first) and
- * `bundle` is never emitted at all — the same "error skips the next phase" contract the
- * generic phase runner gives every other phase.
+ * phases (one process — D-013). The transition is LIVE: the first scrubbed output line
+ * matching the bundling pattern closes `compile` and opens `bundle` right then, so a
+ * progress UI never sits on "compiling" through the whole bundling step (N1). When no
+ * transition line ever appears, `compile` closes at exit and `bundle` is reported as a
+ * zero-duration pass. A failure is attributed to whichever phase is open (A15).
  *
  * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target being compiled/bundled.
+ * @param deps - The resolved project/tauri APIs.
+ * @param opts - The target plus the platform build flags to forward.
  * @returns The measured `compile` and `bundle` phase durations.
  * @throws {Error} Whatever `tauri.build()` throws (already reported via native:phase).
  * @example
  * ```ts
- * const { compileDurationMs, bundleDurationMs } = await runCompileAndBundle(ctx, "macos");
+ * const { compileDurationMs } = await runCompileAndBundle(ctx, deps, { target: "macos" });
  * ```
  */
 export async function runCompileAndBundle(
   ctx: BuildContext,
-  target: Target
+  deps: BuildDeps,
+  opts: RunOptions
 ): Promise<{ compileDurationMs: number; bundleDurationMs: number }> {
+  const { target } = opts;
   const startedAt = Date.now();
   let transitionAt: number | undefined;
 
   emitPhase(ctx, target, "compile", "start");
   try {
-    await ctx.require(tauriPlugin).build({
+    await deps.tauri.build({
       target,
+      simulator: opts.simulator,
+      aab: opts.aab,
+      exportMethod: ctx.global.signing.apple?.exportMethod,
       /**
        * Forwards one parsed compile tick as a `native:phase` "progress" event.
        *
@@ -211,8 +270,8 @@ export async function runCompileAndBundle(
         emitPhase(ctx, target, "compile", "progress", { detail: formatCompileTickDetail(tick) });
       },
       /**
-       * Records the first moment a scrubbed output line signals the compile→bundle
-       * transition, so `bundle`'s duration can be derived after the subprocess exits.
+       * Closes `compile` and opens `bundle` the moment the subprocess reports it started
+       * bundling — while it is still running.
        *
        * @param line - A single scrubbed output line.
        * @example
@@ -221,28 +280,36 @@ export async function runCompileAndBundle(
        * ```
        */
       onOutput: line => {
-        if (transitionAt === undefined && BUNDLING_TRANSITION_PATTERN.test(line)) {
-          transitionAt = Date.now();
-        }
+        if (transitionAt !== undefined) return;
+        if (!BUNDLING_TRANSITION_PATTERN.test(line)) return;
+        transitionAt = Date.now();
+        emitPhase(ctx, target, "compile", "done", { durationMs: transitionAt - startedAt });
+        emitPhase(ctx, target, "bundle", "start");
       }
     });
   } catch (error) {
-    const durationMs = Date.now() - startedAt;
+    // The failure belongs to whichever phase is still open when the subprocess dies.
+    const openPhase: NativePhase = transitionAt === undefined ? "compile" : "bundle";
     const detail = error instanceof Error ? error.message : String(error);
-    emitPhase(ctx, target, "compile", "error", { durationMs, detail });
+    emitPhase(ctx, target, openPhase, "error", {
+      durationMs: Date.now() - (transitionAt ?? startedAt),
+      detail
+    });
     throw error;
   }
 
   const endedAt = Date.now();
-  const bundleStartedAt = transitionAt ?? endedAt;
-  const compileDurationMs = bundleStartedAt - startedAt;
-  const bundleDurationMs = endedAt - bundleStartedAt;
+  if (transitionAt === undefined) {
+    const compileDurationMs = endedAt - startedAt;
+    emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
+    emitPhase(ctx, target, "bundle", "start");
+    emitPhase(ctx, target, "bundle", "done", { durationMs: 0 });
+    return { compileDurationMs, bundleDurationMs: 0 };
+  }
 
-  emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
-  emitPhase(ctx, target, "bundle", "start");
+  const bundleDurationMs = endedAt - transitionAt;
   emitPhase(ctx, target, "bundle", "done", { durationMs: bundleDurationMs });
-
-  return { compileDurationMs, bundleDurationMs };
+  return { compileDurationMs: transitionAt - startedAt, bundleDurationMs };
 }
 
 /**
@@ -259,7 +326,7 @@ export async function runCompileAndBundle(
  * @throws {Error} Rethrows whatever `run` throws, after emitting the error event.
  * @example
  * ```ts
- * const { durationMs } = await runPhase(ctx, "macos", "scaffold", () => runScaffold(ctx, "macos"));
+ * const { durationMs } = await runPhase(ctx, "macos", "scaffold", () => runScaffold(ctx));
  * ```
  */
 async function runPhase<T>(
@@ -292,40 +359,77 @@ async function runPhase<T>(
 }
 
 /**
+ * Runs the three preparation phases — `scaffold → codegen → icons` — that bring the
+ * generated project to a buildable state. `dev` needs exactly these (M1): a `tauri dev`
+ * run compiles from the same tree, so it must never see a stale or missing one.
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param target - The packaging target to prepare for.
+ * @returns The three measured phase timings, in execution order.
+ * @throws {Error} Whatever the failing phase throws (already reported via native:phase).
+ * @example
+ * ```ts
+ * await runPrepare(ctx, deps, "macos");
+ * ```
+ */
+export async function runPrepare(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  target: Target
+): Promise<readonly PhaseTiming[]> {
+  const scaffold = await runPhase(ctx, target, "scaffold", () => runScaffold(ctx));
+  const codegen = await runPhase(ctx, target, "codegen", () => runCodegen(ctx, deps, target));
+  const icons = await runPhase(
+    ctx,
+    target,
+    "icons",
+    () => runIcons(ctx, deps, { mobileInitRan: codegen.result.mobileInitRan }),
+    result => result.detail
+  );
+
+  return [
+    { phase: "scaffold", durationMs: scaffold.durationMs },
+    { phase: "codegen", durationMs: codegen.durationMs },
+    { phase: "icons", durationMs: icons.durationMs }
+  ];
+}
+
+/**
  * Runs the full `scaffold → codegen → icons → compile → bundle → collect` pipeline for
  * ONE target — sequential phases, each timed and reported via `native:phase`, stopping at
  * the first failing phase. Emits `native:complete` on success.
  *
  * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target to build.
- * @returns The completed pipeline's result.
+ * @param deps - The resolved project/tauri APIs.
+ * @param opts - The target plus the platform build flags (`simulator`, `aab`).
+ * @returns The completed pipeline's result, with all six phase timings.
  * @throws {Error} Whatever the failing phase throws (already reported via native:phase).
  * @example
  * ```ts
- * const result = await runPipeline(ctx, "macos");
+ * const result = await runPipeline(ctx, deps, { target: "macos" });
  * ```
  */
-export async function runPipeline(ctx: BuildContext, target: Target): Promise<BuildResult> {
+export async function runPipeline(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  opts: RunOptions
+): Promise<BuildResult> {
+  const { target } = opts;
   const startedAt = Date.now();
-  const phases: Array<{ phase: NativePhase; durationMs: number }> = [];
 
-  const scaffold = await runPhase(ctx, target, "scaffold", () => runScaffold(ctx, target));
-  phases.push({ phase: "scaffold", durationMs: scaffold.durationMs });
+  const phases: PhaseTiming[] = [...(await runPrepare(ctx, deps, target))];
 
-  const codegen = await runPhase(ctx, target, "codegen", () => runCodegen(ctx, target));
-  phases.push({ phase: "codegen", durationMs: codegen.durationMs });
-
-  const icons = await runPhase(ctx, target, "icons", runIcons, result => result.detail);
-  phases.push({ phase: "icons", durationMs: icons.durationMs });
-
-  const { compileDurationMs, bundleDurationMs } = await runCompileAndBundle(ctx, target);
+  const { compileDurationMs, bundleDurationMs } = await runCompileAndBundle(ctx, deps, opts);
   phases.push(
     { phase: "compile", durationMs: compileDurationMs },
     { phase: "bundle", durationMs: bundleDurationMs }
   );
 
   const collect = await runPhase(ctx, target, "collect", () =>
-    collectArtifacts(ctx.global.projectDir, target, ctx.global.outDir)
+    collectArtifacts(ctx.global.projectDir, target, ctx.global.outDir, {
+      simulator: opts.simulator
+    })
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });
 

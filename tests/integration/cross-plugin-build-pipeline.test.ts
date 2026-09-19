@@ -6,11 +6,12 @@
  * project + tauri through the SHIPPED framework instance. S05 — `build.run` end-to-end on
  * macos: exact `native:phase` sequence, one `native:complete` matching the returned
  * `BuildResult`, real project codegen on disk, artifact collection, and the icons phase's
- * v1 skip (plus a direct `tauri.icon` call for API coverage, since the pipeline never
- * spawns it — D-015). S06 — `build.runAll` is sequential and stops at the first failing
- * target (no partial-continue). S07 — the mobile scaffold gate: a `not-initialized`
- * android tree triggers `tauri.mobileInit` exactly once before the build verb, and
- * codegen's `patchMobile` pass writes the Android signing state.
+ * freshness skip (plus a direct `tauri.icon` call for API coverage). S06 — `build.runAll`
+ * is sequential and stops at the first failing target (no partial-continue). S07 — the
+ * mobile gate inside codegen: a `not-initialized` android tree triggers `tauri.mobileInit`
+ * exactly once after codegen and before the build verb, the icon set is regenerated
+ * because the init pass reset it, and codegen's `patchMobile` writes the Android signing
+ * state.
  */
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -91,11 +92,12 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       expect(progressEvent?.payload.phase).toBe("compile");
       expect(progressEvent?.payload.detail).toBe("Compiling demo 1/1");
 
-      // The icons phase completes as the permanent v1 no-op skip (D-015) — never a spawn.
+      // The icons phase sees a generated set newer than the configured source, so it
+      // reports "up to date" and never spawns the icon verb (B5/A8).
       const iconsDone = phaseEvents(events).find(
         event => event.payload.phase === "icons" && event.payload.status === "done"
       );
-      expect(iconsDone?.payload.detail).toBe("skipped");
+      expect(iconsDone?.payload.detail).toBe("up to date");
 
       // Exactly one native:complete, payload matching the returned BuildResult.
       const completeEvents = events.filter(event => event.name === "native:complete");
@@ -193,7 +195,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
     });
   });
 
-  describe("S07 — mobile scaffold gate: not-initialized → tauri.mobileInit, then patchMobile in codegen", () => {
+  describe("S07 — mobile gate in codegen: not-initialized → tauri.mobileInit → patchMobile", () => {
     it("initializes gen/android once before the build verb and patches Android signing state", async () => {
       // Captured at runtime from the project API — the fixture set is never hardcoded.
       let requiredAndroidFiles: readonly string[] | undefined;
@@ -222,6 +224,10 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
             await writeFile(fullPath, content, "utf8");
           }
           return { code: 0, signal: null, stdout: "initialized", stderr: "" };
+        }
+
+        if (verb[0] === "icon") {
+          return { code: 0, signal: null, stdout: "icons generated", stderr: "" };
         }
 
         if (verb[0] === "android" && verb[1] === "build") {
@@ -271,11 +277,13 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
 
       const result = await app.build.run({ target: "android" });
 
-      // Spawn call order: mobileInit strictly precedes the build verb — and nothing else ran.
-      expect(spawnCalls).toHaveLength(2);
+      // Spawn call order: mobileInit (inside codegen) → icon regeneration (the fresh gen/
+      // tree ships Tauri's own defaults, B5/A8) → the build verb. Nothing else ran.
+      expect(spawnCalls).toHaveLength(3);
       expect(spawnCalls[0]?.argv[0]).toBe("/usr/bin/node");
       expect(spawnCalls[0]?.argv.slice(2)).toEqual(["android", "init", "--ci"]);
-      expect(spawnCalls[1]?.argv.slice(2)).toEqual(["android", "build", "--ci", "--apk"]);
+      expect(spawnCalls[1]?.argv.slice(2, 3)).toEqual(["icon"]);
+      expect(spawnCalls[2]?.argv.slice(2)).toEqual(["android", "build", "--ci", "--apk"]);
 
       // Completeness flipped not-initialized → complete after init, before the build verb.
       expect(completenessAtBuildVerb).toEqual({ status: "complete" });

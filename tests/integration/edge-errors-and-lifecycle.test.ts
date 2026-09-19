@@ -213,7 +213,7 @@ describe("S18 — cross-plugin error propagation", () => {
     );
   });
 
-  it("S18b: a partial gen/android tree fails the scaffold gate before any subprocess runs", async () => {
+  it("S18b: a partial gen/android tree fails the codegen gate before any subprocess runs", async () => {
     const testApp = await makeApp();
 
     // Fabricate a PARTIAL tree: only the FIRST required file, read from the API at runtime.
@@ -248,14 +248,15 @@ describe("S18 — cross-plugin error propagation", () => {
     // ...and no subprocess EVER ran (no mobileInit re-init of a partial tree — tauri#13902 posture).
     expect(testApp.spawnCalls).toHaveLength(0);
 
-    // The failure surfaced as a scaffold-phase error; codegen never started.
+    // The failure surfaced as a codegen-phase error (the gate moved there in B6, since
+    // `tauri android init --ci` needs the generated tauri.conf.json); icons never started.
     const phaseEvents = testApp.events.filter(event => event.name === "native:phase");
     expect(
       phaseEvents.some(
-        event => event.payload.phase === "scaffold" && event.payload.status === "error"
+        event => event.payload.phase === "codegen" && event.payload.status === "error"
       )
     ).toBe(true);
-    expect(phaseEvents.some(event => event.payload.phase === "codegen")).toBe(false);
+    expect(phaseEvents.some(event => event.payload.phase === "icons")).toBe(false);
   });
 });
 

@@ -120,3 +120,77 @@ describe("collectArtifacts", () => {
     );
   });
 });
+
+describe("collectArtifacts — iOS simulator vs device (A7)", () => {
+  let projectDir: string;
+  let outDir: string;
+
+  /** Seeds the simulator build output: a `.app` DIRECTORY whose name contains spaces. */
+  async function seedSimulatorApp(): Promise<string> {
+    const appDir = path.join(
+      bundleRoot(projectDir, "ios"),
+      "gen",
+      "apple",
+      "build",
+      "arm64-sim",
+      "My Test App.app"
+    );
+    await mkdir(path.join(appDir, "Frameworks"), { recursive: true });
+    await writeFile(path.join(appDir, "Info.plist"), "plist-bytes", "utf8");
+    return appDir;
+  }
+
+  /** Seeds the device build output: a signed `.ipa` file. */
+  async function seedDeviceIpa(): Promise<string> {
+    const ipaDir = path.join(bundleRoot(projectDir, "ios"), "gen", "apple", "build", "arm64");
+    await mkdir(ipaDir, { recursive: true });
+    const ipaPath = path.join(ipaDir, "My Test App.ipa");
+    await writeFile(ipaPath, "ipa-bytes", "utf8");
+    return ipaPath;
+  }
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-collect-ios-project-"));
+    outDir = await mkdtemp(path.join(tmpdir(), "moku-native-collect-ios-out-"));
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it("simulator: copies the *-sim/*.app directory recursively, spaces and all", async () => {
+    await seedSimulatorApp();
+
+    const result = await collectArtifacts(projectDir, "ios", outDir, { simulator: true });
+
+    const copiedApp = path.join(outDir, "ios", "My Test App.app");
+    expect(result.artifacts).toEqual([copiedApp]);
+    expect(await readFile(path.join(copiedApp, "Info.plist"), "utf8")).toBe("plist-bytes");
+    expect(existsSync(path.join(copiedApp, "Frameworks"))).toBe(true);
+  });
+
+  it("simulator: never collects a device .ipa", async () => {
+    await seedSimulatorApp();
+    await seedDeviceIpa();
+
+    const result = await collectArtifacts(projectDir, "ios", outDir, { simulator: true });
+
+    expect(result.artifacts.map(artifact => path.basename(artifact))).toEqual(["My Test App.app"]);
+  });
+
+  it("device: collects the .ipa and never the simulator .app", async () => {
+    await seedSimulatorApp();
+    await seedDeviceIpa();
+
+    const result = await collectArtifacts(projectDir, "ios", outDir);
+
+    expect(result.artifacts).toEqual([path.join(outDir, "ios", "My Test App.ipa")]);
+  });
+
+  it("simulator with nothing built: names the simulator pattern in the [native] error", async () => {
+    await expect(collectArtifacts(projectDir, "ios", outDir, { simulator: true })).rejects.toThrow(
+      /^\[native\] No ios installer artifacts found\.\n {2}Checked .*gen\/apple\/build\/\*-sim\/\*\.app/
+    );
+  });
+});

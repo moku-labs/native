@@ -6,7 +6,7 @@
  * project/out dirs per call. No vitest imports — scenarios own their spies; all defaults
  * here are plain closures (fixtures.ts).
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
@@ -127,6 +127,28 @@ function composeApp(
   });
 }
 
+/**
+ * Seeds an icon source (backdated an hour) plus an already-generated
+ * `src-tauri/icons/icon.png`, so the pipeline's icons phase reports "up to date" and
+ * never spawns the `icon` verb (B5/A8 freshness rule).
+ *
+ * @param projectDir - The app's generated-project root.
+ * @param iconDir - A temp dir OUTSIDE projectDir, so a full `clean()` cannot remove the source.
+ * @returns The absolute path of the seeded icon source (`config.app.icon`).
+ */
+async function seedUpToDateIcons(projectDir: string, iconDir: string): Promise<string> {
+  const iconSource = path.join(iconDir, "app-icon.png");
+  await writeFile(iconSource, "icon-source-bytes", "utf8");
+  const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  await utimes(iconSource, anHourAgo, anHourAgo);
+
+  const generatedIcons = path.join(projectDir, "src-tauri", "icons");
+  await mkdir(generatedIcons, { recursive: true });
+  await writeFile(path.join(generatedIcons, "icon.png"), "generated-icon-bytes", "utf8");
+
+  return iconSource;
+}
+
 /** Everything a scenario needs: the composed app, its temp dirs, and the recorded seams. */
 export type TestApp = {
   /** The composed app (package-entry createApp result) — full typed surface. */
@@ -169,6 +191,13 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
   // Fresh temp dirs per call — never the repo cwd.
   const projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-project-"));
   const outDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-out-"));
+  const iconDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-icon-"));
+
+  // The icons phase is pinned to its "up to date" outcome by default (B5/A8): a
+  // backdated `app.icon` source plus an already-generated icon set, so a scenario's
+  // spawn assertions only ever see the verbs it is actually about. A scenario that
+  // wants real icon generation overrides `config.app` without `icon`.
+  const iconSource = await seedUpToDateIcons(projectDir, iconDir);
 
   // Recording sinks — shared by the wrapped seams and the recorder plugin.
   const rendered: string[] = [];
@@ -194,6 +223,7 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
   // Shallow config merge over the shared baseline + fresh dirs + single-target default.
   const config: Partial<Config> = {
     ...VALID_APP_CONFIG,
+    app: { ...VALID_APP_CONFIG.app, icon: iconSource },
     projectDir,
     outDir,
     targets: ["macos"],
@@ -229,10 +259,11 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
       return artifactPath;
     },
 
-    /** Removes both temp dirs (recursive, force). Call in afterEach. */
+    /** Removes the three temp dirs (recursive, force). Call in afterEach. */
     async cleanup(): Promise<void> {
       await rm(projectDir, { recursive: true, force: true });
       await rm(outDir, { recursive: true, force: true });
+      await rm(iconDir, { recursive: true, force: true });
     }
   };
 }
