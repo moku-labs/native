@@ -5,7 +5,47 @@
  * (scrub.ts) so a classified {@link TauriError}'s `stderrTail` is always safe
  * to log/display.
  */
-import { TauriError, type TauriErrorKind } from "./types";
+import type { TauriErrorDetails, TauriErrorKind } from "./types";
+
+/**
+ * Thrown by every one-shot verb (`icon`/`build`/`mobileInit`) on a non-zero exit.
+ * Carries a classified {@link TauriErrorKind} and the scrubbed stderr tail so
+ * callers (`build`, `doctor`, `cli`) can render an actionable message without
+ * re-deriving the taxonomy or re-scrubbing raw output.
+ */
+export class TauriError extends Error implements TauriErrorDetails {
+  readonly kind: TauriErrorKind;
+  readonly exitCode: number | null;
+  readonly stderrTail: string;
+
+  /**
+   * Constructs a classified `TauriError`.
+   *
+   * @param kind - Taxonomy bucket.
+   * @param message - Fully formatted `[native] ...` message.
+   * @param details - Exit code + scrubbed stderr tail.
+   * @param details.exitCode - Raw process exit code (`null` when signal-terminated).
+   * @param details.stderrTail - Scrubbed tail of stderr — already safe to log/display.
+   * @example
+   * ```ts
+   * throw new TauriError("compile-failed", "[native] tauri compile failed.\n  See stderr.", {
+   *   exitCode: 101,
+   *   stderrTail: "error[E0432]: unresolved import `foo`",
+   * });
+   * ```
+   */
+  constructor(
+    kind: TauriErrorKind,
+    message: string,
+    details: { exitCode: number | null; stderrTail: string }
+  ) {
+    super(message);
+    this.name = "TauriError";
+    this.kind = kind;
+    this.exitCode = details.exitCode;
+    this.stderrTail = details.stderrTail;
+  }
+}
 
 /** How many trailing lines of scrubbed stderr are kept on a classified error. */
 const STDERR_TAIL_LINES = 20;

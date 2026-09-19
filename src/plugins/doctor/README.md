@@ -56,7 +56,7 @@ raw subprocess/fs call of its own:
 | `signing.ts` | signing env-var **presence** (never values) — Apple vars for ios/macos, `signing.android.keystorePasswordEnv` for android | warn |
 | `completeness.ts` | mobile `gen/` required-file-set via `project.completeness()`; fix-it is always `native clean --target <t>` | fail (not-initialized = pass) |
 | `versions.ts` | `@tauri-apps/*` npm major version vs. the registry-pinned crate range | **warn only** |
-| `web-script.ts` | `web.build`/`web.dev.command` scripts exist in the SAME cwd Tauri will use (`web.cwd` honored); necessary-not-sufficient, never executes the script | fail |
+| `web-script.ts` | `web.build`/`web.devCommand` scripts exist in the SAME cwd Tauri will use (`web.cwd` honored); necessary-not-sufficient, never executes the script | fail |
 | `tauri-cli.ts` | CLI invokable via `tauri.version()` — the one probe routed through `tauri`, not this plugin's own `probeImpl` | fail |
 | `cross-repo.ts` | worker CORS must allow `tauri://localhost`/`http://tauri.localhost` (always fires); deep-link `.well-known` pointer (fires only when `deep-link` is composed) | **warn only, always** |
 

@@ -111,7 +111,7 @@ describe("S17 — invalid config fails loudly at createApp", () => {
     );
   });
 
-  it("throws synchronously for an empty web.dev.url with an actionable suggestion", async () => {
+  it("throws synchronously for an empty web.devUrl with an actionable suggestion", async () => {
     const { projectDir, outDir } = await makeTempDirs();
 
     // Shallow config merge — an override of `web` supplies the whole object.
@@ -123,13 +123,14 @@ describe("S17 — invalid config fails loudly at createApp", () => {
           outDir,
           web: {
             build: "bun run build",
-            dev: { command: "bun run dev", url: "" },
+            devCommand: "bun run dev",
+            devUrl: "",
             dist: "dist"
           }
         }
       })
     ).toThrow(
-      "[native] web.dev.url is required.\n  Set config.web.dev.url to your dev server's URL."
+      "[native] web.devUrl is required.\n  Set config.web.devUrl to your dev server's URL."
     );
   });
 
@@ -142,7 +143,7 @@ describe("S17 — invalid config fails loudly at createApp", () => {
         ...VALID_APP_CONFIG,
         projectDir,
         outDir,
-        web: { build: "bun run build", dev: { command: "bun run dev", url: "" }, dist: "dist" }
+        web: { build: "bun run build", devCommand: "bun run dev", devUrl: "", dist: "dist" }
       }
     ];
 

@@ -35,7 +35,7 @@ app.tauri.version(): Promise<{ cliVersion: string } | null>
   exit), and returns immediately with a `DevHandle`:
   ```ts
   type DevHandle = {
-    url: string;                                        // ctx.global.web.dev.url
+    url: string;                                        // ctx.global.web.devUrl
     ready: Promise<void>;                                // resolves once devUrl responds (poll)
     exited: Promise<{ code: number | null; signal: string | null }>;
     stop(): Promise<void>;                               // group-kill; idempotent
@@ -72,7 +72,7 @@ pluginConfigs: {
 
 `spawnImpl` and `nodePath` are test/override seams only — production behavior always resolves a
 real `node` binary and spawns through `@tauri-apps/cli/tauri.js`. Everything else this plugin
-needs (`projectDir`, `web.dev.url`, `signing`) comes from the framework's global `Config`.
+needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global `Config`.
 
 ## Design notes
 

@@ -18,7 +18,7 @@ describe("webScriptCheck.run", () => {
 
     expect(result.status).toBe("fail");
     expect(result.message).toContain("web.build");
-    expect(result.message).toContain("web.dev.command");
+    expect(result.message).toContain("web.devCommand");
   });
 
   it("passes when both scripts are present", async () => {

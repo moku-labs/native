@@ -176,7 +176,7 @@ export function createTauriApi(ctx: TauriContext): Api {
         );
       }
       const { nodePath, tauriJsPath } = resolvePaths();
-      const url = ctx.global.web.dev.url;
+      const url = ctx.global.web.devUrl;
       /**
        * Scrubs one raw dev-process output line before it can reach any log or
        * consumer callback — the SAME pipeline posture as `run()`'s one-shot verbs.

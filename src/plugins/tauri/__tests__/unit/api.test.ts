@@ -6,8 +6,8 @@
    scrub.test.ts). */
 import { describe, expect, it, vi } from "vitest";
 import { createTauriApi } from "../../api";
+import { TauriError } from "../../errors";
 import type { SpawnFn, State, TauriContext } from "../../types";
-import { TauriError } from "../../types";
 
 function createMockCtx(overrides?: Partial<TauriContext>): TauriContext {
   const state: State = overrides?.state ?? { dev: undefined };
@@ -16,7 +16,8 @@ function createMockCtx(overrides?: Partial<TauriContext>): TauriContext {
       app: { name: "MyApp", identifier: "com.example.myapp" },
       web: {
         build: "bun run build",
-        dev: { command: "bun run dev", url: "http://localhost:5173" },
+        devCommand: "bun run dev",
+        devUrl: "http://localhost:5173",
         dist: "dist"
       },
       system: [],

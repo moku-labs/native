@@ -28,9 +28,9 @@ export function generateTauriConf(input: GeneratorInput): Artifact[] {
     identifier: global.app.identifier,
     version: global.app.version ?? "0.1.0",
     build: {
-      beforeDevCommand: global.web.dev.command,
+      beforeDevCommand: global.web.devCommand,
       beforeBuildCommand: global.web.build,
-      devUrl: global.web.dev.url,
+      devUrl: global.web.devUrl,
       frontendDist: global.web.dist
     },
     app: {

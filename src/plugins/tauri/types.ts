@@ -63,45 +63,10 @@ export type TauriErrorDetails = {
   readonly stderrTail: string;
 };
 
-/**
- * Thrown by every one-shot verb (`icon`/`build`/`mobileInit`) on a non-zero exit.
- * Carries a classified {@link TauriErrorKind} and the scrubbed stderr tail so
- * callers (`build`, `doctor`, `cli`) can render an actionable message without
- * re-deriving the taxonomy or re-scrubbing raw output.
- */
-export class TauriError extends Error implements TauriErrorDetails {
-  readonly kind: TauriErrorKind;
-  readonly exitCode: number | null;
-  readonly stderrTail: string;
-
-  /**
-   * Constructs a classified `TauriError`.
-   *
-   * @param kind - Taxonomy bucket.
-   * @param message - Fully formatted `[native] ...` message.
-   * @param details - Exit code + scrubbed stderr tail.
-   * @param details.exitCode - Raw process exit code (`null` when signal-terminated).
-   * @param details.stderrTail - Scrubbed tail of stderr — already safe to log/display.
-   * @example
-   * ```ts
-   * throw new TauriError("compile-failed", "[native] tauri compile failed.\n  See stderr.", {
-   *   exitCode: 101,
-   *   stderrTail: "error[E0432]: unresolved import `foo`",
-   * });
-   * ```
-   */
-  constructor(
-    kind: TauriErrorKind,
-    message: string,
-    details: { exitCode: number | null; stderrTail: string }
-  ) {
-    super(message);
-    this.name = "TauriError";
-    this.kind = kind;
-    this.exitCode = details.exitCode;
-    this.stderrTail = details.stderrTail;
-  }
-}
+// The class itself lives in errors.ts next to the classifier that constructs it; the
+// namespace re-export (`export type * as Tauri`) is type-only, so consumers that need
+// `instanceof` import the value by name from the package root.
+export type { TauriError } from "./errors";
 
 /** Mutable plugin state — the one live dev handle (undefined = no live session; unicorn/no-null). */
 export type State = { dev: DevHandle | undefined };
@@ -122,7 +87,7 @@ export type Api = {
 /**
  * Domain context shared by every tauri domain file. Structural composition
  * (not the bare `PluginCtx` export) because this plugin needs `global`
- * (projectDir, web.dev.url) and the `log`/`env` core APIs alongside
+ * (projectDir, web.devUrl) and the `log`/`env` core APIs alongside
  * `config`/`state` — see moku-testing's mock-context.md §Standard Factory.
  */
 export type TauriContext = {

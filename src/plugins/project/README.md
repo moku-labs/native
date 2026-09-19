@@ -62,7 +62,7 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 
 `onInit` validates the global config at composition time and throws `[native]`-prefixed
 errors for: a missing/empty `app.name`, a non-reverse-DNS `app.identifier`, missing
-`web.build`/`web.dev.command`/`web.dev.url`/`web.dist`, any `config.system` entry the
+`web.build`/`web.devCommand`/`web.devUrl`/`web.dist`, any `config.system` entry the
 registry doesn't recognize, and a `"deep-link"` entry in `config.system` without a
 matching non-empty `capabilities["deep-link"].scheme`.
 

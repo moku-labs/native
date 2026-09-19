@@ -52,7 +52,7 @@ export const native = createApp({
     app: { name: "MyApp", identifier: "com.example.myapp" },
     web: {
       build: "bun run build",
-      dev: { command: "bun run dev", url: "http://localhost:5173" },
+      devCommand: "bun run dev", devUrl: "http://localhost:5173",
       dist: "dist"
     },
     system: systemPlugins,
@@ -146,7 +146,7 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `app` | `{ name: string; identifier: string; version?: string }` | `{ name: "", identifier: "" }` | Required — validated at composition time: non-empty `name`, reverse-DNS `identifier`. |
-| `web` | `{ build: string; dev: { command: string; url: string }; dist: string; cwd?: string }` | `build: "bun run build"`, `dev.command: "bun run dev"`, `dev.url: "http://localhost:5173"`, `dist: "dist"` | Web build/dev wiring codegenned into `tauri.conf.json`; `cwd` for monorepo layouts. |
+| `web` | `{ build: string; devCommand: string; devUrl: string; dist: string; cwd?: string }` | `build: "bun run build"`, `devCommand: "bun run dev"`, `devUrl: "http://localhost:5173"`, `dist: "dist"` | Web build/dev wiring codegenned into `tauri.conf.json`; `cwd` for monorepo layouts. |
 | `system` | `ReadonlyArray<{ name: string }>` | `[]` | The composed system plugins — the shared cross-team contract. Unknown names throw at init. |
 | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` | Per-capability packaging parameters. `deep-link` requires `{ mode: "scheme", scheme: string }`. |
 | `targets` | `readonly Target[]` | all five (`macos`, `windows`, `linux`, `ios`, `android`) | Which targets this app ships; the `runAll`/`doctor` default scope. |

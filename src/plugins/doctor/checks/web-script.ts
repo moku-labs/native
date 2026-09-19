@@ -1,5 +1,5 @@
 /**
- * @file doctor plugin check — web.build/web.dev.command scripts exist, resolved from the
+ * @file doctor plugin check — web.build/web.devCommand scripts exist, resolved from the
  * SAME cwd Tauri will use (web.cwd override honored). Necessary-not-sufficient (documented):
  * this never executes the script, only confirms package.json declares it.
  */
@@ -46,7 +46,7 @@ function extractScriptName(command: string): string | undefined {
 }
 
 /**
- * Confirms `web.build`/`web.dev.command` name scripts present in the resolved cwd's
+ * Confirms `web.build`/`web.devCommand` name scripts present in the resolved cwd's
  * `package.json`. Presence is necessary but not sufficient — the script itself is never
  * executed by this check.
  *
@@ -88,13 +88,13 @@ async function run(input: CheckInput): Promise<CheckResult> {
   }
 
   const buildScript = extractScriptName(input.global.web.build);
-  const devScript = extractScriptName(input.global.web.dev.command);
+  const devScript = extractScriptName(input.global.web.devCommand);
   const missing: string[] = [];
   if (!buildScript || !(buildScript in scripts)) {
     missing.push(`web.build ("${input.global.web.build}")`);
   }
   if (!devScript || !(devScript in scripts)) {
-    missing.push(`web.dev.command ("${input.global.web.dev.command}")`);
+    missing.push(`web.devCommand ("${input.global.web.devCommand}")`);
   }
 
   if (missing.length > 0) {
@@ -110,11 +110,11 @@ async function run(input: CheckInput): Promise<CheckResult> {
     id: "web-script",
     target: "host",
     status: "pass",
-    message: `[native] web.build/web.dev.command scripts resolved in ${packageJsonPath} (not executed).`
+    message: `[native] web.build/web.devCommand scripts resolved in ${packageJsonPath} (not executed).`
   };
 }
 
-/** web.build/web.dev.command script presence — resolved from Tauri's own cwd. */
+/** web.build/web.devCommand script presence — resolved from Tauri's own cwd. */
 export const webScriptCheck: Check = {
   id: "web-script",
   /**

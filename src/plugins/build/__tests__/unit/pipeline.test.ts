@@ -65,7 +65,8 @@ function createMockCtx(overrides?: {
       app: { name: "Test App", identifier: "com.example.testapp" },
       web: {
         build: "bun run build",
-        dev: { command: "bun run dev", url: "https://x" },
+        devCommand: "bun run dev",
+        devUrl: "https://x",
         dist: "dist"
       },
       system: [],

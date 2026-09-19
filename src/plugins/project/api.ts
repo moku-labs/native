@@ -52,14 +52,14 @@ export function validateProjectConfig(global: Readonly<Config>): void {
       "[native] web.build is required.\n  Set config.web.build to the command that builds your web assets."
     );
   }
-  if (!global.web.dev.command) {
+  if (!global.web.devCommand) {
     throw new Error(
-      "[native] web.dev.command is required.\n  Set config.web.dev.command to the command that starts your dev server."
+      "[native] web.devCommand is required.\n  Set config.web.devCommand to the command that starts your dev server."
     );
   }
-  if (!global.web.dev.url) {
+  if (!global.web.devUrl) {
     throw new Error(
-      "[native] web.dev.url is required.\n  Set config.web.dev.url to your dev server's URL."
+      "[native] web.devUrl is required.\n  Set config.web.devUrl to your dev server's URL."
     );
   }
   if (!global.web.dist) {

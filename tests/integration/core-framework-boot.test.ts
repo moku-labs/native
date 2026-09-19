@@ -5,6 +5,7 @@
  * S02 — Global-config defaults + partial override composition (incl. MC1 render seam).
  * S03 — project.onInit validates app identity at createApp time (not at first verb).
  * S04 — Consumer plugin composes into the chain with ctx.log/ctx.env present.
+ * S20 — env core plugin resolves real host variables; targets default to the host's own.
  *
  * All apps compose through the SHIPPED package entry (`src/index.ts`) — never a
  * `createCore` re-composition — with every subprocess/render seam injected.
@@ -14,8 +15,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { Doctor, NativePhaseEvent } from "../../src/index";
-import { createApp, createPlugin } from "../../src/index";
+import type { Doctor, NativePhaseEvent, Target } from "../../src/index";
+import { createApp, createPlugin, hostTargets } from "../../src/index";
 import { createTestApp, VALID_APP_CONFIG } from "./helpers/create-test-app";
 import { spawnBuildSucceeds } from "./helpers/fixtures";
 
@@ -292,5 +293,39 @@ describe("S04 — consumer plugin composes into the chain with ctx.log/ctx.env p
       "collect:done"
     ]);
     expect(observedPhases.every(event => event.target === "macos")).toBe(true);
+  });
+});
+
+describe("S20 — env core plugin providers + host-derived default targets", () => {
+  it("resolves PATH through ctx.env and defaults targets to the host's own", async () => {
+    const { projectDir, outDir } = await makeTempDirs();
+
+    // A consumer plugin captures what the kernel handed it at onInit: the resolved
+    // env accessor (B1 — the framework seeds a process-env provider in coreConfig)
+    // and the global config the framework defaults produced.
+    let observed: { path: string | undefined; targets: readonly Target[] } | undefined;
+    const observer = createPlugin("env-observer", {
+      onInit: ctx => {
+        observed = { path: ctx.env.get("PATH"), targets: ctx.global.targets };
+      }
+    });
+
+    // No `targets` override — this scenario is about what the DEFAULTS produce.
+    const app = createApp({
+      plugins: [observer],
+      config: { ...VALID_APP_CONFIG, projectDir, outDir }
+    });
+
+    // (1) env resolves real host variables. With zero providers every get() answered
+    // undefined, which left the tauri plugin's PATH-walk node resolution nothing to walk.
+    expect(app.env.get("PATH")).toBeTypeOf("string");
+    expect(app.env.get("PATH")).not.toBe("");
+    expect(observed?.path).toBe(app.env.get("PATH"));
+
+    // (2) targets default to the host's own packaging target — never all five, and
+    // mobile is opt-in (it needs an SDK the host may not have).
+    expect(observed?.targets).toEqual(hostTargets(process.platform));
+    expect(observed?.targets).not.toContain("ios");
+    expect(observed?.targets).not.toContain("android");
   });
 });

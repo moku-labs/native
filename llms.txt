@@ -91,7 +91,7 @@ type NativePhase = "scaffold" | "codegen" | "icons" | "compile" | "bundle" | "co
 
 type Config = {
   app: { name: string; identifier: string; version?: string };
-  web: { build: string; dev: { command: string; url: string }; dist: string; cwd?: string };
+  web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
   system: ReadonlyArray<{ name: string }>;
   capabilities: Partial<CapabilityConfigMap>;
   targets: readonly Target[];
@@ -132,7 +132,7 @@ class TauriError extends Error {
 type BuildResult = { target: Target; outPath: string; artifacts: readonly string[]; durationMs: number; phases: ReadonlyArray<{ phase: NativePhase; durationMs: number }> };
 ```
 
-Config defaults (framework `defaultConfig`): `app: { name: "", identifier: "" }` (must be set; validated), `web: { build: "bun run build", dev: { command: "bun run dev", url: "http://localhost:5173" }, dist: "dist" }`, `system: []`, `capabilities: {}`, `targets: TARGETS` (all five), `projectDir: ".moku/tauri"`, `outDir: "dist-native"`, `signing: {}`.
+Config defaults (framework `defaultConfig`): `app: { name: "", identifier: "" }` (must be set; validated), `web: { build: "bun run build", devCommand: "bun run dev", devUrl: "http://localhost:5173", dist: "dist" }`, `system: []`, `capabilities: {}`, `targets: TARGETS` (all five), `projectDir: ".moku/tauri"`, `outDir: "dist-native"`, `signing: {}`.
 
 Per-plugin configs (via `createApp({ pluginConfigs })`):
 - `tauri: { spawnImpl?: SpawnFn; nodePath?: string; readiness: { intervalMs: number; timeoutMs: number } }` — defaults: undefined / undefined / `{ intervalMs: 250, timeoutMs: 60_000 }`.
@@ -189,7 +189,7 @@ import { systemPlugins } from "./system";
 export const native = createApp({
   config: {
     app: { name: "MyApp", identifier: "com.example.myapp" },
-    web: { build: "bun run build", dev: { command: "bun run dev", url: "http://localhost:5173" }, dist: "dist" },
+    web: { build: "bun run build", devCommand: "bun run dev", devUrl: "http://localhost:5173", dist: "dist" },
     system: systemPlugins,
     capabilities: { "deep-link": { mode: "scheme", scheme: "myapp" } }
   }
@@ -212,6 +212,6 @@ Add `.moku/` and `dist-native/` to the consumer `.gitignore`. A real `node` bina
 - `doctor.run` never throws on check failures — a rejected check becomes a `"fail"` CheckResult with an internal-error message.
 - `cli.dev` resolves cleanly on signal-terminated exits (code null, e.g. Ctrl-C) and throws only on a numeric non-zero exit code.
 - `cli.clean()` without a target gates the full projectDir wipe behind a styled confirm; declining resolves without deleting.
-- Config validation (project.onInit, composition time): empty app.name, non-reverse-DNS app.identifier, missing web.build/web.dev.command/web.dev.url/web.dist, unknown config.system names, deep-link composed without a scheme.
+- Config validation (project.onInit, composition time): empty app.name, non-reverse-DNS app.identifier, missing web.build/web.devCommand/web.devUrl/web.dist, unknown config.system names, deep-link composed without a scheme.
 
 See llms-full.txt for verbatim type definitions, the full config/event catalog, per-check details, and extension patterns. Per-plugin READMEs: src/plugins/{project,tauri,build,doctor,cli}/README.md.

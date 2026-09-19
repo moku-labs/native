@@ -100,7 +100,7 @@ export type Config = {
   /** App identity — project.onInit validates name/identifier are non-empty (reverse-DNS identifier). */
   app: { name: string; identifier: string; version?: string };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
-  web: { build: string; dev: { command: string; url: string }; dist: string; cwd?: string };
+  web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
   /** Composed `@moku-labs/system` plugins — the kernel-guaranteed name-only contract. */
   system: ReadonlyArray<{ name: string }>;
   /** Per-capability packaging parameters. */
@@ -144,7 +144,7 @@ const defaultConfig: Config = {
   app: { name: "", identifier: "" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev", devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [],
@@ -171,8 +171,8 @@ GLOBAL Config (D-005 — the substantive surface; every plugin reads it via ctx.
 | app.identifier | string | "" | Reverse-DNS bundle identifier (e.g. "com.example.myapp"). Validated against /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/i. |
 | app.version | string? | (absent) | Optional app version, informational artifact context. |
 | web.build | string | "bun run build" | Command that builds the web assets (codegenned into tauri.conf.json beforeBuildCommand wiring). Required non-empty. |
-| web.dev.command | string | "bun run dev" | Command that starts the web dev server. Required non-empty. |
-| web.dev.url | string | "http://localhost:5173" | Dev server URL — also the DevHandle.url and the readiness-poll target. Required non-empty. |
+| web.devCommand | string | "bun run dev" | Command that starts the web dev server. Required non-empty. |
+| web.devUrl | string | "http://localhost:5173" | Dev server URL — also the DevHandle.url and the readiness-poll target. Required non-empty. |
 | web.dist | string | "dist" | Web build output directory (frontendDist). Required non-empty. |
 | web.cwd | string? | (absent) | Working directory for the web commands — monorepo layouts. doctor's web-script check honors it. |
 | system | ReadonlyArray<{ name: string }> | [] | The composed system plugins — the shared cross-team contract. Unknown names throw at composition time. |
@@ -474,7 +474,7 @@ Behavior:
   immediately. `ready` resolves from a devUrl readiness poll (config.readiness; no stdout
   "ready" marker exists — tauri#4740) and rejects (reaping the process group) on timeout.
   A second concurrent dev() call throws "[native] tauri dev already running". All dev output
-  lines are scrubbed before onOutput/log. url = ctx.global.web.dev.url. stop() is idempotent.
+  lines are scrubbed before onOutput/log. url = ctx.global.web.devUrl. stop() is idempotent.
 - version(): probes CLI presence/version (used by doctor). Returns null when the CLI cannot
   be invoked — never throws.
 
@@ -621,7 +621,7 @@ The checks/ registry:
 | signing.ts | signing env-var PRESENCE (never values) — Apple vars for ios/macos, signing.android.keystorePasswordEnv for android | warn |
 | completeness.ts | mobile gen/ required-file-set via project.completeness(); fix-it is `native clean --target <t>` | fail (not-initialized = pass) |
 | versions.ts | @tauri-apps/* npm major version vs. the registry-pinned crate range | warn only |
-| web-script.ts | web.build/web.dev.command scripts exist in the SAME cwd Tauri will use (web.cwd honored); never executes the script | fail |
+| web-script.ts | web.build/web.devCommand scripts exist in the SAME cwd Tauri will use (web.cwd honored); never executes the script | fail |
 | tauri-cli.ts | CLI invokable via tauri.version() — the one probe routed through tauri | fail |
 | cross-repo.ts | worker CORS must allow tauri://localhost / http://tauri.localhost (always fires); deep-link .well-known pointer (fires only when deep-link is composed) | warn only, always |
 
@@ -751,7 +751,7 @@ export const native = createApp({
     app: { name: "MyApp", identifier: "com.example.myapp" },
     web: {
       build: "bun run build",
-      dev: { command: "bun run dev", url: "http://localhost:5173" },
+      devCommand: "bun run dev", devUrl: "http://localhost:5173",
       dist: "dist"
     },
     system: systemPlugins,
@@ -845,7 +845,7 @@ indented actionable second line ("  <fix-it / next command>").
 (a) Composition-time validation — project.onInit -> validateProjectConfig(ctx.global) throws:
   - "[native] app.name is required." (empty name)
   - '[native] app.identifier "<x>" is not a valid reverse-DNS identifier.'
-  - "[native] web.build is required." / web.dev.command / web.dev.url / web.dist (each checked)
+  - "[native] web.build is required." / web.devCommand / web.devUrl / web.dist (each checked)
   - unknown config.system capability names (assertKnownCapabilities / unknownCapabilityError)
   - '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is
     missing.' — deep-link requires { mode: "scheme", scheme: "yourscheme" }.

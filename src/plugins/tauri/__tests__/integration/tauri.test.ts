@@ -3,9 +3,9 @@
    Node-mirroring reconciliation — not a lazy `null` fallback. */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import { TauriError } from "../../errors";
 import { tauriPlugin } from "../../index";
 import type { SpawnFn } from "../../types";
-import { TauriError } from "../../types";
 
 // Scoped harness: composes ONLY the tauri plugin (depends: []), so this test
 // never depends on sibling plugins (project/build/doctor/cli) being implemented.

@@ -206,7 +206,8 @@ describe("S09 — doctor warn-only semantics + registry/env consumption", () => 
       config: {
         web: {
           build: "bun run build",
-          dev: { command: "bun run dev", url: "http://localhost:5173" },
+          devCommand: "bun run dev",
+          devUrl: "http://localhost:5173",
           dist: "dist",
           cwd: fixtureDir
         }

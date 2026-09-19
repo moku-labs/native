@@ -7,7 +7,8 @@ export const baseGlobalConfig: Readonly<Config> = {
   app: { name: "My Cool App", identifier: "com.example.mycoolapp", version: "1.2.3" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [

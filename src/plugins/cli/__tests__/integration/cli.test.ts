@@ -25,7 +25,8 @@ const validAppConfig = {
   app: { name: "Test App", identifier: "com.example.testapp" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [],

@@ -1,8 +1,7 @@
 /* eslint-disable unicorn/no-null -- `code: number | null` mirrors the real Node child-process
    exit-code shape (spec/02's Node-mirroring reconciliation), not a lazy fallback. */
 import { describe, expect, it } from "vitest";
-import { classify } from "../../errors";
-import { TauriError } from "../../types";
+import { classify, TauriError } from "../../errors";
 
 describe("classify", () => {
   it("classifies signing failures", () => {

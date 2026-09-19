@@ -11,10 +11,11 @@ export { doctorPlugin } from "./doctor";
 export { projectPlugin } from "./project";
 export { tauriPlugin } from "./tauri";
 
-// ─── Plugin Types (namespace re-exports) ─────────────────────
-// Consumers access types as: Project.Api, Tauri.DevHandle, etc.
-export * as Build from "./build/types";
-export * as Cli from "./cli/types";
-export * as Doctor from "./doctor/types";
-export * as Project from "./project/types";
-export * as Tauri from "./tauri/types";
+// ─── Plugin Types (type-only namespace re-exports) ───────────
+// Consumers access types as: Project.Api, Tauri.DevHandle, etc. The namespaces carry
+// TYPES ONLY — the one runtime value (`TauriError`) is exported by name from src/index.ts.
+export type * as Build from "./build/types";
+export type * as Cli from "./cli/types";
+export type * as Doctor from "./doctor/types";
+export type * as Project from "./project/types";
+export type * as Tauri from "./tauri/types";
