@@ -2,46 +2,51 @@ import { describe, expect, it, vi } from "vitest";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../../../config";
 import type { CheckResult } from "../../../doctor/types";
 import { createCliHandlers } from "../../handlers";
-import type { CliContext } from "../../types";
+import { createCliState } from "../../state";
+import type { CliContext, Config } from "../../types";
+
+/** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
+const validGlobalConfig = {
+  app: { name: "Test App", identifier: "com.example.testapp" },
+  web: {
+    build: "bun run build",
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
+    dist: "dist"
+  },
+  system: [],
+  capabilities: {},
+  targets: ["macos"],
+  projectDir: "/unused",
+  outDir: "/unused",
+  signing: {}
+} satisfies CliContext["global"];
 
 /** Builds a mock `CliContext` bound to the given render sink (default: swallow every line). */
 function createMockCtx(renderImpl: (line: string) => void = () => {}): CliContext {
+  const config: Config = { renderImpl, confirmImpl: undefined };
+
   return {
-    global: {
-      app: { name: "Test App", identifier: "com.example.testapp" },
-      web: {
-        build: "bun run build",
-        devCommand: "bun run dev",
-        devUrl: "http://localhost:5173",
-        dist: "dist"
-      },
-      system: [],
-      capabilities: {},
-      targets: ["macos"],
-      projectDir: "/unused",
-      outDir: "/unused",
-      signing: {}
-    },
-    config: { renderImpl, confirmImpl: undefined },
-    state: { progress: { phase: undefined, startedAt: undefined, ticks: 0 } },
+    global: validGlobalConfig,
+    config,
+    // The real state factory — the branded console is created ONCE there (N5).
+    state: createCliState({ global: validGlobalConfig, config }),
     require: vi.fn() as CliContext["require"]
   };
 }
 
 describe("createCliHandlers — native:phase state transitions", () => {
-  it("start sets phase/startedAt/ticks in ctx.state.progress", () => {
+  it("start stamps startedAt in ctx.state.progress", () => {
     const ctx = createMockCtx();
     const handlers = createCliHandlers(ctx);
     const payload: NativePhaseEvent = { target: "macos", phase: "scaffold", status: "start" };
 
     handlers["native:phase"](payload);
 
-    expect(ctx.state.progress.phase).toBe("scaffold");
     expect(ctx.state.progress.startedAt).toBeTypeOf("number");
-    expect(ctx.state.progress.ticks).toBe(0);
   });
 
-  it("progress increments ticks without resetting phase or startedAt", () => {
+  it("progress keeps the running phase's startedAt untouched", () => {
     const ctx = createMockCtx();
     const handlers = createCliHandlers(ctx);
 
@@ -53,15 +58,7 @@ describe("createCliHandlers — native:phase state transitions", () => {
       status: "progress",
       detail: "1/2"
     });
-    handlers["native:phase"]({
-      target: "macos",
-      phase: "compile",
-      status: "progress",
-      detail: "2/2"
-    });
 
-    expect(ctx.state.progress.ticks).toBe(2);
-    expect(ctx.state.progress.phase).toBe("compile");
     expect(ctx.state.progress.startedAt).toBe(startedAt);
   });
 
@@ -77,7 +74,7 @@ describe("createCliHandlers — native:phase state transitions", () => {
       durationMs: 5
     });
 
-    expect(ctx.state.progress).toEqual({ phase: undefined, startedAt: undefined, ticks: 0 });
+    expect(ctx.state.progress).toEqual({ startedAt: undefined });
   });
 
   it("error also clears progress back to no active phase", () => {
@@ -93,12 +90,12 @@ describe("createCliHandlers — native:phase state transitions", () => {
       detail: "boom"
     });
 
-    expect(ctx.state.progress).toEqual({ phase: undefined, startedAt: undefined, ticks: 0 });
+    expect(ctx.state.progress).toEqual({ startedAt: undefined });
   });
 });
 
 describe("createCliHandlers — rendering", () => {
-  it("renders through the injected render seam for phase/complete/check events", () => {
+  it("renders through the one state-owned console for phase/complete/check events (N5)", () => {
     const lines: string[] = [];
     const ctx = createMockCtx(line => lines.push(line));
     const handlers = createCliHandlers(ctx);
@@ -121,5 +118,16 @@ describe("createCliHandlers — rendering", () => {
     expect(text).toContain("App.dmg");
     expect(text).toContain("Test App");
     expect(text).toContain("node-binary");
+  });
+
+  it("renders doctor rows only from the hook — one row per doctor:check event (M7)", () => {
+    const lines: string[] = [];
+    const ctx = createMockCtx(line => lines.push(line));
+    const handlers = createCliHandlers(ctx);
+
+    handlers["doctor:check"]({ id: "node-binary", target: "host", status: "pass", message: "ok" });
+
+    const occurrences = lines.filter(line => line.includes("node-binary"));
+    expect(occurrences).toHaveLength(1);
   });
 });

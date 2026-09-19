@@ -1,7 +1,8 @@
 /**
  * @file cli plugin — type definitions.
  */
-import type { Config as GlobalConfig, NativePhase, RequireFn, Target } from "../../config";
+import type { BrandConsole } from "@moku-labs/common/cli";
+import type { Config as GlobalConfig, RequireFn, Target } from "../../config";
 
 /** Structural render sink — injectable for tests (default: branded `@moku-labs/common/cli` console). */
 export type RenderFn = (line: string) => void;
@@ -15,17 +16,37 @@ export type Config = {
   confirmImpl?: ConfirmFn | undefined;
 };
 
-/** Live-render bookkeeping for the current verb invocation (undefined = no active phase; unicorn/no-null). */
+/**
+ * Plugin state: the one branded console every verb and hook renders through (created
+ * once in `createState` — N5) plus the live-render bookkeeping for the current verb
+ * invocation (`startedAt: undefined` = no phase running; unicorn/no-null).
+ */
 export type State = {
-  progress: { phase: NativePhase | undefined; startedAt: number | undefined; ticks: number };
+  readonly ui: BrandConsole;
+  progress: { startedAt: number | undefined };
 };
 
 /** Public API of the cli plugin — typed verbs, NO argv parsing. */
 export type Api = {
-  build(opts?: { target?: Target; all?: boolean }): Promise<void>;
+  build(opts?: {
+    target?: Target;
+    all?: boolean;
+    simulator?: boolean | undefined;
+    aab?: boolean | undefined;
+  }): Promise<void>;
   dev(opts?: { target?: Target }): Promise<void>;
   doctor(opts?: { target?: Target }): Promise<boolean>;
   clean(opts?: { target?: Target }): Promise<void>;
+};
+
+/**
+ * Context the `createState` factory receives (core's MinimalContext tier: the global
+ * config plus this plugin's RESOLVED config — which is where the injected render seam
+ * arrives, so the branded console can be built once, up front).
+ */
+export type CliStateContext = {
+  readonly global: Readonly<GlobalConfig>;
+  readonly config: Readonly<Config>;
 };
 
 /**

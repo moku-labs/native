@@ -2,9 +2,10 @@
    (`signal: string | null`, `code: number | null`), which stay `| null` per spec/02's
    Node-mirroring reconciliation (matches build/doctor/tauri's own tests). */
 import { describe, expect, it, vi } from "vitest";
-import type { Target } from "../../../../config";
+import { TauriError } from "../../../tauri/errors";
 import { createCliApi, hostTarget } from "../../api";
-import type { CliContext } from "../../types";
+import { createCliState } from "../../state";
+import type { CliContext, Config } from "../../types";
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -17,11 +18,11 @@ const validGlobalConfig = {
   },
   system: [],
   capabilities: {},
-  targets: ["macos"] as readonly Target[],
+  targets: ["macos"],
   projectDir: "/unused",
   outDir: "/unused",
   signing: {}
-};
+} satisfies CliContext["global"];
 
 /** Fresh fakes for every one of cli's four required plugin APIs. */
 function createMocks() {
@@ -36,6 +37,7 @@ function createMocks() {
       })
     },
     build: {
+      prepare: vi.fn().mockResolvedValue(undefined),
       run: vi.fn().mockResolvedValue({
         target: "macos",
         outPath: "x",
@@ -78,10 +80,16 @@ function createMockCtx(overrides?: {
     }
   });
 
+  const config: Config = {
+    renderImpl: overrides?.renderImpl,
+    confirmImpl: overrides?.confirmImpl
+  };
+
   const ctx: CliContext = {
     global: validGlobalConfig,
-    config: { renderImpl: overrides?.renderImpl, confirmImpl: overrides?.confirmImpl },
-    state: { progress: { phase: undefined, startedAt: undefined, ticks: 0 } },
+    config,
+    // The real state factory — the branded console is created ONCE there (N5).
+    state: createCliState({ global: validGlobalConfig, config }),
     require: requireFn as CliContext["require"]
   };
 
@@ -97,8 +105,9 @@ describe("hostTarget", () => {
     expect(hostTarget(platform)).toBe(expected);
   });
 
-  it("throws a [native] error for an unsupported host platform", () => {
+  it("throws a [native] error with a fix-it for an unsupported host platform", () => {
     expect(() => hostTarget("freebsd")).toThrow(/^\[native\] No default packaging target/);
+    expect(() => hostTarget("freebsd")).toThrow(/Pass an explicit target/);
   });
 });
 
@@ -119,7 +128,11 @@ describe("createCliApi — build", () => {
 
     await api.build({ target: "android" });
 
-    expect(mocks.build.run).toHaveBeenCalledWith({ target: "android" });
+    expect(mocks.build.run).toHaveBeenCalledWith({
+      target: "android",
+      simulator: undefined,
+      aab: undefined
+    });
   });
 
   it("falls back to the resolved host target when omitted", async () => {
@@ -128,11 +141,136 @@ describe("createCliApi — build", () => {
 
     await api.build();
 
-    expect(mocks.build.run).toHaveBeenCalledWith({ target: hostTarget() });
+    expect(mocks.build.run).toHaveBeenCalledWith({
+      target: hostTarget(),
+      simulator: undefined,
+      aab: undefined
+    });
+  });
+
+  it("passes simulator through to build.run", async () => {
+    const { ctx, mocks } = createMockCtx();
+    const api = createCliApi(ctx);
+
+    await api.build({ target: "ios", simulator: true });
+
+    expect(mocks.build.run).toHaveBeenCalledWith({
+      target: "ios",
+      simulator: true,
+      aab: undefined
+    });
+  });
+
+  it("passes aab through to build.run", async () => {
+    const { ctx, mocks } = createMockCtx();
+    const api = createCliApi(ctx);
+
+    await api.build({ target: "android", aab: true });
+
+    expect(mocks.build.run).toHaveBeenCalledWith({
+      target: "android",
+      simulator: undefined,
+      aab: true
+    });
+  });
+
+  it("passes simulator/aab through to build.runAll", async () => {
+    const { ctx, mocks } = createMockCtx();
+    const api = createCliApi(ctx);
+
+    await api.build({ all: true, simulator: true, aab: true });
+
+    expect(mocks.build.runAll).toHaveBeenCalledWith({ simulator: true, aab: true });
+  });
+
+  it("boxes the TauriError stderr tail before rethrowing (B9)", async () => {
+    const lines: string[] = [];
+    const mocks = createMocks();
+    mocks.build.run = vi.fn().mockRejectedValue(
+      new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix the source.", {
+        exitCode: 101,
+        stderrTail: "error[E0432]: unresolved import `foo`"
+      })
+    );
+    const { ctx } = createMockCtx({
+      mocks,
+      renderImpl: line => {
+        lines.push(line);
+      }
+    });
+    const api = createCliApi(ctx);
+
+    await expect(api.build({ target: "macos" })).rejects.toThrow(/tauri compile failed/);
+
+    const text = lines.join("\n");
+    expect(text).toContain("unresolved import `foo`");
+    expect(text.indexOf("unresolved import")).toBeLessThan(text.indexOf("[native] tauri compile"));
+  });
+
+  it("rethrows a non-TauriError failure without boxing anything", async () => {
+    const lines: string[] = [];
+    const mocks = createMocks();
+    mocks.build.runAll = vi.fn().mockRejectedValue(new Error("[native] boom.\n  Retry."));
+    const { ctx } = createMockCtx({
+      mocks,
+      renderImpl: line => {
+        lines.push(line);
+      }
+    });
+    const api = createCliApi(ctx);
+
+    await expect(api.build({ all: true })).rejects.toThrow(/boom/);
+    expect(lines.length).toBeLessThanOrEqual(2);
   });
 });
 
 describe("createCliApi — dev", () => {
+  it("prepares the project before handing the tree to tauri dev (M1)", async () => {
+    const order: string[] = [];
+    const mocks = createMocks();
+    mocks.build.prepare = vi.fn(async () => {
+      order.push("prepare");
+    });
+    mocks.tauri.dev = vi.fn(async () => {
+      order.push("dev");
+      return {
+        url: "http://localhost:1420",
+        ready: Promise.resolve(),
+        exited: Promise.resolve({ code: 0, signal: null }),
+        stop: vi.fn()
+      };
+    });
+    const { ctx } = createMockCtx({ mocks });
+    const api = createCliApi(ctx);
+
+    await api.dev();
+
+    expect(order).toEqual(["prepare", "dev"]);
+    expect(mocks.build.prepare).toHaveBeenCalledWith({ target: hostTarget() });
+  });
+
+  it("forwards an explicit target to both prepare and tauri dev", async () => {
+    const { ctx, mocks } = createMockCtx();
+    const api = createCliApi(ctx);
+
+    await api.dev({ target: "ios" });
+
+    expect(mocks.build.prepare).toHaveBeenCalledWith({ target: "ios" });
+    expect(mocks.tauri.dev).toHaveBeenCalledWith(
+      expect.objectContaining({ target: "ios" }) as unknown
+    );
+  });
+
+  it("never starts the dev process when prepare fails", async () => {
+    const mocks = createMocks();
+    mocks.build.prepare = vi.fn().mockRejectedValue(new Error("[native] codegen failed.\n  Fix."));
+    const { ctx } = createMockCtx({ mocks });
+    const api = createCliApi(ctx);
+
+    await expect(api.dev()).rejects.toThrow(/codegen failed/);
+    expect(mocks.tauri.dev).not.toHaveBeenCalled();
+  });
+
   it("forwards scrubbed dev output through the render seam and never calls stop", async () => {
     const lines: string[] = [];
     const stop = vi.fn().mockResolvedValue(undefined);
@@ -190,11 +328,14 @@ describe("createCliApi — dev", () => {
 });
 
 describe("createCliApi — doctor", () => {
-  it("returns report.ok and renders the summary", async () => {
+  it("returns report.ok and renders counts only — never a second row per check (M7)", async () => {
     const mocks = createMocks();
     mocks.doctor.run = vi.fn().mockResolvedValue({
       ok: false,
-      checks: [{ id: "x", target: "host", status: "fail", message: "boom" }]
+      checks: [
+        { id: "x", target: "host", status: "fail", message: "boom", fixIt: "install x" },
+        { id: "y", target: "host", status: "pass", message: "fine" }
+      ]
     });
     const lines: string[] = [];
     const { ctx } = createMockCtx({
@@ -209,7 +350,13 @@ describe("createCliApi — doctor", () => {
 
     expect(ok).toBe(false);
     expect(mocks.doctor.run).toHaveBeenCalledWith({});
-    expect(lines.join("\n")).toContain("boom");
+    const text = lines.join("\n");
+    expect(text).toContain("pass 1");
+    expect(text).toContain("fail 1");
+    expect(text).toContain("One or more checks failed");
+    // The rows themselves belong to the live doctor:check hook, not the summary.
+    expect(text).not.toContain("boom");
+    expect(text).not.toContain("install x");
   });
 
   it("forwards an explicit target", async () => {

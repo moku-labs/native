@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../../../config";
 import type { CheckResult, DoctorReport } from "../../../doctor/types";
+import { TauriError } from "../../../tauri/errors";
 import {
   createRenderConsole,
+  renderBuildFailure,
   renderCheckEvent,
   renderCompleteEvent,
   renderDoctorSummary,
@@ -166,29 +168,102 @@ describe("renderCheckEvent", () => {
 });
 
 describe("renderDoctorSummary", () => {
-  it("renders one row per check plus an overall summary line", () => {
-    const { lines, ui } = createSink();
-    const report: DoctorReport = {
-      ok: false,
-      checks: [
-        { id: "node-binary", target: "host", status: "pass", message: "ok" },
-        {
-          id: "rustup-targets",
-          target: "macos",
-          status: "fail",
-          message: "missing",
-          fixIt: "rustup target add x"
-        }
-      ]
-    };
+  /** A mixed report: one pass, one warn, one fail — one of each counted status. */
+  const mixedReport: DoctorReport = {
+    ok: false,
+    checks: [
+      { id: "node-binary", target: "host", status: "pass", message: "ok" },
+      { id: "signing-macos", target: "macos", status: "warn", message: "no identity" },
+      {
+        id: "rustup-targets",
+        target: "macos",
+        status: "fail",
+        message: "missing",
+        fixIt: "rustup target add x"
+      }
+    ]
+  };
 
-    renderDoctorSummary(ui, report);
+  it("renders pass/warn/fail counts plus the overall verdict (M7)", () => {
+    const { lines, ui } = createSink();
+
+    renderDoctorSummary(ui, mixedReport);
 
     const text = lines.join("\n");
-    expect(text).toContain("node-binary");
-    expect(text).toContain("rustup-targets");
-    expect(text).toContain("rustup target add x");
+    expect(text).toContain("Doctor summary");
+    expect(text).toContain("pass 1");
+    expect(text).toContain("warn 1");
+    expect(text).toContain("fail 1");
     expect(text).toContain("One or more checks failed");
+  });
+
+  it("never repeats the per-check rows — those print once, live from doctor:check (M7)", () => {
+    const { lines, ui } = createSink();
+
+    renderDoctorSummary(ui, mixedReport);
+
+    const text = lines.join("\n");
+    expect(text).not.toContain("node-binary");
+    expect(text).not.toContain("rustup-targets");
+    expect(text).not.toContain("rustup target add x");
+  });
+
+  it("renders the pass verdict for an all-green report", () => {
+    const { lines, ui } = createSink();
+
+    renderDoctorSummary(ui, {
+      ok: true,
+      checks: [{ id: "node-binary", target: "host", status: "pass", message: "ok" }]
+    });
+
+    const text = lines.join("\n");
+    expect(text).toContain("pass 1");
+    expect(text).toContain("All checks passed");
+  });
+});
+
+describe("renderBuildFailure", () => {
+  it("boxes the scrubbed stderr tail ABOVE the [native] error line (B9)", () => {
+    const { lines, ui } = createSink();
+    const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
+      exitCode: 101,
+      stderrTail: "error[E0432]: unresolved import `foo`\nerror: could not compile `app`"
+    });
+
+    renderBuildFailure(ui, error);
+
+    const text = lines.join("\n");
+    expect(text).toContain("unresolved import `foo`");
+    expect(text).toContain("could not compile `app`");
+    expect(text).toContain("[native] tauri compile failed.");
+    // Cause first, verdict second.
+    expect(text.indexOf("unresolved import")).toBeLessThan(text.indexOf("[native] tauri compile"));
+    // The tail is framed: a box adds a top border, content lines, and a bottom border.
+    expect(lines.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("renders the error line without a box when the stderr tail is empty", () => {
+    const { lines, ui } = createSink();
+    const error = new TauriError("cancelled", "[native] tauri cancelled.\n  Retry.", {
+      exitCode: null, // eslint-disable-line unicorn/no-null -- mirrors Node's signal-exit shape
+      stderrTail: ""
+    });
+
+    renderBuildFailure(ui, error);
+
+    const text = lines.join("\n");
+    expect(text).toContain("[native] tauri cancelled.");
+    expect(lines.length).toBeLessThanOrEqual(2);
+  });
+
+  it("renders a plain error line for a non-TauriError failure", () => {
+    const { lines, ui } = createSink();
+
+    renderBuildFailure(ui, new Error("[native] collect phase found no artifacts.\n  Rebuild."));
+
+    const text = lines.join("\n");
+    expect(text).toContain("collect phase found no artifacts");
+    expect(lines.length).toBeLessThanOrEqual(2);
   });
 });
 
@@ -200,6 +275,7 @@ describe("MC1 compliance", () => {
 
     renderPhaseEvent(ui, { target: "macos", phase: "scaffold", status: "start" }, 0);
     renderDoctorSummary(ui, { ok: true, checks: [] });
+    renderBuildFailure(ui, new Error("[native] boom.\n  Retry."));
 
     expect(logSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();

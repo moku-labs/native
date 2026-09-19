@@ -3,12 +3,7 @@
  */
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../config";
 import type { CheckResult } from "../doctor/types";
-import {
-  createRenderConsole,
-  renderCheckEvent,
-  renderCompleteEvent,
-  renderPhaseEvent
-} from "./render";
+import { renderCheckEvent, renderCompleteEvent, renderPhaseEvent } from "./render";
 import type { CliContext } from "./types";
 
 /**
@@ -23,12 +18,12 @@ export type CliHandlers = {
 };
 
 /**
- * Creates the cli hook map. Each handler renders through one branded console bound to the
- * configured render seam, and `native:phase` additionally maintains
- * `ctx.state.progress` — the live phase/spinner-tick/start-time bookkeeping for the
- * CURRENT verb invocation — across each phase's start → progress → done/error cycle.
+ * Creates the cli hook map. Every handler renders through `ctx.state.ui` — the single
+ * branded console the state factory built from the configured render seam (N5) — and
+ * `native:phase` additionally keeps the running phase's start time in
+ * `ctx.state.progress`, which is what drives the spinner frame.
  *
- * @param ctx - Plugin context (state bookkeeping, render seam via config).
+ * @param ctx - Plugin context (shared console + progress bookkeeping in state).
  * @returns The hook map wired onto the cli plugin.
  * @example
  * ```ts
@@ -36,12 +31,12 @@ export type CliHandlers = {
  * ```
  */
 export function createCliHandlers(ctx: CliContext): CliHandlers {
-  const ui = createRenderConsole(ctx.config.renderImpl);
+  const ui = ctx.state.ui;
 
   return {
     /**
-     * Handles one `native:phase` event: updates `ctx.state.progress` bookkeeping across
-     * the start → progress → done/error cycle, then renders the corresponding status line.
+     * Handles one `native:phase` event: stamps/clears the running phase's start time in
+     * `ctx.state.progress`, then renders the corresponding status line.
      *
      * @param payload - The phase event payload.
      * @example
@@ -50,11 +45,7 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * ```
      */
     "native:phase"(payload) {
-      if (payload.status === "start") {
-        ctx.state.progress = { phase: payload.phase, startedAt: Date.now(), ticks: 0 };
-      } else if (payload.status === "progress") {
-        ctx.state.progress = { ...ctx.state.progress, ticks: ctx.state.progress.ticks + 1 };
-      }
+      if (payload.status === "start") ctx.state.progress = { startedAt: Date.now() };
 
       const elapsedMs = ctx.state.progress.startedAt
         ? Date.now() - ctx.state.progress.startedAt
@@ -62,7 +53,7 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
       renderPhaseEvent(ui, payload, elapsedMs);
 
       if (payload.status === "done" || payload.status === "error") {
-        ctx.state.progress = { phase: undefined, startedAt: undefined, ticks: 0 };
+        ctx.state.progress = { startedAt: undefined };
       }
     },
 

@@ -52,13 +52,14 @@ const spawnDevExitsZero: SpawnFn = async opts => {
   return { code: 0, signal: null, stdout: "", stderr: "" };
 };
 
-/** A fake dev subprocess that exits non-zero (simulating a crashed dev server). */
-const spawnDevFails: SpawnFn = async () => ({
-  code: 1,
-  signal: null,
-  stdout: "",
-  stderr: "boom"
-});
+/**
+ * A fake subprocess where only `dev` exits non-zero (a crashed dev server) — the spawns
+ * `build.prepare` issues beforehand (M1) still succeed.
+ */
+const spawnDevFails: SpawnFn = async opts =>
+  opts.cmd.includes("dev")
+    ? { code: 1, signal: null, stdout: "", stderr: "boom" }
+    : { code: 0, signal: null, stdout: "", stderr: "" };
 
 describe("cli plugin integration", () => {
   let projectDir: string;
@@ -120,7 +121,7 @@ describe("cli plugin integration", () => {
   });
 
   describe("doctor", () => {
-    it("renders one row per doctor:check plus a final summary, and returns report.ok", async () => {
+    it("renders each check row ONCE plus a counts-only summary, and returns report.ok", async () => {
       const lines: string[] = [];
       const app = createTestApp({ renderImpl: line => lines.push(line) });
 
@@ -128,8 +129,10 @@ describe("cli plugin integration", () => {
 
       expect(typeof ok).toBe("boolean");
       const text = lines.join("\n");
-      expect(text).toContain("rustup-targets");
+      // The live doctor:check hook prints the row; the summary never repeats it (M7).
+      expect(lines.filter(line => line.includes("rustup-targets"))).toHaveLength(1);
       expect(text).toContain("Doctor summary");
+      expect(text).toMatch(/pass \d+ · warn \d+ · fail \d+/);
     });
   });
 
@@ -138,11 +141,15 @@ describe("cli plugin integration", () => {
       vi.unstubAllGlobals();
     });
 
-    it("resolves once the fake dev process exits cleanly (readiness stubbed)", async () => {
+    it("prepares the project (M1) then resolves once the fake dev process exits cleanly", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok")));
       const app = createTestApp({ spawnImpl: spawnDevExitsZero });
 
       await expect(app.cli.dev()).resolves.toBeUndefined();
+
+      // prepare ran before the dev process: the generated tree exists on disk.
+      expect(existsSync(path.join(projectDir, "src-tauri", "tauri.conf.json"))).toBe(true);
+      expect(existsSync(path.join(projectDir, "src-tauri", "build.rs"))).toBe(true);
     });
 
     it("rejects when the fake dev process exits non-zero", async () => {

@@ -7,6 +7,7 @@ import type { BrandConsole } from "@moku-labs/common/cli";
 import { createBrandConsole, createBrandPrompts, spinnerFrameAt } from "@moku-labs/common/cli";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../config";
 import type { CheckResult, DoctorReport } from "../doctor/types";
+import { TauriError } from "../tauri/errors";
 import type { ConfirmFn, RenderFn } from "./types";
 
 /**
@@ -138,8 +139,9 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
 }
 
 /**
- * Renders the final doctor summary once the full report has resolved: a heading, one row
- * per check (reusing {@link renderCheckEvent}), and an overall pass/fail line.
+ * Renders the final doctor summary once the full report has resolved: a heading, the
+ * pass/warn/fail counts, and the overall verdict. It repeats NO row — every check already
+ * printed exactly once, live from the `doctor:check` hook (M7).
  *
  * @param ui - The branded console to render through.
  * @param report - The aggregated diagnosis report.
@@ -149,8 +151,30 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
  * ```
  */
 export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): void {
+  const counts = { pass: 0, warn: 0, fail: 0 };
+  for (const result of report.checks) counts[result.status] += 1;
+
   ui.heading("Doctor summary");
-  for (const result of report.checks) renderCheckEvent(ui, result);
-  ui.line();
+  ui.line(`  pass ${counts.pass} · warn ${counts.warn} · fail ${counts.fail}`);
   ui.check(report.ok, report.ok ? "All checks passed" : "One or more checks failed");
+}
+
+/**
+ * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
+ * in a branded box, then the `[native]` error line (B9). Cause first, verdict second —
+ * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
+ * failure (or an empty tail) prints the error line alone.
+ *
+ * @param ui - The branded console to render through.
+ * @param error - The failure thrown by `build.run`/`build.runAll`.
+ * @example
+ * ```ts
+ * try { await build.run({ target: "macos" }); } catch (error) { renderBuildFailure(ui, error); throw error; }
+ * ```
+ */
+export function renderBuildFailure(ui: BrandConsole, error: unknown): void {
+  const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
+
+  if (stderrTail) ui.box(stderrTail.split(/\r?\n/));
+  ui.error(error instanceof Error ? error.message : String(error));
 }

@@ -330,23 +330,28 @@ describe("S10 — cli.build renders live progress from real build emissions", ()
 });
 
 describe("S11 — cli.doctor renders per-check rows + summary", () => {
-  it("returns true with all-ok probes and renders one live row per doctor:check plus the summary", async () => {
+  it("returns true with all-ok probes and renders one live row per doctor:check plus a counts summary", async () => {
     const testApp = await newTestApp();
 
     const ok = await testApp.app.cli.doctor({ target: "macos" });
 
     expect(ok).toBe(true);
 
-    // One live row per doctor:check PLUS one summary row each → every check id renders
-    // at least twice, and the summary block closes with the overall pass line.
+    // Exactly ONE row per doctor:check — live from the hook; the summary repeats no row
+    // and prints the counts plus the overall verdict (M7).
     const text = testApp.rendered.join("\n");
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents.length).toBeGreaterThan(0);
     for (const event of checkEvents) {
-      expect(countOccurrences(text, event.payload.id)).toBeGreaterThanOrEqual(2);
+      expect(countOccurrences(text, event.payload.id)).toBe(1);
     }
+
+    const counts = { pass: 0, warn: 0, fail: 0 };
+    for (const event of checkEvents) counts[event.payload.status] += 1;
+
     expect(text).toContain("rustup-targets");
     expect(text).toContain("Doctor summary");
+    expect(text).toContain(`pass ${counts.pass} · warn ${counts.warn} · fail ${counts.fail}`);
     expect(text).toContain("All checks passed");
   });
 

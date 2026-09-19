@@ -3,35 +3,29 @@
  */
 import process from "node:process";
 import type { Target } from "../../config";
+import { hostTargets } from "../../config";
 import { buildPlugin } from "../build";
 import { doctorPlugin } from "../doctor";
 import { projectPlugin } from "../project";
 import { tauriPlugin } from "../tauri";
-import { createRenderConsole, renderDoctorSummary, resolveConfirm } from "./render";
+import { renderBuildFailure, renderDoctorSummary, resolveConfirm } from "./render";
 import type { Api, CliContext } from "./types";
 
-/** Host platforms this plugin can resolve to a default packaging target. */
-const HOST_TARGETS: Partial<Record<NodeJS.Platform, Target>> = {
-  darwin: "macos",
-  win32: "windows",
-  linux: "linux"
-};
-
 /**
- * Resolves the default packaging target from the host platform (darwin→macos,
- * win32→windows, linux→linux). Mobile targets are never inferred — callers must pass
- * `{ target: "ios" | "android" }` explicitly.
+ * Resolves the default packaging target from the host platform via the framework's own
+ * {@link hostTargets} table (darwin→macos, win32→windows, linux→linux — A9: cli keeps no
+ * second copy). Mobile targets are never inferred: callers pass `{ target: "ios" }`.
  *
  * @param platform - `process.platform`-shaped value (injectable for cross-platform tests).
  * @returns The resolved host target.
- * @throws {Error} `[native]` when the host platform has no default target.
+ * @throws {Error} `[native]` when the host platform has no desktop target.
  * @example
  * ```ts
  * hostTarget(); // "macos" on darwin
  * ```
  */
 export function hostTarget(platform: NodeJS.Platform = process.platform): Target {
-  const target = HOST_TARGETS[platform];
+  const target = hostTargets(platform)[0];
   if (!target) {
     throw new Error(
       `[native] No default packaging target for host platform "${platform}".\n` +
@@ -59,7 +53,7 @@ export function createCliApi(ctx: CliContext): Api {
   const tauri = ctx.require(tauriPlugin);
   const build = ctx.require(buildPlugin);
   const doctor = ctx.require(doctorPlugin);
-  const ui = createRenderConsole(ctx.config.renderImpl);
+  const ui = ctx.state.ui;
   const confirm = resolveConfirm(ctx.config.confirmImpl);
 
   /**
@@ -80,45 +74,60 @@ export function createCliApi(ctx: CliContext): Api {
     /**
      * Builds one target (default: the host target) or every configured target with
      * `{ all: true }` (which ignores any given `target`). Progress renders live through
-     * the plugin's `native:phase`/`native:complete` hooks.
+     * the plugin's `native:phase`/`native:complete` hooks; a failure renders the scrubbed
+     * stderr tail in a box before the error line (B9) and then rethrows unchanged.
      *
      * @param opts - Build options.
      * @param opts.target - The packaging target (default: the resolved host target).
      * @param opts.all - Build every configured target instead of one (ignores `target`).
+     * @param opts.simulator - iOS: build for the host's simulator arch instead of a device archive.
+     * @param opts.aab - Android: emit a store bundle (`.aab`) instead of an `.apk`.
      * @returns Resolves once the build (or all builds) complete.
+     * @throws {Error} Whatever the pipeline throws — after rendering the failure.
      * @example
      * ```ts
-     * await app.cli.build({ target: "macos" });
+     * await app.cli.build({ target: "ios", simulator: true });
      * await app.cli.build({ all: true });
      * ```
      */
     async build(opts = {}) {
-      if (opts.all) {
-        await build.runAll();
-        return;
+      const { simulator, aab } = opts;
+
+      try {
+        if (opts.all) {
+          await build.runAll({ simulator, aab });
+          return;
+        }
+        await build.run({ target: opts.target ?? hostTarget(), simulator, aab });
+      } catch (error) {
+        renderBuildFailure(ui, error);
+        throw error;
       }
-      await build.run({ target: opts.target ?? hostTarget() });
     },
 
     /**
-     * Runs the dev loop. Awaits the tauri dev handle's `ready` then `exited` — it NEVER
-     * stores the handle and NEVER calls `stop()` itself (D-002); teardown is owned entirely
-     * by the tauri seam's own control flow (signal handlers, process-group kill).
+     * Runs the dev loop. Brings the generated project to a buildable state first —
+     * `build.prepare` runs scaffold → codegen → icons, so `tauri dev` never meets a
+     * half-generated tree (M1) — then awaits the dev handle's `ready` and `exited`. It
+     * NEVER stores the handle and NEVER calls `stop()` itself (D-002); teardown is owned
+     * entirely by the tauri seam's own control flow (signal handlers, process-group kill).
      *
      * @param opts - Dev options.
-     * @param opts.target - Optional packaging target (desktop-uniform when omitted).
+     * @param opts.target - Packaging target (default: the resolved host target).
      * @returns Resolves once the dev session exits cleanly.
-     * @throws {Error} `[native]` when the dev session exits with a non-zero code.
+     * @throws {Error} `[native]` when the host has no desktop target, or when the dev
+     *   session exits with a non-zero code.
      * @example
      * ```ts
      * await app.cli.dev({ target: "ios" });
      * ```
      */
     async dev(opts = {}) {
-      const handle = await tauri.dev({
-        ...(opts.target ? { target: opts.target } : {}),
-        onOutput: forwardDevOutput
-      });
+      const target = opts.target ?? hostTarget();
+
+      await build.prepare({ target });
+
+      const handle = await tauri.dev({ target, onOutput: forwardDevOutput });
       await handle.ready;
       const exit = await handle.exited;
 
@@ -133,9 +142,9 @@ export function createCliApi(ctx: CliContext): Api {
     },
 
     /**
-     * Runs diagnosis, renders the summary table (plus fix-its), and returns whether every
-     * check passed. Live `doctor:check` rows render as they complete via this plugin's
-     * `doctor:check` hook; this method renders only the final summary.
+     * Runs diagnosis, renders the summary, and returns whether every check passed. The
+     * per-check rows (with their fix-its) print exactly once, live from this plugin's
+     * `doctor:check` hook; this method adds only the counts and the verdict (M7).
      *
      * @param opts - Optional scoping.
      * @param opts.target - A single target to diagnose (default: every configured target + host).
