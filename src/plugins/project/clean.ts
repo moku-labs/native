@@ -3,7 +3,9 @@
  */
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import type { Target } from "../../config";
 import type { CleanResult } from "./types";
 
@@ -48,6 +50,45 @@ export function cleanTargets(projectDirectory: string, target?: Target): string[
 }
 
 /**
+ * Refuses to treat a shared, non-derived directory as a cleanable `projectDir`. This is
+ * the FIRST gate every clean pass passes through, before a single path is computed:
+ * `projectDir` is gitignored build output, so a `projectDir` that is the current working
+ * directory, the user's home directory, a filesystem root, or an ancestor of the current
+ * working directory is a misconfiguration, not a clean scope.
+ *
+ * Pure predicate by design — it is tested by calling it directly with unsafe paths, never
+ * by letting {@link clean} loose on one.
+ *
+ * @param root - The configured `projectDir` a clean pass wants to remove.
+ * @param cwd - The current working directory (injectable for tests).
+ * @param home - The user's home directory (injectable for tests).
+ * @throws {Error} When `root` is the cwd, the home directory, a filesystem root, or contains the cwd.
+ * @example
+ * ```ts
+ * assertCleanableRoot("/repo/.moku/tauri", "/repo", "/Users/alex"); // ok
+ * assertCleanableRoot("/repo", "/repo", "/Users/alex"); // throws
+ * ```
+ */
+export function assertCleanableRoot(
+  root: string,
+  cwd: string = process.cwd(),
+  home: string = os.homedir()
+): void {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCwd = path.resolve(cwd);
+
+  const isFilesystemRoot = path.dirname(resolvedRoot) === resolvedRoot;
+  const isCwd = resolvedRoot === resolvedCwd;
+  const isHome = resolvedRoot === path.resolve(home);
+  const containsCwd = resolvedCwd.startsWith(resolvedRoot + path.sep);
+  if (!isFilesystemRoot && !isCwd && !isHome && !containsCwd) return;
+
+  throw new Error(
+    `[native] Refusing to clean projectDir "${resolvedRoot}".\n  Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".`
+  );
+}
+
+/**
  * Refuses to operate on a path outside `root` — the last line of defense before any
  * destructive filesystem call in this plugin.
  *
@@ -71,12 +112,15 @@ export function assertWithinRoot(root: string, candidate: string): void {
 /**
  * Deletes derived state for the given scope. `target` omitted removes the whole
  * `projectDir`; a mobile `target` removes `gen/<platform>` only; a desktop `target`
- * removes that target's bundle output. Every candidate path is validated against
- * `projectDir` before deletion, and only paths that actually exist are removed/reported.
+ * removes that target's bundle output. `projectDir` itself is checked by
+ * {@link assertCleanableRoot} before anything is computed — for BOTH the scoped and the
+ * unscoped case — and every candidate path is then validated against `projectDir`, so
+ * only existing paths inside a legitimately derived root are removed/reported.
  *
  * @param projectDirectory - The Tauri project root.
  * @param target - The optional packaging target to scope the clean to.
  * @returns The list of paths actually removed.
+ * @throws {Error} When `projectDir` is the cwd, the home directory, a filesystem root, or contains the cwd.
  * @example
  * ```ts
  * await clean("/repo/.moku/tauri", "android");
@@ -84,6 +128,8 @@ export function assertWithinRoot(root: string, candidate: string): void {
  */
 export async function clean(projectDirectory: string, target?: Target): Promise<CleanResult> {
   const root = path.resolve(projectDirectory);
+  assertCleanableRoot(root);
+
   const removed: string[] = [];
 
   for (const candidate of cleanTargets(projectDirectory, target)) {

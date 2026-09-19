@@ -4,7 +4,42 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { assertWithinRoot, clean, cleanTargets } from "../../clean";
+import { assertCleanableRoot, assertWithinRoot, clean, cleanTargets } from "../../clean";
+
+// ---------------------------------------------------------------------------
+// assertCleanableRoot — the FIRST gate. Tested as a pure predicate ONLY: an unsafe
+// path is never handed to `clean`, because `clean` would delete it.
+// ---------------------------------------------------------------------------
+
+describe("assertCleanableRoot", () => {
+  const cwd = path.join(path.sep, "repo", "app");
+  const home = path.join(path.sep, "Users", "alex");
+
+  it.each([
+    ["the cwd itself", cwd],
+    ["the home directory", home],
+    ["a filesystem root", path.parse(cwd).root],
+    ["an ancestor of the cwd", path.join(path.sep, "repo")]
+  ])("refuses %s", (_label, root) => {
+    expect(() => assertCleanableRoot(root, cwd, home)).toThrow(
+      '[native] Refusing to clean projectDir "'
+    );
+  });
+
+  it("names the fix in the error's second line", () => {
+    expect(() => assertCleanableRoot(cwd, cwd, home)).toThrow(
+      'Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".'
+    );
+  });
+
+  it.each([
+    ["a dedicated subdirectory of the cwd", path.join(cwd, ".moku", "tauri")],
+    ["a sibling sharing a path prefix", path.join(path.sep, "repo", "app-other")],
+    ["a directory under the home directory", path.join(home, "work", ".moku", "tauri")]
+  ])("allows %s", (_label, root) => {
+    expect(() => assertCleanableRoot(root, cwd, home)).not.toThrow();
+  });
+});
 
 describe("cleanTargets", () => {
   it("scopes to the whole projectDir when target is omitted", () => {

@@ -10,10 +10,22 @@ describe("generateCapabilities", () => {
     expect(artifacts[0]?.path).toBe("src-tauri/capabilities/default.json");
   });
 
-  it("scopes the platforms field to the target", () => {
-    const [artifact] = generateCapabilities(generatorInputFor("android"));
+  it.each([
+    ["macos", "macOS"],
+    ["ios", "iOS"],
+    ["windows", "windows"],
+    ["linux", "linux"],
+    ["android", "android"]
+  ] as const)("maps %s to Tauri's %s platform id", (target, platformId) => {
+    const [artifact] = generateCapabilities(generatorInputFor(target));
     const doc = JSON.parse(artifact?.content ?? "{}");
-    expect(doc.platforms).toEqual(["android"]);
+    expect(doc.platforms).toEqual([platformId]);
+  });
+
+  it("starts the permission list with core:default", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("ios"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+    expect(doc.permissions[0]).toBe("core:default");
   });
 
   it("aggregates permissions from every resolved capability, tray excluded on mobile", () => {

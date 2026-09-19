@@ -176,7 +176,9 @@ describe("journey consumer workflows (S13–S16)", () => {
       // tauri.conf.json: one plugins.<name> block per composed capability, with the
       // deep-link scheme riding in its conf fragment (D-011).
       const confRaw = await readFile(path.join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
-      const conf = JSON.parse(confRaw) as { plugins: Record<string, { schemes?: string[] }> };
+      const conf = JSON.parse(confRaw) as {
+        plugins: Record<string, { desktop?: { schemes?: string[] } }>;
+      };
       expect(Object.keys(conf.plugins).toSorted()).toEqual([
         "clipboard-manager",
         "deep-link",
@@ -184,7 +186,7 @@ describe("journey consumer workflows (S13–S16)", () => {
         "store",
         "tray"
       ]);
-      expect(conf.plugins["deep-link"]?.schemes).toEqual(["myapp"]);
+      expect(conf.plugins["deep-link"]?.desktop?.schemes).toEqual(["myapp"]);
 
       // capabilities/default.json: permission ids for all five capabilities — tray's
       // core:tray:default is present because macos is a desktop target.
@@ -196,9 +198,11 @@ describe("journey consumer workflows (S13–S16)", () => {
         platforms: string[];
         permissions: string[];
       };
-      expect(capabilityDoc.platforms).toEqual(["macos"]);
+      // Tauri's own platform id for macos is "macOS" (B3).
+      expect(capabilityDoc.platforms).toEqual(["macOS"]);
       expect(capabilityDoc.permissions).toEqual(
         expect.arrayContaining([
+          "core:default",
           "store:default",
           "notification:default",
           "clipboard-manager:allow-read-text",
@@ -229,7 +233,10 @@ describe("journey consumer workflows (S13–S16)", () => {
       expect(app.project.isKnownCapability("store")).toBe(true);
       expect(app.project.isKnownCapability("nope")).toBe(false);
       const resolved = app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" });
-      expect(resolved.conf).toEqual({ schemes: ["myapp"] });
+      expect(resolved.conf).toEqual({
+        desktop: { schemes: ["myapp"] },
+        mobile: [{ scheme: ["myapp"], appLink: false }]
+      });
       expect(resolved.permissions).toContain("deep-link:default");
 
       // Type-level: a bogus deep-link mode is rejected at compile time (never invoked).

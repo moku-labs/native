@@ -34,6 +34,33 @@ describe("registryRows", () => {
     expect(tray?.platforms).toEqual(["macos", "windows", "linux"]);
   });
 
+  it("tray carries a cargo feature instead of a crate, npm package or rust init", () => {
+    const tray = registryRows().find(row => row.name === "tray");
+    expect(tray?.cargoFeatures).toEqual(["tray-icon"]);
+    expect(tray?.crate).toBeUndefined();
+    expect(tray?.crateRange).toBeUndefined();
+    expect(tray?.npmPackage).toBeUndefined();
+    expect(tray?.npmRange).toBeUndefined();
+    expect(tray?.rustInit).toBeUndefined();
+  });
+
+  it("every plugin-backed row carries no cargo feature", () => {
+    for (const row of registryRows()) {
+      if (row.name === "tray") continue;
+      expect(row.cargoFeatures).toEqual([]);
+      expect(row.crate).toBeDefined();
+      expect(row.npmPackage).toBeDefined();
+    }
+  });
+
+  it("returns copies — mutating a returned row does not corrupt the registry", () => {
+    const store = registryRows().find(row => row.name === "store");
+    expect(store).toBeDefined();
+    if (store) store.confidence = "low";
+
+    expect(registryRows().find(row => row.name === "store")?.confidence).toBe("high");
+  });
+
   it("every other row ships on all 5 targets", () => {
     for (const row of registryRows()) {
       if (row.name === "tray") continue;
@@ -104,9 +131,12 @@ describe("resolve", () => {
     expect(resolved.platforms).not.toContain("ios");
   });
 
-  it("threads the deep-link scheme into the conf fragment", () => {
+  it("threads the deep-link scheme into both the desktop and the mobile conf shape", () => {
     const resolved = resolve("deep-link", { mode: "scheme", scheme: "myapp" });
-    expect(resolved.conf).toEqual({ schemes: ["myapp"] });
+    expect(resolved.conf).toEqual({
+      desktop: { schemes: ["myapp"] },
+      mobile: [{ scheme: ["myapp"], appLink: false }]
+    });
   });
 
   it("throws when resolving deep-link without a scheme", () => {

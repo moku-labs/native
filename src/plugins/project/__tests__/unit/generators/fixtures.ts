@@ -43,3 +43,15 @@ export function resolvedCapabilitiesFor(target: GeneratorInput["target"]) {
 export function generatorInputFor(target: GeneratorInput["target"]): GeneratorInput {
   return { global: baseGlobalConfig, target, capabilities: resolvedCapabilitiesFor(target) };
 }
+
+/** Builds a `GeneratorInput` fixture whose global config carries the given overrides. */
+export function generatorInputWith(
+  target: GeneratorInput["target"],
+  overrides: Partial<Config>
+): GeneratorInput {
+  return {
+    global: { ...baseGlobalConfig, ...overrides },
+    target,
+    capabilities: resolvedCapabilitiesFor(target)
+  };
+}

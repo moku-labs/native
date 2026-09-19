@@ -144,12 +144,20 @@ describe("S02 — global-config defaults + partial override composition", () => 
     // Content reflects the framework's DEFAULT web wiring (web was never configured).
     const conf = JSON.parse(await readFile(confPath, "utf8")) as {
       productName: string;
-      build: { beforeBuildCommand: string; devUrl: string; frontendDist: string };
+      build: {
+        beforeBuildCommand: { script: string; cwd: string };
+        devUrl: string;
+        frontendDist: string;
+      };
     };
     expect(conf.productName).toBe("Test App");
-    expect(conf.build.beforeBuildCommand).toBe("bun run build");
+    expect(conf.build.beforeBuildCommand.script).toBe("bun run build");
+    expect(conf.build.beforeBuildCommand.cwd).toBe(path.resolve("."));
     expect(conf.build.devUrl).toBe("http://localhost:5173");
-    expect(conf.build.frontendDist).toBe("dist");
+    // frontendDist is resolved FROM src-tauri, where Tauri reads it (B4).
+    expect(conf.build.frontendDist).toBe(
+      path.relative(path.join(projectDir, "src-tauri"), path.resolve("dist")).replaceAll("\\", "/")
+    );
 
     // pluginConfigs seam layering: the framework default `cli.renderImpl: undefined` is
     // replaced by the injected sink — the CLI renders there, never via raw console (MC1).

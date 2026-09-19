@@ -9,6 +9,7 @@ const storeRow = {
   crateRange: "^2",
   npmRange: "^2",
   rustInit: "",
+  cargoFeatures: [],
   permissions: [],
   platforms: [],
   confidence: "high" as const

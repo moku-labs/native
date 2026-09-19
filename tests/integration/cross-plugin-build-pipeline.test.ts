@@ -281,17 +281,12 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       expect(completenessAtBuildVerb).toEqual({ status: "complete" });
       expect(app.project.completeness({ target: "android" })).toEqual({ status: "complete" });
 
-      // codegen ran patchMobile: keystore.properties carries env-var REFERENCES only.
-      const keystoreProperties = await readFile(
-        path.join(projectDir, "src-tauri", "gen", "android", "keystore.properties"),
-        "utf8"
-      );
-      expect(keystoreProperties).toContain("storeFile=release.jks");
-      expect(keystoreProperties).toContain("storePasswordEnvVar=MOKU_TEST_KS_PASSWORD");
-      expect(keystoreProperties).toContain("keyPasswordEnvVar=MOKU_TEST_KS_PASSWORD");
-      expect(keystoreProperties).toContain("keyAlias=release");
+      // codegen ran patchMobile: signing lives in Gradle only — no keystore.properties (A11).
+      expect(
+        existsSync(path.join(projectDir, "src-tauri", "gen", "android", "keystore.properties"))
+      ).toBe(false);
 
-      // ...and inserted the sentinel-delimited signing block into app/build.gradle.kts.
+      // ...and the sentinel-delimited block carries env-var REFERENCES only.
       const buildGradle = await readFile(
         path.join(projectDir, "src-tauri", "gen", "android", "app", "build.gradle.kts"),
         "utf8"
@@ -299,6 +294,9 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       expect(buildGradle).toContain("// MOKU-SIGNING-START");
       expect(buildGradle).toContain("// MOKU-SIGNING-END");
       expect(buildGradle).toContain('keyAlias = "release"');
+      expect(buildGradle).toContain('storeFile = file("release.jks")');
+      expect(buildGradle).toContain('storePassword = System.getenv("MOKU_TEST_KS_PASSWORD")');
+      expect(buildGradle).toContain('keyPassword = System.getenv("MOKU_TEST_KS_PASSWORD")');
 
       // The full pipeline still reported every phase and delivered the apk.
       expect(phaseKeys(events)).toEqual(SUCCESS_PHASE_SEQUENCE);

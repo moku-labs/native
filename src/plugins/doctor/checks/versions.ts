@@ -71,6 +71,8 @@ async function run(input: CheckInput): Promise<CheckResult> {
   const declared = { ...pkg.dependencies, ...pkg.devDependencies };
   const skewed: string[] = [];
   for (const row of input.project.registryRows()) {
+    // A1: a row can be backed by a cargo feature instead of a plugin (tray) — nothing to skew.
+    if (!row.npmPackage || !row.crate || !row.crateRange) continue;
     const declaredVersion = declared[row.npmPackage];
     if (!declaredVersion) continue;
     const declaredMajor = parseMajor(declaredVersion);
