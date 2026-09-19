@@ -76,21 +76,26 @@ app.project.requiredFiles("android"); // => required gen/android file set (consu
 
 ## The mobile patch pass
 
-`tauri ios init` / `tauri android init` write a build phase that shells out to
-`node tauri ios xcode-script …` — a command that does not exist, so an Xcode or Android
-Studio build of a freshly-initialised tree fails immediately. Passing `runner` (from the
-`tauri` plugin's `runner()`) rewrites that literal to an absolute
+`tauri ios init` / `tauri android init` write a build phase that shells out to whichever
+runner Tauri **detected from the environment** — `node tauri` from a plain shell,
+`bun tauri` under `bun run` (`npm_execpath` is set), and also `npm run tauri --`,
+`yarn tauri`, `pnpm tauri`, `cargo tauri`. None of those resolve inside Xcode or Android
+Studio, so a build of a freshly-initialised tree fails on its first build phase. Passing
+`runner` (from the `tauri` plugin's `runner()`) rewrites it to an absolute
 `<node> <tauri.js> <verb>` invocation, with each path quoted so paths containing spaces
 survive:
 
-| Platform | Files rewritten | Quote form |
-|---|---|---|
-| ios | `gen/apple/project.yml` | `"…"` (YAML scalar) |
-| ios | `gen/apple/*.xcodeproj/project.pbxproj` | `\"…\"` (inside a pbxproj string) |
-| android | `gen/android/buildSrc/**/*.{kt,kts,gradle}`, the two top-level `build.gradle.kts` | `\"…\"` (inside a source string) |
+| Platform | Files rewritten | Line prefix kept | Quote form |
+|---|---|---|---|
+| ios | `gen/apple/project.yml` | `script: ` (with any indent / `- `) | `"…"` (YAML scalar) |
+| ios | `gen/apple/*.xcodeproj/project.pbxproj` | `shellScript = "` | `\"…\"` (inside a pbxproj string) |
+| android | `gen/android/buildSrc/**/*.{kt,kts,gradle}`, the two top-level `build.gradle.kts` | the string literal's opening `"` | `\"…\"` (inside a source string) |
 
-Omit `runner` and the rewrite is skipped. The pass is idempotent: a second run finds no
-`node tauri …` left and reports every file unchanged.
+The match is **runner-agnostic**: on every line carrying ` ios xcode-script` /
+` android android-studio-script`, whatever sits between the line's prefix and the verb is
+replaced — no literal is hard-coded. Omit `runner` and the rewrite is skipped. The pass is
+idempotent: a second run rewrites the absolute pair onto itself and reports every file
+unchanged.
 
 ## Signing
 

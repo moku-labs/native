@@ -91,6 +91,19 @@ const spawnCompileFailure: SpawnFn = async () => ({
   stderr: "error[E0432]: unresolved import `foo`"
 });
 
+// xcodebuild writes the real cause to STDOUT; stderr carries only tauri's one-line wrapper.
+const spawnXcodeScriptFailure: SpawnFn = async () => ({
+  code: 65,
+  signal: null,
+  stdout: [
+    "** BUILD FAILED **",
+    "The following build commands failed:",
+    String.raw`	PhaseScriptExecution Build\ Rust\ Code /Users/x/Library/Developer/Xcode/DerivedData/app/Build/Script-80C98B.sh (in target 'app_iOS' from project 'app')`
+  ].join("\n"),
+  stderr:
+    'failed to build iOS app: failed to build with xcodebuild: command ["xcodebuild"] exited with code 65'
+});
+
 const spawnVersionOutput: SpawnFn = async () => ({
   code: 0,
   signal: null,
@@ -162,6 +175,24 @@ describe("createTauriApi", () => {
 
     await expect(api.build({ target: "macos" })).rejects.toBeInstanceOf(TauriError);
     await expect(api.build({ target: "macos" })).rejects.toMatchObject({ kind: "compile-failed" });
+  });
+
+  it("build() classifies on stdout too — xcodebuild writes the cause there", async () => {
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawnXcodeScriptFailure,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await expect(api.build({ target: "ios" })).rejects.toMatchObject({
+      kind: "xcode-script-failed"
+    });
+    await expect(api.build({ target: "ios" })).rejects.toMatchObject({
+      stderrTail: expect.stringContaining("PhaseScriptExecution")
+    });
   });
 
   it("icon() targets the generated project's src-tauri/icons directory", async () => {

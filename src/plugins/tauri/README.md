@@ -44,9 +44,10 @@ app.tauri.runner(): { nodePath: string; tauriJsPath: string }
   `project.completeness()` is `"not-initialized"` first; this call is not idempotent
   (tauri#13902).
 - **`runner`** — the resolved `{ nodePath, tauriJsPath }` pair every verb spawns with.
-  `tauri ios init` writes a literal `node tauri ios xcode-script` into the generated Xcode
-  project, and that command does not exist; `project.patchMobile({ target, runner })` rewrites it
-  with this pair, so the Xcode build phase invokes the very same CLI this plugin does.
+  `tauri ios init` bakes whichever runner it *detected* (`node tauri`, `bun tauri`,
+  `npm run tauri --`, …) into the generated Xcode project, and none of those resolve inside
+  Xcode; `project.patchMobile({ target, runner })` rewrites it with this pair, so the Xcode build
+  phase invokes the very same CLI this plugin does.
 - **`dev`** — starts the long-lived dev verb (`tauri dev` / `tauri ios|android dev`). Spawns a
   detached process group, installs `SIGINT`/`SIGTERM` handlers (group-kill + handler removal on
   exit), and returns immediately with a `DevHandle`:
@@ -67,24 +68,46 @@ app.tauri.runner(): { nodePath: string; tauriJsPath: string }
 - **`version`** — probes CLI presence/version via `tauri info` (used by `doctor`). Returns `null`
   when the CLI can't be invoked, rather than throwing.
 
-Non-zero one-shot exits throw a `TauriError` carrying the scrubbed stderr tail and an actionable
-`[native]`-formatted message. `errors.ts` matches the taxonomy most-specific-first:
+Non-zero one-shot exits throw a `TauriError` carrying the scrubbed output tail and an actionable
+`[native]`-formatted message. Patterns are tested **per line**, against **both** streams
+(scrubbed stdout + stderr — xcodebuild writes the cause to stdout), most-specific-first:
 
 | Kind | Matched on | Fix-it line |
 |---|---|---|
-| `signing-failed` | `no code signing`, `codesign`, `provisioning profile`, `notariz*`, `keychain`, `signtool`, `jarsigner`, `keystore` | check certificates/keystore/keychain, run `native doctor` |
+| `xcode-script-failed` | `PhaseScriptExecution … Build\ Rust\ Code` | `native clean --target ios`, rebuild, check the runner line in `gen/apple/project.yml` |
+| `signing-failed` | `codesign`, `no signing certificate`, `provisioning profile`, `notariz*`, `keychain`, `signtool`, `jarsigner`, `keystore` | check certificates/keystore/keychain, run `native doctor` |
 | `toolchain-missing` | `command not found`, `xcode-select`, `ANDROID_HOME`, `ndk not found`, `rustup`, `cargo: not found` | install the platform toolchain, run `native doctor` |
 | `platform-missing` | `… is not installed. Please download and install the platform`, `Found no destinations` | `xcodebuild -downloadPlatform iOS`, then `native doctor` |
 | `device-unavailable` | `no devices found`, `device not found`, `simulator not booted`, `no emulators found` | connect a device or boot a simulator |
 | `config-invalid` | `failed to parse/read …tauri.conf`, `invalid config`, `schema validation failed` | check the generated `tauri.conf.json` |
 | `compile-failed` | `error[E0001]`, `could not compile`, `compilation failed` | fix the source and retry |
 | `cancelled` | no pattern matched and the exit code is `null` (signal) | — |
-| `unknown` | nothing matched | inspect the stderr tail |
+| `unknown` | nothing matched | inspect the output tail |
 
-`platform-missing` sits ahead of `device-unavailable` on purpose: a missing iOS SDK platform
-reports both (`Found no destinations … No devices found`), and only the download fix-it helps.
-`config-invalid` is anchored to a failure verb so an ordinary `tauri.conf.json` mention in
-progress output is not classified as a config error.
+`xcode-script-failed` sits ahead of `signing-failed` and `compile-failed`: the Xcode "Build Rust
+Code" phase failing is a runner/toolchain problem inside Xcode, and neither of those fix-its
+helps. `platform-missing` sits ahead of `device-unavailable` for the same reason: a missing iOS
+SDK platform reports both (`Found no destinations … No devices found`), and only the download
+fix-it helps. `config-invalid` is anchored to a failure verb so an ordinary `tauri.conf.json`
+mention in progress output is not classified as a config error.
+
+Lines matching `^\s*Warn\b` are excluded from classification entirely. Every unsigned iOS
+simulator build prints `Warn No code signing certificates found …`, which is harmless — matching
+it would bucket *every* iOS failure as `signing-failed`. `no code signing` is deliberately not a
+signing pattern; a real refusal says `No signing certificate "…" found` or
+`requires a provisioning profile`.
+
+### `stderrTail`
+
+A plain "last 20 lines" tail is useless for xcodebuild: those lines are a simulator destination
+list, while the cause sits hundreds of lines earlier. The tail is built instead as
+
+1. up to **15 signal lines** from the whole scrubbed output — lines matching
+   `\berror\b[: ]`, `^\s*Error\b`, `panicked`, `Cannot find`, `not found`, `failed` —
+   de-duplicated, in original order, skipping `export …` environment dumps and
+   `*_ERROR` / `WARNINGS_AS_ERRORS` build-setting echoes;
+2. a `…` separator line (omitted when nothing looked like a cause);
+3. the **last 10 lines** verbatim.
 
 ## Configuration
 
@@ -115,11 +138,14 @@ needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global 
 - **Secret scrubbing** — every subprocess output line is routed through `scrub.ts` before it
   reaches a log, a callback, or a thrown error: known secret env-var names (`APPLE_PASSWORD`,
   `APPLE_CERTIFICATE*`, `TAURI_SIGNING_*`, …) are always masked; any other sufficiently long,
-  high-entropy token is masked too (Shannon entropy, not a fixed denylist). Tokens containing a
-  path separator or `::` are exempt from the entropy pass — cargo registry paths, temp dirs,
+  high-entropy token is masked too (Shannon entropy, not a fixed denylist). Two exemptions from
+  the entropy pass: tokens containing a path separator or `::` (cargo registry paths, temp dirs,
   artifact paths, URLs and panic backtraces all clear the entropy bar, and masking them would
-  delete the only actionable part of a build failure. The exemption is applied AFTER the
-  known-name pass, so `APPLE_API_KEY_PATH=/Users/…` is still masked.
+  delete the only actionable part of a build failure), and tokens that are nothing but a
+  canonical 8-4-4-4-12 UUID plus a short `key:` prefix and punctuation — roughly half of all
+  UUIDs clear the bar, which turned `id:41E558D0-…` in every simulator destination list into a
+  mask. Both exemptions are applied AFTER the known-name pass, so `APPLE_API_KEY_PATH=/Users/…`
+  is still masked.
 - **`close`, not `exit`** — a run resolves when the child's stdio pipes close, not when the
   process exits. tauri's own children (xcodebuild, gradle, cargo) inherit those pipes and keep
   writing after the parent is gone; resolving on `exit` drops exactly the tail an error message

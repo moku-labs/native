@@ -78,6 +78,7 @@ export type TauriErrorKind =
   | "platform-missing"
   | "config-invalid"
   | "compile-failed"
+  | "xcode-script-failed"
   | "signing-failed"
   | "device-unavailable"
   | "cancelled"
@@ -89,7 +90,11 @@ export type TauriErrorDetails = {
   readonly kind: TauriErrorKind;
   /** Raw process exit code (`null` when the process was signal-terminated). */
   readonly exitCode: number | null;
-  /** Scrubbed tail of stderr (secrets already masked) — safe to log/display. */
+  /**
+   * Scrubbed tail of the run's output (secrets already masked) — safe to log/display.
+   * Built from BOTH streams: the extracted cause lines, a `…` separator, then the last
+   * raw lines.
+   */
   readonly stderrTail: string;
 };
 

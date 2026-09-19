@@ -1,9 +1,10 @@
 /**
- * @file tauri plugin — exit-code/stderr error taxonomy (pure classifier).
+ * @file tauri plugin — exit-code/output error taxonomy (pure classifier).
  *
- * `classify` never touches raw (unscrubbed) stderr — callers must scrub first
+ * `classify` never touches raw (unscrubbed) output — callers must scrub first
  * (scrub.ts) so a classified {@link TauriError}'s `stderrTail` is always safe
- * to log/display.
+ * to log/display. Callers pass BOTH streams: xcodebuild writes the real cause
+ * to stdout and leaves stderr holding tauri's one-line wrapper.
  */
 import type { TauriErrorDetails, TauriErrorKind } from "./types";
 
@@ -47,14 +48,49 @@ export class TauriError extends Error implements TauriErrorDetails {
   }
 }
 
-/** How many trailing lines of scrubbed stderr are kept on a classified error. */
-const STDERR_TAIL_LINES = 20;
+/** How many trailing lines of scrubbed output are kept after the separator. */
+const STDERR_TAIL_LINES = 10;
 
-/** Ordered (most-specific-first) taxonomy patterns matched against scrubbed stderr. */
+/** How many extracted cause lines are kept ahead of the separator. */
+const SIGNAL_LINES = 15;
+
+/** Marks where the extracted cause lines end and the raw trailing lines begin. */
+const TAIL_SEPARATOR = "…";
+
+/**
+ * Lines the classifier ignores entirely. Every unsigned iOS simulator build prints
+ * `Warn No code signing certificates found …`, which is harmless — matching it would
+ * misclassify EVERY iOS failure as `signing-failed`.
+ */
+const IGNORED_LINE_PATTERN = /^\s*Warn\b/;
+
+/**
+ * Lines that carry a real cause. The only way to surface the actual error out of an
+ * xcodebuild log, where the last lines are a destination list and the cause sits
+ * hundreds of lines earlier.
+ */
+const SIGNAL_LINE_PATTERN = /\berror\b[: ]|^\s*Error\b|panicked|Cannot find|not found|failed/i;
+
+/**
+ * Lines that read like a cause but never are: Xcode dumps the whole build environment
+ * as `export NAME=value`, and echoes `*_ERROR` / `WARNINGS_AS_ERRORS` build settings.
+ */
+const SIGNAL_NOISE_PATTERN = /_ERROR\b|WARNINGS_AS_ERRORS/;
+
+/** Prefix of an Xcode environment-dump line — configuration, never a cause. */
+const EXPORT_LINE_PREFIX = "export ";
+
+/** Ordered (most-specific-first) taxonomy patterns matched against scrubbed output. */
 const TAXONOMY_PATTERNS: ReadonlyArray<{ kind: TauriErrorKind; test: RegExp }> = [
+  // Ahead of signing-failed and compile-failed on purpose: a failed "Build Rust Code"
+  // phase is a runner/toolchain problem inside Xcode, and neither of those fix-its helps.
+  {
+    kind: "xcode-script-failed",
+    test: /PhaseScriptExecution .*Build\\? Rust\\? Code/
+  },
   {
     kind: "signing-failed",
-    test: /no code signing|codesign|provisioning profile|notariz|keychain|signtool|jarsigner|keystore/i
+    test: /codesign|no signing certificate|provisioning profile|notariz|keychain|signtool|jarsigner|keystore/i
   },
   {
     kind: "toolchain-missing",
@@ -84,6 +120,8 @@ const TAXONOMY_PATTERNS: ReadonlyArray<{ kind: TauriErrorKind; test: RegExp }> =
 
 /** Actionable suggestion text per taxonomy bucket (second line of the `[native]` message). */
 const ADVICE: Record<TauriErrorKind, string> = {
+  "xcode-script-failed":
+    'The Xcode "Build Rust Code" phase failed. Run `native clean --target ios`, rebuild, and check the runner line in gen/apple/project.yml.',
   "signing-failed":
     "Check your signing configuration (certificates/keystore/keychain) and run `native doctor`.",
   "toolchain-missing":
@@ -101,33 +139,56 @@ const ADVICE: Record<TauriErrorKind, string> = {
  * Classifies a non-zero tauri CLI exit into a {@link TauriError}.
  *
  * @param code - Process exit code (`null` when signal-terminated).
- * @param scrubbedStderr - Already-scrubbed stderr (see scrub.ts) — never raw output.
- * @returns A {@link TauriError} carrying the taxonomy bucket and a scrubbed stderr tail.
+ * @param scrubbedOutput - Already-scrubbed stdout + stderr (see scrub.ts) — never raw
+ *   output, and never stderr alone: xcodebuild puts the cause on stdout.
+ * @returns A {@link TauriError} carrying the taxonomy bucket and a scrubbed output tail.
  * @example
  * ```ts
- * throw classify(101, scrub(rawStderr));
+ * throw classify(101, `${scrub(rawStdout)}\n${scrub(rawStderr)}`);
  * ```
  */
-export function classify(code: number | null, scrubbedStderr: string): TauriError {
-  const match = TAXONOMY_PATTERNS.find(({ test }) => test.test(scrubbedStderr));
+export function classify(code: number | null, scrubbedOutput: string): TauriError {
+  const lines = scrubbedOutput.split(/\r?\n/).filter(line => line.length > 0);
+  const classifiable = lines.filter(line => !IGNORED_LINE_PATTERN.test(line));
+
+  const match = TAXONOMY_PATTERNS.find(({ test }) => classifiable.some(line => test.test(line)));
   const kind: TauriErrorKind = match?.kind ?? (code === null ? "cancelled" : "unknown");
-  const stderrTail = tailLines(scrubbedStderr, STDERR_TAIL_LINES);
   const message = `[native] tauri ${kind.replaceAll("-", " ")}.\n  ${ADVICE[kind]}`;
-  return new TauriError(kind, message, { exitCode: code, stderrTail });
+  return new TauriError(kind, message, { exitCode: code, stderrTail: buildTail(lines) });
 }
 
 /**
- * Keeps only the last `maxLines` non-empty lines of `text`.
+ * Builds the tail carried on a classified error: the extracted cause lines first, then a
+ * separator, then the raw trailing lines. A plain "last N lines" tail is useless for
+ * xcodebuild — those lines are a simulator destination list, while the cause
+ * (`Cannot find module …`, `Command PhaseScriptExecution failed`) is hundreds of lines up.
  *
- * @param text - Full (already-scrubbed) text.
- * @param maxLines - Maximum number of trailing lines to keep.
- * @returns The trailing lines, joined with `\n`.
+ * @param lines - Every non-empty line of the scrubbed output, in order.
+ * @returns The tail, joined with `\n`.
  * @example
  * ```ts
- * tailLines(scrubbedStderr, 20);
+ * buildTail(["error: Cannot find module 'x'", "** BUILD FAILED **"]);
  * ```
  */
-function tailLines(text: string, maxLines: number): string {
-  const lines = text.split(/\r?\n/).filter(line => line.length > 0);
-  return lines.slice(-maxLines).join("\n");
+function buildTail(lines: readonly string[]): string {
+  const signal = [...new Set(lines.filter(line => isSignalLine(line)))].slice(0, SIGNAL_LINES);
+  const trailing = lines.slice(-STDERR_TAIL_LINES);
+  if (signal.length === 0) return trailing.join("\n");
+  return [...signal, TAIL_SEPARATOR, ...trailing].join("\n");
+}
+
+/**
+ * Tests whether one line names a cause worth lifting to the top of the tail.
+ *
+ * @param line - A single line of scrubbed output.
+ * @returns Whether the line is a cause rather than configuration noise.
+ * @example
+ * ```ts
+ * isSignalLine("error: Cannot find module '/repo/tauri.js'"); // true
+ * ```
+ */
+function isSignalLine(line: string): boolean {
+  if (line.trimStart().startsWith(EXPORT_LINE_PREFIX)) return false;
+  if (SIGNAL_NOISE_PATTERN.test(line)) return false;
+  return SIGNAL_LINE_PATTERN.test(line);
 }

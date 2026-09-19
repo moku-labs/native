@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applySigningBlock, patchMobile } from "../../patch";
+import { applyRunnerCommand, applySigningBlock, patchMobile } from "../../patch";
 
 // Env-var NAME references, never secrets (the SigningConfig invariant).
 // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- an env-var *name*, never a secret
@@ -37,22 +37,87 @@ const SIGNING_BLOCK = [
   "// MOKU-SIGNING-END"
 ].join("\n");
 
-const PROJECT_YML = [
-  "targets:",
-  "  MyApp_iOS:",
-  "    scheme:",
-  "      preActions:",
-  "        - script: node tauri ios xcode-script -v --platform $PLATFORM_DISPLAY_NAME",
-  "          name: Build Rust Code",
-  ""
-].join("\n");
+const IOS_VERB = "ios xcode-script";
+const ANDROID_VERB = "android android-studio-script";
 
-const PBXPROJ = [
-  "/* Begin PBXShellScriptBuildPhase section */",
-  '\t\tshellScript = "node tauri ios xcode-script -v --platform $PLATFORM_DISPLAY_NAME";',
-  "/* End PBXShellScriptBuildPhase section */",
-  ""
-].join("\n");
+/** The runners Tauri bakes in, depending on how the CLI was started (bun, npm, cargo, …). */
+const DETECTED_RUNNERS = [
+  "node tauri",
+  "bun tauri",
+  "npm run tauri --",
+  "yarn tauri",
+  "pnpm tauri",
+  "cargo tauri"
+];
+
+const YML_RUNNER = '"/opt/node v20/bin/node" "/repo/node modules/@tauri-apps/cli/tauri.js"';
+const LITERAL_RUNNER = String.raw`\"/opt/node v20/bin/node\" \"/repo/node modules/@tauri-apps/cli/tauri.js\"`;
+
+const ymlLine = (runner: string) =>
+  `        - script: ${runner} ios xcode-script -v --platform $PLATFORM_DISPLAY_NAME`;
+
+const pbxprojLine = (runner: string) =>
+  `\t\tshellScript = "${runner} ios xcode-script -v --platform $PLATFORM_DISPLAY_NAME";`;
+
+const projectYmlFor = (runner: string) =>
+  [
+    "targets:",
+    "  MyApp_iOS:",
+    "    scheme:",
+    "      preActions:",
+    ymlLine(runner),
+    "          name: Build Rust Code",
+    ""
+  ].join("\n");
+
+const pbxprojFor = (runner: string) =>
+  [
+    "/* Begin PBXShellScriptBuildPhase section */",
+    pbxprojLine(runner),
+    "/* End PBXShellScriptBuildPhase section */",
+    ""
+  ].join("\n");
+
+describe("applyRunnerCommand", () => {
+  const ios = { runner: RUNNER, verb: IOS_VERB, quote: '"' };
+  const iosLiteral = { runner: RUNNER, verb: IOS_VERB, quote: String.raw`\"` };
+  const android = { runner: RUNNER, verb: ANDROID_VERB, quote: String.raw`\"` };
+
+  it.each(DETECTED_RUNNERS)("rewrites a `%s` yml script line", runner => {
+    expect(applyRunnerCommand(projectYmlFor(runner), ios)).toBe(projectYmlFor(YML_RUNNER));
+  });
+
+  it.each(DETECTED_RUNNERS)("rewrites a `%s` pbxproj shellScript line", runner => {
+    expect(applyRunnerCommand(pbxprojFor(runner), iosLiteral)).toBe(pbxprojFor(LITERAL_RUNNER));
+  });
+
+  it.each(DETECTED_RUNNERS)("rewrites a `%s` Android source string literal", runner => {
+    const source = `val command = "${runner} android android-studio-script"\n`;
+    expect(applyRunnerCommand(source, android)).toBe(
+      `val command = "${LITERAL_RUNNER} android android-studio-script"\n`
+    );
+  });
+
+  it("is a no-op on already-patched yml (absolute paths containing spaces)", () => {
+    const patched = projectYmlFor(YML_RUNNER);
+    expect(applyRunnerCommand(patched, ios)).toBe(patched);
+  });
+
+  it("is a no-op on an already-patched pbxproj shellScript line", () => {
+    const patched = pbxprojFor(LITERAL_RUNNER);
+    expect(applyRunnerCommand(patched, iosLiteral)).toBe(patched);
+  });
+
+  it("leaves lines that do not carry the verb untouched", () => {
+    const source = ["# bun tauri build", "          name: Build Rust Code", ""].join("\n");
+    expect(applyRunnerCommand(source, ios)).toBe(source);
+  });
+
+  it("does not touch the Android verb while patching the iOS one", () => {
+    const source = `val command = "bun tauri android android-studio-script"\n`;
+    expect(applyRunnerCommand(source, ios)).toBe(source);
+  });
+});
 
 describe("applySigningBlock", () => {
   const signing = {
@@ -117,12 +182,16 @@ describe("patchMobile", () => {
     return genDir;
   };
 
-  /** Creates a minimal gen/apple tree carrying Tauri's broken `node tauri` runner command. */
-  const seedApple = async () => {
+  /** Creates a minimal gen/apple tree carrying whichever runner Tauri detected. */
+  const seedApple = async (runner = "node tauri") => {
     const genDir = path.join(dir, "src-tauri", "gen", "apple");
     await mkdir(path.join(genDir, "MyApp.xcodeproj"), { recursive: true });
-    await writeFile(path.join(genDir, "project.yml"), PROJECT_YML, "utf8");
-    await writeFile(path.join(genDir, "MyApp.xcodeproj", "project.pbxproj"), PBXPROJ, "utf8");
+    await writeFile(path.join(genDir, "project.yml"), projectYmlFor(runner), "utf8");
+    await writeFile(
+      path.join(genDir, "MyApp.xcodeproj", "project.pbxproj"),
+      pbxprojFor(runner),
+      "utf8"
+    );
     return genDir;
   };
 
@@ -204,6 +273,20 @@ describe("patchMobile", () => {
       String.raw`shellScript = "\"/opt/node v20/bin/node\" \"/repo/node modules/@tauri-apps/cli/tauri.js\" ios xcode-script -v`
     );
     expect(pbxproj).not.toContain("node tauri ios xcode-script");
+  });
+
+  it("rewrites a `bun tauri` runner Tauri baked in under `bun run`", async () => {
+    const genDir = await seedApple("bun tauri");
+
+    const result = await patchMobile(dir, { target: "ios", runner: RUNNER }, {});
+
+    expect(result.patched).toHaveLength(2);
+    expect(await readFile(path.join(genDir, "project.yml"), "utf8")).toBe(
+      projectYmlFor(YML_RUNNER)
+    );
+    expect(await readFile(path.join(genDir, "MyApp.xcodeproj", "project.pbxproj"), "utf8")).toBe(
+      pbxprojFor(LITERAL_RUNNER)
+    );
   });
 
   it("is idempotent — a second iOS runner pass reports everything unchanged", async () => {

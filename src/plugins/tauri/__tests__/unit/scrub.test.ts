@@ -52,6 +52,23 @@ describe("scrub", () => {
     expect(scrub(line)).toBe(line);
   });
 
+  it("preserves an xcodebuild simulator destination line (canonical UUIDs are ids, not secrets)", () => {
+    const line =
+      "{ platform:iOS Simulator, arch:arm64, id:41E558D0-66F5-4CA4-90E5-075F9BC510DC, OS:26.3.1, name:iPad Air 13-inch (M3) }";
+    expect(scrub(line)).toBe(line);
+  });
+
+  it("preserves a high-entropy simulator UUID (above the entropy bar, still not a secret)", () => {
+    const line =
+      "{ platform:iOS Simulator, arch:arm64, id:C0D577B6-80F3-4C1F-99F5-3882D36EB42D, OS:26.3.1, name:iPhone 17 Pro }";
+    expect(scrub(line)).toBe(line);
+  });
+
+  it("preserves a bare canonical UUID", () => {
+    const line = "booted C0D577B6-80F3-4C1F-99F5-3882D36EB42D ok";
+    expect(scrub(line)).toBe(line);
+  });
+
   it("always masks known secret env-var assignments regardless of entropy", () => {
     const result = scrub("APPLE_PASSWORD=hunter2 APPLE_CERTIFICATE_PASSWORD: xyzzy");
     expect(result).not.toContain("hunter2");

@@ -12,7 +12,7 @@ import { writeIfChanged } from "./writer";
 const SIGNING_START = "// MOKU-SIGNING-START";
 const SIGNING_END = "// MOKU-SIGNING-END";
 
-/** `tauri ios init` writes `node tauri ios xcode-script …` — a command that does not exist. */
+/** `tauri ios init` bakes `<detected-runner> ios xcode-script …` into the Xcode project. */
 const IOS_RUNNER_VERB = "ios xcode-script";
 
 /** The Android equivalent, written into buildSrc/gradle sources by `tauri android init`. */
@@ -128,9 +128,39 @@ export function applySigningBlock(
 }
 
 /**
- * Rewrites Tauri's `node tauri <verb>` build-phase command into an absolute
- * `<node> <tauri.js> <verb>` invocation. `node tauri` is not a real command, so an Xcode
- * or Android Studio build of an unpatched tree fails on the very first build phase.
+ * The prefixes that introduce a baked-in runner command, most specific first: a YAML
+ * `script:` scalar (with the optional sequence dash and indentation), a pbxproj
+ * `shellScript = "` assignment, and finally the opening quote of any other source string
+ * literal (Kotlin/Gradle). Horizontal whitespace only — `\s` would let a match start on
+ * the previous line under the `m` flag.
+ */
+const RUNNER_PREFIX_ALTERNATIVES = String.raw`[ \t]*(?:-[ \t]+)?script:[ \t]+|.*?shellScript[ \t]*=[ \t]*"|.*?"`;
+
+/**
+ * Builds the per-line matcher for one runner verb: `(prefix)(runner)` up to ` <verb>`.
+ * Everything Tauri may have detected — `node tauri`, `bun tauri`, `npm run tauri --`,
+ * `yarn|pnpm tauri`, `cargo tauri`, or an already-absolute pair — sits in the second
+ * group and is what gets replaced.
+ *
+ * @param verb - The Tauri verb the build phase invokes (a literal, regex-safe string).
+ * @returns A global, multiline matcher whose first group is the line's prefix.
+ * @example
+ * ```ts
+ * runnerLinePattern("ios xcode-script");
+ * ```
+ */
+function runnerLinePattern(verb: string): RegExp {
+  return new RegExp(`^(${RUNNER_PREFIX_ALTERNATIVES})(.*?)(?= ${verb})`, "gm");
+}
+
+/**
+ * Rewrites the runner Tauri baked into a generated build phase into an absolute
+ * `<node> <tauri.js> <verb>` invocation. Tauri writes whichever runner it DETECTED from
+ * the environment (`node tauri` from a plain shell, `bun tauri` under `bun run`, also
+ * `npm run tauri --`, `yarn|pnpm tauri`, `cargo tauri`), and none of those resolve inside
+ * Xcode or Android Studio — so an unpatched tree fails on its first build phase.
+ * The match is runner-agnostic: on every line carrying ` <verb>`, whatever sits between
+ * the line's prefix and the verb is replaced.
  *
  * @param existing - The file content to rewrite.
  * @param options - How to rewrite the command.
@@ -148,8 +178,11 @@ export function applyRunnerCommand(
   options: { runner: MobileRunner; verb: string; quote: string }
 ): string {
   const { runner, verb, quote } = options;
-  const replacement = `${quote}${runner.nodePath}${quote} ${quote}${runner.tauriJsPath}${quote} ${verb}`;
-  return existing.replaceAll(`node tauri ${verb}`, replacement);
+  const replacement = `${quote}${runner.nodePath}${quote} ${quote}${runner.tauriJsPath}${quote}`;
+  return existing.replaceAll(
+    runnerLinePattern(verb),
+    (_match, prefix: string) => `${prefix}${replacement}`
+  );
 }
 
 /**
@@ -249,8 +282,8 @@ async function androidRunnerFiles(genDirectory: string): Promise<string[]> {
 
 /**
  * Applies the runner rewrite to every candidate file for a platform, reporting which
- * files actually changed. A second pass finds no `node tauri …` left and reports
- * everything unchanged.
+ * files actually changed. A second pass rewrites the absolute pair onto itself and
+ * reports everything unchanged.
  *
  * @param projectDirectory - The Tauri project root.
  * @param genDirectory - The platform's `gen/<platform>` directory.

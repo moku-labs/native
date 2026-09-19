@@ -25,6 +25,17 @@ const ENTROPY_THRESHOLD_BITS_PER_CHAR = 4;
  */
 const LOCATION_TOKEN_PATTERN = /[/\\]|::/;
 
+/** A canonical 8-4-4-4-12 hex UUID — a device/simulator identifier, never a secret. */
+const UUID_PATTERN = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gi;
+
+/**
+ * What may surround a UUID inside one whitespace-delimited token and still leave it an
+ * identifier: a short `key:`/`key=` prefix and trailing punctuation. `xcodebuild
+ * -showdestinations` prints `id:41E558D0-…-075F9BC510DC,`, and masking it deletes the
+ * only way to name the simulator the build failed on.
+ */
+const UUID_TOKEN_RESIDUE_PATTERN = /^\w{0,12}[:=]?[,;.)\]}"']*$/;
+
 /**
  * Env-var name prefixes that are ALWAYS masked when found as `NAME=value` /
  * `NAME: value`, regardless of the value's entropy (short passwords included).
@@ -109,7 +120,26 @@ function isHighEntropy(token: string): boolean {
   if (token.includes(MASK)) return false;
   if (token.length < MIN_ENTROPY_TOKEN_LENGTH) return false;
   if (LOCATION_TOKEN_PATTERN.test(token)) return false;
+  if (isUuidToken(token)) return false;
   return shannonEntropyBitsPerChar(token) >= ENTROPY_THRESHOLD_BITS_PER_CHAR;
+}
+
+/**
+ * Tests whether a token is nothing but canonical UUIDs plus a short key prefix and
+ * punctuation. Roughly half of all UUIDs clear the entropy bar, so without this the
+ * simulator destination list comes back fully masked.
+ *
+ * @param token - A single whitespace-delimited token.
+ * @returns Whether the token is an identifier rather than a candidate secret.
+ * @example
+ * ```ts
+ * isUuidToken("id:41E558D0-66F5-4CA4-90E5-075F9BC510DC,"); // true
+ * ```
+ */
+function isUuidToken(token: string): boolean {
+  const residue = token.replaceAll(UUID_PATTERN, "");
+  if (residue.length === token.length) return false;
+  return UUID_TOKEN_RESIDUE_PATTERN.test(residue);
 }
 
 /**

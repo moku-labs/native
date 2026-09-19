@@ -68,6 +68,8 @@ export function createTauriApi(ctx: TauriContext): Api {
    * Runs a one-shot tauri CLI verb to completion: spawns, scrubs every output
    * line before it reaches a log/callback, and classifies a non-zero exit.
    *
+   * A non-zero exit is classified from BOTH scrubbed streams, never stderr alone.
+   *
    * @param cmd - The full `[nodePath, tauriJsPath, ...]` argv to spawn.
    * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed).
    * @param hooks.onOutput - Called with each scrubbed output line.
@@ -111,7 +113,12 @@ export function createTauriApi(ctx: TauriContext): Api {
     const scrubbedStderr = scrub(result.stderr);
 
     if (result.code !== 0) {
-      throw classify(result.code, scrubbedStderr);
+      // Both streams: xcodebuild writes the real cause to stdout and leaves stderr
+      // holding only tauri's one-line `failed to build with xcodebuild` wrapper.
+      const scrubbedOutput = [scrubbedStdout, scrubbedStderr]
+        .filter(stream => stream.length > 0)
+        .join("\n");
+      throw classify(result.code, scrubbedOutput);
     }
     return { code: 0, stdout: scrubbedStdout, stderr: scrubbedStderr, durationMs };
   }
