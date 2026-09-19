@@ -125,7 +125,7 @@ describe("runScaffold", () => {
 
     await runScaffold(ctx, "android");
 
-    expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ platform: "android" });
+    expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ target: "android" });
     expect(project.completeness).toHaveBeenCalledTimes(2);
   });
 

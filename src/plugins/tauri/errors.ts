@@ -54,19 +54,27 @@ const STDERR_TAIL_LINES = 20;
 const TAXONOMY_PATTERNS: ReadonlyArray<{ kind: TauriErrorKind; test: RegExp }> = [
   {
     kind: "signing-failed",
-    test: /codesign|provisioning profile|keychain|signtool|jarsigner|keystore/i
+    test: /no code signing|codesign|provisioning profile|notariz|keychain|signtool|jarsigner|keystore/i
   },
   {
     kind: "toolchain-missing",
     test: /command not found|xcode-select|android_home|ndk (not found|is not installed)|rustup|cargo: not found/i
   },
+  // Before device-unavailable on purpose: a missing SDK platform reports BOTH
+  // ("Found no destinations ... No devices found"), and only this fix-it helps.
+  {
+    kind: "platform-missing",
+    test: /is not installed\. Please download and install the platform|Found no destinations/i
+  },
   {
     kind: "device-unavailable",
     test: /no devices found|device not found|simulator (not booted|not found)|no emulators found|adb: no devices/i
   },
+  // Anchored to a real failure verb: a bare `tauri.conf.json` mention appears in
+  // ordinary progress output and must not be classified as a config error.
   {
     kind: "config-invalid",
-    test: /tauri\.conf|failed to parse .*config|invalid config|schema validation failed/i
+    test: /failed to (parse|read) .*tauri\.conf|invalid config|schema validation failed/i
   },
   {
     kind: "compile-failed",
@@ -80,6 +88,8 @@ const ADVICE: Record<TauriErrorKind, string> = {
     "Check your signing configuration (certificates/keystore/keychain) and run `native doctor`.",
   "toolchain-missing":
     "Install the missing platform toolchain, then run `native doctor` to confirm.",
+  "platform-missing":
+    "Install the SDK platform — for iOS run `xcodebuild -downloadPlatform iOS` — then run `native doctor`.",
   "device-unavailable": "Connect a device or start a simulator/emulator, then retry.",
   "config-invalid": "Check the generated `tauri.conf.json` for syntax/schema errors.",
   "compile-failed": "Inspect the compile errors above; fix the source and retry.",

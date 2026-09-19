@@ -116,6 +116,22 @@ describe("realSpawn", () => {
     expect(result.stdout.endsWith("TAIL")).toBe(true);
   }, 10_000);
 
+  it("keeps output written between the `exit` and `close` events", async () => {
+    // The child exits at once, but a grandchild keeps the inherited stdout pipe open and
+    // writes AFTER that exit — output only a `close`-based resolution can observe (the
+    // real shape of tauri's own child xcodebuild/gradle processes).
+    const grandchild = "setTimeout(() => process.stdout.write('LATE'), 200)";
+    const script =
+      "const { spawn } = require('node:child_process');" +
+      `spawn(process.execPath, ['-e', "${grandchild}"], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();` +
+      "process.exit(0);";
+
+    const result = await realSpawn({ cmd: [process.execPath, "-e", script], cwd: process.cwd() });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("LATE");
+  }, 10_000);
+
   it("group-kills a detached child when the abort signal fires", async () => {
     const controller = new AbortController();
     const promise = realSpawn({

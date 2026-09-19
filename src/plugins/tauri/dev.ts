@@ -105,10 +105,13 @@ export function startDev(opts: StartDevOptions): DevHandle {
   });
 
   /**
-   * Stops the dev session: aborts the spawn signal (real impl group-kills)
-   * and waits for the process group to exit. Idempotent.
+   * Stops the dev session: aborts the spawn signal (real impl group-kills) and
+   * waits for the process group to exit. Idempotent, and never rejects — it
+   * reports teardown completion, not the session's exit status (a spawn that
+   * failed outright is observed through `exited`). Signal handlers and `finally`
+   * blocks call this, and neither can deal with a rejection.
    *
-   * @returns Resolves once the process group has exited.
+   * @returns Resolves once the process group is gone.
    * @example
    * ```ts
    * await handle.stop();
@@ -119,7 +122,9 @@ export function startDev(opts: StartDevOptions): DevHandle {
       stopRequested = true;
       controller.abort();
     }
-    await exited;
+    await exited.catch(() => {
+      // Deliberate: the failure belongs to `exited`, not to teardown.
+    });
   }
 
   const ready = pollUntilReady(opts.url, opts.deps).catch(async (error: unknown) => {

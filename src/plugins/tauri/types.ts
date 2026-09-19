@@ -2,7 +2,7 @@
  * @file tauri plugin — type definitions (structural — never runtime-package namespace types).
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
-import type { Config as GlobalConfig, Target } from "../../config";
+import type { AppleExportMethod, Config as GlobalConfig, Target } from "../../config";
 
 /**
  * Structural spawn seam — injectable for tests (skeleton-conventions §3).
@@ -32,6 +32,35 @@ export type RunResult = { code: 0; stdout: string; stderr: string; durationMs: n
 /** Parsed compile progress tick — real crate counts, never fake percentages. */
 export type CompileTick = { crate: string; index?: number; total?: number };
 
+/**
+ * The resolved D-013 invocation prefix. Exposed on the Api so `project.patchMobile`
+ * can write the SAME `node <tauri.js>` pair into the generated Xcode/Gradle scripts,
+ * where tauri's own generator emits a bare `node tauri` that does not exist (B10).
+ */
+export type Runner = { nodePath: string; tauriJsPath: string };
+
+/**
+ * The build verb's full option surface — everything that changes the argv.
+ * `simulator`/`exportMethod` are iOS-only, `aab` is Android-only; a target that
+ * does not use an option ignores it rather than failing (the build plugin passes
+ * whatever the consumer configured, for every target).
+ */
+export type BuildArgvOptions = {
+  target: Target;
+  /** iOS: build for the host's simulator arch instead of a device. */
+  simulator?: boolean | undefined;
+  /** iOS: `--export-method` for a device build; ignored for a simulator build. */
+  exportMethod?: AppleExportMethod | undefined;
+  /** Android: emit a store bundle (`--aab`) instead of the default installable `--apk`. */
+  aab?: boolean | undefined;
+};
+
+/** Options for `Api.build` — the argv options plus the live output/progress callbacks. */
+export type BuildOptions = BuildArgvOptions & {
+  onTick?: (tick: CompileTick) => void;
+  onOutput?: (line: string) => void;
+};
+
 /** How a dev session ended. */
 export type DevExit = { code: number | null; signal: string | null };
 
@@ -46,6 +75,7 @@ export type DevHandle = {
 /** Classified subprocess failure taxonomy. */
 export type TauriErrorKind =
   | "toolchain-missing"
+  | "platform-missing"
   | "config-invalid"
   | "compile-failed"
   | "signing-failed"
@@ -74,14 +104,11 @@ export type State = { dev: DevHandle | undefined };
 /** Public API of the tauri plugin — the framework's ONLY subprocess seam. */
 export type Api = {
   icon(opts: { source: string }): Promise<RunResult>;
-  build(opts: {
-    target: Target;
-    onTick?: (tick: CompileTick) => void;
-    onOutput?: (line: string) => void;
-  }): Promise<RunResult>;
-  mobileInit(opts: { platform: "ios" | "android" }): Promise<RunResult>;
+  build(opts: BuildOptions): Promise<RunResult>;
+  mobileInit(opts: { target: "ios" | "android" }): Promise<RunResult>;
   dev(opts: { target?: Target; onOutput?: (line: string) => void }): Promise<DevHandle>;
   version(): Promise<{ cliVersion: string } | null>;
+  runner(): Runner;
 };
 
 /**

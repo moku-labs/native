@@ -45,6 +45,11 @@ function createDeferredSpawn(): DeferredSpawn {
   return { spawn, resolve: resolveFn, calls };
 }
 
+/** Spawn seam that fails outright (the `node` binary is gone / not executable). */
+const spawnRejects: SpawnFn = async () => {
+  throw new Error("spawn ENOENT");
+};
+
 function createDeps(overrides: Partial<DevOrchestrationDeps> = {}): DevOrchestrationDeps {
   return {
     spawn: overrides.spawn ?? createDeferredSpawn().spawn,
@@ -171,6 +176,21 @@ describe("startDev", () => {
     expect(calls[0]?.onLine).toBeTypeOf("function");
     calls[0]?.onLine?.("Compiling app v0.1.0");
     expect(received).toEqual(["Compiling app v0.1.0"]);
+  });
+
+  it("stop() resolves even when the spawn itself rejected (teardown never rethrows)", async () => {
+    const handle = startDev({
+      cmd: ["node", "tauri.js", "dev", "--ci"],
+      cwd: "/proj",
+      url: "http://localhost:5173",
+      onLine: () => {},
+      deps: createDeps({ spawn: spawnRejects })
+    });
+    handle.exited.catch(() => {
+      // The session's failure is observed through `exited`, not through stop().
+    });
+
+    await expect(handle.stop()).resolves.toBeUndefined();
   });
 
   it("readiness timeout rejects ready and reaps the process group", async () => {

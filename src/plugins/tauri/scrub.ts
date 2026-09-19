@@ -16,6 +16,16 @@ const MIN_ENTROPY_TOKEN_LENGTH = 20;
 const ENTROPY_THRESHOLD_BITS_PER_CHAR = 4;
 
 /**
+ * Tokens carrying a path separator or a Rust path qualifier are locations, not
+ * secrets: cargo registry paths, temp dirs, artifact paths, URLs and panic
+ * backtraces all clear the entropy bar, and masking them destroys the only
+ * actionable part of a build failure. Known secret env-var assignments are
+ * masked by name BEFORE this exemption applies, so a secret whose value is a
+ * path (`APPLE_API_KEY_PATH`) is still masked.
+ */
+const LOCATION_TOKEN_PATTERN = /[/\\]|::/;
+
+/**
  * Env-var name prefixes that are ALWAYS masked when found as `NAME=value` /
  * `NAME: value`, regardless of the value's entropy (short passwords included).
  */
@@ -98,6 +108,7 @@ function isHighEntropy(token: string): boolean {
   // read back as one long, high-entropy-looking token.
   if (token.includes(MASK)) return false;
   if (token.length < MIN_ENTROPY_TOKEN_LENGTH) return false;
+  if (LOCATION_TOKEN_PATTERN.test(token)) return false;
   return shannonEntropyBitsPerChar(token) >= ENTROPY_THRESHOLD_BITS_PER_CHAR;
 }
 

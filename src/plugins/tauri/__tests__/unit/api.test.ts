@@ -4,6 +4,9 @@
 /* eslint-disable sonarjs/no-hardcoded-passwords -- the dev-output scrub test feeds a fake
    secret through the pipeline ON PURPOSE and asserts it comes out masked (same posture as
    scrub.test.ts). */
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTauriApi } from "../../api";
 import { TauriError } from "../../errors";
@@ -99,6 +102,17 @@ const spawnUnavailable: SpawnFn = async () => {
   throw new Error("ENOENT");
 };
 
+type SpawnRecorder = { spawn: SpawnFn; calls: Array<{ cmd: readonly string[]; cwd: string }> };
+
+function createSpawnRecorder(): SpawnRecorder {
+  const calls: SpawnRecorder["calls"] = [];
+  const spawn: SpawnFn = async opts => {
+    calls.push({ cmd: opts.cmd, cwd: opts.cwd });
+    return { code: 0, signal: null, stdout: "", stderr: "" };
+  };
+  return { spawn, calls };
+}
+
 describe("createTauriApi", () => {
   it("icon() resolves a RunResult on a zero exit", async () => {
     const spawnImpl = fakeSpawnResolving({ code: 0, stdout: "ok" });
@@ -150,6 +164,96 @@ describe("createTauriApi", () => {
     await expect(api.build({ target: "macos" })).rejects.toMatchObject({ kind: "compile-failed" });
   });
 
+  it("icon() targets the generated project's src-tauri/icons directory", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.icon({ source: "assets/icon.png" });
+
+    expect(calls[0]?.cmd.slice(2)).toEqual([
+      "icon",
+      "assets/icon.png",
+      "--output",
+      path.resolve("/proj/.moku/tauri", "src-tauri", "icons")
+    ]);
+  });
+
+  it("build() forwards simulator and export-method options into the argv", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.build({ target: "ios", exportMethod: "release-testing" });
+    await api.build({ target: "android", aab: true });
+
+    expect(calls[0]?.cmd.slice(2)).toEqual([
+      "ios",
+      "build",
+      "--ci",
+      "--export-method",
+      "release-testing"
+    ]);
+    expect(calls[1]?.cmd.slice(2)).toEqual(["android", "build", "--ci", "--aab"]);
+  });
+
+  it("run() falls back to process.cwd() when projectDir does not exist yet", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.icon({ source: "icon.png" });
+
+    expect(calls[0]?.cwd).toBe(process.cwd());
+  });
+
+  it("run() uses projectDir once it exists", async () => {
+    // Fresh temp dir — never the repo, never cwd (SAFETY S2); nothing here deletes it.
+    const projectDir = mkdtempSync(path.join(tmpdir(), "moku-native-tauri-cwd-"));
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      global: { ...createMockCtx().global, projectDir },
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.icon({ source: "icon.png" });
+
+    expect(calls[0]?.cwd).toBe(projectDir);
+  });
+
+  it("runner() exposes the resolved node + tauri.js invocation prefix", () => {
+    const ctx = createMockCtx();
+    const api = createTauriApi(ctx);
+
+    const runner = api.runner();
+
+    expect(runner.nodePath).toBe("/usr/bin/node");
+    expect(runner.tauriJsPath).toMatch(/@tauri-apps[/\\]cli[/\\]tauri\.js$/);
+  });
+
   it("mobileInit() resolves a RunResult", async () => {
     const spawnImpl = fakeSpawnResolving({ code: 0, stdout: "initialized" });
     const ctx = createMockCtx({
@@ -157,9 +261,25 @@ describe("createTauriApi", () => {
     });
     const api = createTauriApi(ctx);
 
-    const result = await api.mobileInit({ platform: "ios" });
+    const result = await api.mobileInit({ target: "ios" });
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("initialized");
+  });
+
+  it("mobileInit() spawns the per-target init verb", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.mobileInit({ target: "android" });
+
+    expect(calls[0]?.cmd.slice(2)).toEqual(["android", "init", "--ci"]);
   });
 
   it("version() parses the CLI version from `tauri info` output", async () => {

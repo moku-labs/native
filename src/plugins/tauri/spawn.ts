@@ -172,9 +172,9 @@ function inheritedEnvironment(): NodeJS.ProcessEnv {
 
 /**
  * Real `SpawnFn` implementation — spawns a detached process (group leader on
- * POSIX), streams stdout/stderr line-by-line to `onLine`, and resolves with
- * the full buffered output once the process exits. Honors `opts.signal` by
- * group-killing the spawned process on abort.
+ * POSIX), streams stdout/stderr line-by-line to `onLine`, and resolves with the
+ * full buffered output once the process's stdio has closed (`close`, not `exit`).
+ * Honors `opts.signal` by group-killing the spawned process on abort.
  *
  * @param opts - Spawn options (cmd, cwd, env, detached, onLine, signal).
  * @returns The process result once it exits.
@@ -261,7 +261,15 @@ export const realSpawn: SpawnFn = opts =>
     }
 
     child.on("error", reject);
-    child.on("exit", (code, signal) => {
+    // Two distinct events on purpose (M5): `exit` is when the process is gone — the
+    // group-kill ladder must see that immediately — while `close` is when its stdio
+    // pipes are drained. tauri's own children (xcodebuild, gradle, cargo) inherit
+    // those pipes, so output still arrives AFTER `exit`; resolving there would drop
+    // exactly the tail an error message is made of.
+    child.on("exit", () => {
+      hasExited = true;
+    });
+    child.on("close", (code, signal) => {
       hasExited = true;
       resolve({ code, signal, stdout, stderr });
     });

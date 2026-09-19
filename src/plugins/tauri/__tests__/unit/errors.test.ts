@@ -11,9 +11,36 @@ describe("classify", () => {
     expect(error.message).toMatch(/^\[native\]/);
   });
 
+  it("classifies an unsigned-build refusal as signing-failed", () => {
+    const error = classify(1, "error: No code signing certificates were found for this account");
+    expect(error.kind).toBe("signing-failed");
+  });
+
+  it("classifies a notarization failure as signing-failed", () => {
+    const error = classify(1, "failed to notarize the app bundle: invalid credentials");
+    expect(error.kind).toBe("signing-failed");
+  });
+
   it("classifies missing toolchain", () => {
     const error = classify(127, "xcode-select: error: tool 'xcodebuild' requires Xcode");
     expect(error.kind).toBe("toolchain-missing");
+  });
+
+  it("classifies a missing simulator platform as platform-missing", () => {
+    const error = classify(
+      1,
+      "iOS 18.2 is not installed. Please download and install the platform"
+    );
+    expect(error.kind).toBe("platform-missing");
+    expect(error.message).toContain("xcodebuild -downloadPlatform iOS");
+  });
+
+  it("classifies an empty destination list as platform-missing, not device-unavailable", () => {
+    const error = classify(
+      70,
+      "xcodebuild: error: Found no destinations for the scheme 'demo_iOS'. No devices found."
+    );
+    expect(error.kind).toBe("platform-missing");
   });
 
   it("classifies unavailable devices", () => {
@@ -24,6 +51,16 @@ describe("classify", () => {
   it("classifies invalid config", () => {
     const error = classify(1, "Error: failed to parse tauri.conf.json: unexpected token");
     expect(error.kind).toBe("config-invalid");
+  });
+
+  it("classifies an unreadable config", () => {
+    const error = classify(1, "Error: failed to read tauri.conf.json: no such file");
+    expect(error.kind).toBe("config-invalid");
+  });
+
+  it("does not classify a bare tauri.conf mention as config-invalid", () => {
+    const error = classify(1, "info: rewriting tauri.conf.json before the build");
+    expect(error.kind).toBe("unknown");
   });
 
   it("classifies compile failures", () => {

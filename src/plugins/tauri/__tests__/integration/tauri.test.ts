@@ -67,6 +67,44 @@ describe("tauri plugin integration", () => {
     await app.stop();
   });
 
+  it("build() carries the simulator option through to the spawned argv", async () => {
+    const calls: Array<readonly string[]> = [];
+    const spawnRecording: SpawnFn = async opts => {
+      calls.push(opts.cmd);
+      return { code: 0, signal: null, stdout: "built", stderr: "" };
+    };
+    const app = createApp({
+      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node" } }
+    });
+    await app.start();
+
+    await app.tauri.build({ target: "ios", simulator: true });
+
+    const expectedArch = process.arch === "x64" ? "x86_64" : "aarch64-sim";
+    expect(calls[0]?.slice(2)).toEqual(["ios", "build", "--ci", "--target", expectedArch]);
+
+    await app.stop();
+  });
+
+  it("runner() exposes the same invocation prefix every verb spawns with", async () => {
+    const calls: Array<readonly string[]> = [];
+    const spawnRecording: SpawnFn = async opts => {
+      calls.push(opts.cmd);
+      return { code: 0, signal: null, stdout: "", stderr: "" };
+    };
+    const app = createApp({
+      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node" } }
+    });
+    await app.start();
+
+    await app.tauri.mobileInit({ target: "ios" });
+    const runner = app.tauri.runner();
+
+    expect([runner.nodePath, runner.tauriJsPath]).toEqual(calls[0]?.slice(0, 2));
+
+    await app.stop();
+  });
+
   it("dev() lifecycle: installs signal handlers, stop() group-kills and removes them", async () => {
     const onSignal = vi.fn();
     const offSignal = vi.fn();
@@ -93,6 +131,9 @@ describe("tauri plugin integration", () => {
     await app.start();
 
     const handle = await app.tauri.dev({ target: "macos" });
+    handle.ready.catch(() => {
+      // Readiness is irrelevant here — the probe targets a URL nothing serves.
+    });
     expect(onSignal).toHaveBeenCalledWith("SIGINT", expect.any(Function));
     expect(onSignal).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
 
@@ -114,6 +155,9 @@ describe("tauri plugin integration", () => {
     await app.start();
 
     const handle = await app.tauri.dev({ target: "macos" });
+    handle.ready.catch(() => {
+      // Readiness is irrelevant here — the probe targets a URL nothing serves.
+    });
     await expect(app.tauri.dev({ target: "macos" })).rejects.toThrow(
       /\[native\] tauri dev already running/
     );

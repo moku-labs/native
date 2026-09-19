@@ -70,7 +70,7 @@ export async function runScaffold(ctx: BuildContext, target: Target): Promise<vo
   const project = ctx.require(projectPlugin);
   let status = project.completeness({ target });
   if (status.status === "not-initialized") {
-    await ctx.require(tauriPlugin).mobileInit({ platform: target });
+    await ctx.require(tauriPlugin).mobileInit({ target });
     status = project.completeness({ target });
   }
   if (status.status === "incomplete") {

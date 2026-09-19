@@ -1,6 +1,8 @@
 /**
  * @file tauri plugin — API factory: composes resolve + argv + spawn + stream + errors + scrub + dev.
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { buildArgv, devArgv, iconArgv, infoArgv, mobileInitArgv } from "./argv";
 import { fetchReadinessProbe, startDev } from "./dev";
 import { classify } from "./errors";
@@ -8,7 +10,7 @@ import { resolveNodePath, resolveTauriJsPath } from "./resolve";
 import { scrub } from "./scrub";
 import { realSpawn } from "./spawn";
 import { parseCompileTick } from "./stream";
-import type { Api, CompileTick, RunResult, TauriContext } from "./types";
+import type { Api, CompileTick, Runner, RunResult, TauriContext } from "./types";
 
 const CLI_VERSION_PATTERN = /tauri[- ]cli[^\d]*(\d+\.\d+\.\d+)/i;
 
@@ -35,13 +37,31 @@ export function createTauriApi(ctx: TauriContext): Api {
    * const { nodePath, tauriJsPath } = resolvePaths();
    * ```
    */
-  function resolvePaths(): { nodePath: string; tauriJsPath: string } {
+  function resolvePaths(): Runner {
     const nodePath = resolveNodePath({
       nodePath: ctx.config.nodePath,
       pathEnv: ctx.env.get("PATH")
     });
     const tauriJsPath = resolveTauriJsPath();
     return { nodePath, tauriJsPath };
+  }
+
+  /**
+   * Resolves the cwd a one-shot verb runs in: the generated project root once it
+   * exists, else the consumer's own cwd — `icon`/`version` legitimately run before
+   * `scaffold` has created `projectDir`, and spawning into a missing directory
+   * fails with a bare ENOENT instead of a `[native]` message (M11). The long-lived
+   * `dev` verb is NOT covered: it always needs the generated project.
+   *
+   * @returns The directory the subprocess is spawned in.
+   * @example
+   * ```ts
+   * await spawnFn({ cmd, cwd: runCwd() });
+   * ```
+   */
+  function runCwd(): string {
+    const { projectDir } = ctx.global;
+    return existsSync(projectDir) ? projectDir : process.cwd();
   }
 
   /**
@@ -85,7 +105,7 @@ export function createTauriApi(ctx: TauriContext): Api {
       if (tick) hooks?.onTick?.(tick);
     };
 
-    const result = await spawnFn({ cmd, cwd: ctx.global.projectDir, onLine: handleLine });
+    const result = await spawnFn({ cmd, cwd: runCwd(), onLine: handleLine });
     const durationMs = Date.now() - startedAt;
     const scrubbedStdout = scrub(result.stdout);
     const scrubbedStderr = scrub(result.stderr);
@@ -110,26 +130,30 @@ export function createTauriApi(ctx: TauriContext): Api {
      */
     async icon(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(iconArgv(nodePath, tauriJsPath, opts.source));
+      const outputDirectory = path.resolve(ctx.global.projectDir, "src-tauri", "icons");
+      return run(iconArgv(nodePath, tauriJsPath, opts.source, outputDirectory));
     },
 
     /**
      * Runs `tauri build` / `tauri ios|android build` for the given target,
      * streaming scrubbed output and parsed compile ticks through the callbacks.
      *
-     * @param opts - Build options (target + optional progress callbacks).
+     * @param opts - Build options (target, artifact flavour, progress callbacks).
      * @param opts.target - Packaging target.
+     * @param opts.simulator - iOS: build the host's simulator slice instead of a device archive.
+     * @param opts.exportMethod - iOS device builds: the `--export-method` to archive with.
+     * @param opts.aab - Android: emit a store bundle instead of the default installable APK.
      * @param opts.onTick - Called with parsed compile progress ("Compiling crate N/M").
      * @param opts.onOutput - Called with each scrubbed output line.
      * @returns The completed run's result.
      * @example
      * ```ts
-     * await app.tauri.build({ target: "macos", onTick: (t) => ctx.log.info("tick", t) });
+     * await app.tauri.build({ target: "ios", simulator: true, onOutput: line => ctx.log.info(line) });
      * ```
      */
     async build(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(buildArgv(nodePath, tauriJsPath, opts.target), {
+      return run(buildArgv(nodePath, tauriJsPath, opts), {
         onOutput: opts.onOutput,
         onTick: opts.onTick
       });
@@ -140,16 +164,16 @@ export function createTauriApi(ctx: TauriContext): Api {
      * check `project.completeness()` is `"not-initialized"` before calling this.
      *
      * @param opts - Mobile init options.
-     * @param opts.platform - Mobile platform to initialize.
+     * @param opts.target - Mobile target to initialize.
      * @returns The completed run's result.
      * @example
      * ```ts
-     * await app.tauri.mobileInit({ platform: "ios" });
+     * await app.tauri.mobileInit({ target: "ios" });
      * ```
      */
     async mobileInit(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(mobileInitArgv(nodePath, tauriJsPath, opts.platform));
+      return run(mobileInitArgv(nodePath, tauriJsPath, opts.target));
     },
 
     /**
@@ -258,6 +282,23 @@ export function createTauriApi(ctx: TauriContext): Api {
         // eslint-disable-next-line unicorn/no-null -- version() contract is `{ cliVersion } | null` (spec/02); `null` is the "CLI unavailable" signal, not a lazy fallback.
         return null;
       }
+    },
+
+    /**
+     * Returns the resolved `node` + `tauri.js` pair every verb spawns with, so
+     * `project.patchMobile` can write the same invocation into the generated
+     * Xcode/Gradle build scripts (tauri emits a bare `node tauri`, which does
+     * not exist — B10).
+     *
+     * @returns The resolved invocation prefix.
+     * @throws {Error} `[native]` when `node` or the tauri CLI cannot be resolved.
+     * @example
+     * ```ts
+     * await app.project.patchMobile({ target: "ios", runner: app.tauri.runner() });
+     * ```
+     */
+    runner() {
+      return resolvePaths();
     }
   };
 }

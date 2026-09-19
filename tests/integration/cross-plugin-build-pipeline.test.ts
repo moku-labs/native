@@ -131,14 +131,19 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
 
     it("app.tauri.icon spawns the icon verb directly (pipeline API coverage for the never-spawned icons phase)", async () => {
       testApp = await createTestApp();
-      const { app, spawnCalls } = testApp;
+      const { app, projectDir, spawnCalls } = testApp;
 
       const result = await app.tauri.icon({ source: "assets/icon.png" });
 
       expect(result.code).toBe(0);
       expect(spawnCalls).toHaveLength(1);
       expect(spawnCalls[0]?.argv[0]).toBe("/usr/bin/node");
-      expect(spawnCalls[0]?.argv.slice(2)).toEqual(["icon", "assets/icon.png"]);
+      expect(spawnCalls[0]?.argv.slice(2)).toEqual([
+        "icon",
+        "assets/icon.png",
+        "--output",
+        path.join(projectDir, "src-tauri", "icons")
+      ]);
     });
   });
 
