@@ -14,6 +14,8 @@ export type ProbeFn = (
 /** doctor plugin per-plugin config (| undefined required under exactOptionalPropertyTypes). */
 export type Config = {
   probeImpl?: ProbeFn | undefined;
+  /** Per-check budget: a check that outruns it yields a `warn` result (A4). Default 10_000. */
+  probeTimeoutMs: number;
 };
 
 /** One completed check — also the doctor:check event payload. */

@@ -1,6 +1,7 @@
 /**
  * @file doctor plugin check — web.build/web.devCommand scripts exist, resolved from the
- * SAME cwd Tauri will use (web.cwd override honored). Necessary-not-sufficient (documented):
+ * SAME root Tauri will use (`web.cwd` override honored, else the consumer root — M6).
+ * Necessary-not-sufficient (documented):
  * this never executes the script, only confirms package.json declares it.
  */
 import path from "node:path";
@@ -14,18 +15,18 @@ type PackageJsonShape = {
 
 /**
  * Resolves the cwd Tauri will run `beforeBuildCommand`/`beforeDevCommand` from — the
- * `web.cwd` override when set (monorepo layouts), else the directory containing the
- * generated `tauri.conf.json` (`<projectDir>/src-tauri`).
+ * `web.cwd` override when set (monorepo layouts), else the consumer root the packager was
+ * invoked from (M6). Never `src-tauri`: the generated tree has no `package.json` of its own.
  *
  * @param global - Frozen global framework config.
  * @returns The resolved absolute cwd.
  * @example
  * ```ts
- * resolveWebCwd(ctx.global); // "/repo/apps/web" or "/repo/.moku/tauri/src-tauri"
+ * resolveWebCwd(ctx.global); // "/repo/apps/web" or "/repo"
  * ```
  */
 function resolveWebCwd(global: CheckInput["global"]): string {
-  return global.web.cwd ? path.resolve(global.web.cwd) : path.join(global.projectDir, "src-tauri");
+  return path.resolve(global.web.cwd ?? ".");
 }
 
 /**

@@ -93,6 +93,21 @@ function findCheck(report: Doctor.DoctorReport, id: string): Doctor.CheckResult 
 }
 
 /**
+ * Sorts check results by id+target — `doctor:check` fires per check AS IT SETTLES (A4/M7),
+ * so event order is settle order while `report.checks` keeps registry order.
+ *
+ * @param checks - The check results to sort.
+ * @returns A new, id-sorted array.
+ * @example
+ * ```ts
+ * expect(sortChecksById(emitted)).toEqual(sortChecksById(report.checks));
+ * ```
+ */
+function sortChecksById(checks: readonly Doctor.CheckResult[]): Doctor.CheckResult[] {
+  return checks.toSorted((a, b) => `${a.id}${a.target}`.localeCompare(`${b.id}${b.target}`));
+}
+
+/**
  * Counts non-overlapping occurrences of `needle` in `haystack`.
  *
  * @param haystack - The text to search.
@@ -131,10 +146,13 @@ async function writePackageJsonFixture(
   await writeFile(path.join(dir, "package.json"), JSON.stringify(pkg, undefined, 2), "utf8");
 }
 
-/** A probe fake whose rustup answer carries the macos, ios, AND android target triples. */
+/** A probe fake whose rustup answer carries the macos, ios (device + sim), AND android triples. */
 const probeOkAllTriples: Doctor.ProbeFn = async cmd => ({
   code: 0,
-  stdout: cmd === "rustup" ? "aarch64-apple-darwin\naarch64-apple-ios\naarch64-linux-android" : "ok"
+  stdout:
+    cmd === "rustup"
+      ? "aarch64-apple-darwin\naarch64-apple-ios\naarch64-apple-ios-sim\naarch64-linux-android"
+      : "ok"
 });
 
 afterEach(async () => {
@@ -154,13 +172,24 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     // ios (not android) as the mobile target: the android-toolchain check needs env vars,
     // and the composed env table is frozen EMPTY (envPlugin has no providers configured),
     // so an android scope could never reach ok: true through the shipped composition.
+    // The host-scoped web-script/versions checks resolve <web.cwd>/package.json (M6), so the
+    // fixture root is pinned there instead of leaking to the repo's own package.json.
+    const fixtureDir = await newFixtureDir();
+    await writePackageJsonFixture(fixtureDir);
+
     const testApp = await newTestApp({
-      config: { targets: ["macos", "ios"] },
+      config: {
+        targets: ["macos", "ios"],
+        web: {
+          build: "bun run build",
+          devCommand: "bun run dev",
+          devUrl: "http://localhost:5173",
+          dist: "dist",
+          cwd: fixtureDir
+        }
+      },
       probeImpl: probeOkAllTriples
     });
-
-    // The host-scoped web-script check resolves <projectDir>/src-tauri/package.json.
-    await writePackageJsonFixture(path.join(testApp.projectDir, "src-tauri"));
 
     // No target → scopes are every configured target PLUS "host" (where tauri-cli lives).
     const report = await testApp.app.doctor.run();
@@ -169,13 +198,14 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     expect(report.ok).toBe(true);
     expect(report.checks.length).toBeGreaterThan(0);
 
-    // Exactly one doctor:check event per report entry — count AND id equality, in order.
+    // Exactly one doctor:check event per report entry. Emission is per check AS IT SETTLES
+    // (A4/M7), so the event order is settle order while report.checks keeps registry order —
+    // the two are compared as sets of the same size.
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents).toHaveLength(report.checks.length);
-    expect(checkEvents.map(event => event.payload.id)).toEqual(
-      report.checks.map(check => check.id)
+    expect(sortChecksById(checkEvents.map(event => event.payload))).toEqual(
+      sortChecksById(report.checks)
     );
-    expect(checkEvents.map(event => event.payload)).toEqual([...report.checks]);
 
     // tauri-cli is routed through tauri.version() — the SPAWN seam, not probeImpl:
     // the fake spawn's stdout ("built") becomes the detected CLI version.

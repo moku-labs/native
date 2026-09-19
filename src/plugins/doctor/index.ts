@@ -5,7 +5,8 @@ import { createDoctorApi } from "./api";
 import type { CheckResult, Config } from "./types";
 
 const defaultConfig: Config = {
-  probeImpl: undefined
+  probeImpl: undefined,
+  probeTimeoutMs: 10_000
 };
 
 /**

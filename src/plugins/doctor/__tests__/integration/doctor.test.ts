@@ -29,14 +29,30 @@ const validAppConfig = {
   capabilities: {}
 };
 
-/** Rust target triples covering every configured target's rustup check. */
+/** Rust target triples covering every configured target's rustup + ios-tools check. */
 const ALL_TRIPLES = [
   "aarch64-apple-darwin",
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",
   "aarch64-apple-ios",
+  "aarch64-apple-ios-sim",
   "aarch64-linux-android"
 ].join("\n");
+
+/**
+ * Asserts the report carries exactly the emitted results. Order is compared id-wise after
+ * sorting: `doctor:check` fires per check AS IT SETTLES (A4/M7), so emission order is
+ * settle order, while `report.checks` keeps the registry order.
+ *
+ * @param checks - The report's results, in registry order.
+ * @param emitted - The recorded `doctor:check` payloads, in settle order.
+ */
+function expectSameResults(checks: readonly CheckResult[], emitted: readonly CheckResult[]): void {
+  const byId = (results: readonly CheckResult[]) =>
+    results.toSorted((a, b) => `${a.id}${a.target}`.localeCompare(`${b.id}${b.target}`));
+  expect(emitted).toHaveLength(checks.length);
+  expect(byId(emitted)).toEqual(byId(checks));
+}
 
 /** A probe fake that succeeds every binary presence/version probe doctor issues. */
 const probeAlwaysOk: ProbeFn = async cmd => ({
@@ -105,7 +121,7 @@ describe("doctor plugin integration", () => {
 
     const report = await app.doctor.run({ target: "ios" });
 
-    expect(report.checks).toEqual(emitted);
+    expectSameResults(report.checks, emitted);
     expect(report.checks.length).toBeGreaterThan(0);
     for (const result of report.checks) {
       expect(result.target).toBe("ios");
@@ -130,7 +146,7 @@ describe("doctor plugin integration", () => {
 
     const report = await app.doctor.run();
 
-    expect(report.checks).toEqual(emitted);
+    expectSameResults(report.checks, emitted);
     const targets = new Set(report.checks.map(result => result.target));
     expect(targets.has("macos")).toBe(true);
     expect(targets.has("host")).toBe(true);
