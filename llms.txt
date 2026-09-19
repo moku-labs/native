@@ -5,29 +5,29 @@
 ## Core Concepts
 
 ### Three-layer Moku model
-- Layer 1 (`src/config.ts`): `createCoreConfig<Config, Events, [logPlugin, envPlugin]>("native", ...)` — global Config + Events types, shared constants (`TARGETS`, `PHASE_ORDER`), registers the `@moku-labs/common` core plugins so every plugin ctx carries `ctx.log` and `ctx.env`.
-- Layer 2 (`src/index.ts`): `createCore(coreConfig, { plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin], pluginConfigs: {...} })` — the framework.
+- Layer 1 (`src/config.ts`): `createCoreConfig<Config, Events, [logPlugin, envPlugin]>("native", { config, plugins, pluginConfigs: { env: { providers: [workerSafeProcessEnv()] } } })` — global Config + Events types, shared constants (`TARGETS`, `PHASE_ORDER`), the `hostTargets()` helper, the shared `PluginLike`/`PluginApiOf`/`RequireFn` types, and the two `@moku-labs/common` core plugins so every plugin ctx carries `ctx.log` and `ctx.env`. The env provider is seeded HERE: without it `ctx.env.get("PATH")` is undefined and the tauri plugin cannot PATH-walk `node`.
+- Layer 2 (`src/index.ts`): `createCore(coreConfig, { plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin] })` — the framework. NO pluginConfigs block: every plugin's defaults live in its own `src/plugins/<name>/index.ts`.
 - Layer 3 (consumer): `createApp({ config, plugins?, pluginConfigs? })` — a consumer app instance with `native.project/.tauri/.build/.doctor/.cli` APIs plus `native.start()`/`native.stop()`.
 
 ### The composition is the permission surface
-`config.system` is a name-only array (`ReadonlyArray<{ name: string }>`). The project plugin resolves each name against a 5-row capability registry (store, notification, clipboard-manager, tray, deep-link) into npm/crate dependency ranges, Rust plugin-init lines, capability permission JSON, tauri.conf fragments, and per-platform applicability. Unknown names throw at composition time (project.onInit). v1 mobile permission codegen is conf-only (D-012): zero XML patching ships; official Tauri plugins self-merge their own AndroidManifest needs; deep-link is custom-scheme-only (D-011: `{ mode: "scheme", scheme }` — the `mode` discriminant keeps `"universal"` additive later).
+`config.system` is a name-only array (`ReadonlyArray<{ name: string }>`). The project plugin resolves each name against a 5-row capability registry (store, notification, clipboard-manager, tray, deep-link) into npm/crate dependency ranges, cargo features, Rust plugin-init lines, capability permission JSON, tauri.conf fragments, and per-platform applicability. Unknown names throw at composition time (project.onInit). `tray` is a CORE TAURI CARGO FEATURE (`tray-icon`), not a plugin: its row has no crate, no npm package and no rust init, which is why every plugin-shaped `RegistryRow` field is optional while `cargoFeatures` is required. v1 mobile permission codegen is conf-only (D-012): zero XML patching ships; official Tauri plugins self-merge their own AndroidManifest needs; deep-link is custom-scheme-only (D-011: `{ mode: "scheme", scheme }`) and resolves to `{ desktop: { schemes: [s] }, mobile: [{ scheme: [s], appLink: false }] }`.
 
 ### The two-createApp consumer shape (D-009)
 A native app is a SEPARATE `createApp` (e.g. `src/native.ts`) composed BESIDE the consumer's web/node app — plugins are bound to their own framework's factory chain, so native plugins can never join the web app's plugin array. Integration happens at the edges:
 - `src/system.ts` — the shared array of `{ name }` system-plugin declarations; both apps import it; it is the cross-team contract.
 - package.json wires thin per-verb consumer scripts (`native:build`, `native:dev`, `native:doctor`, `native:clean`), each a small file that does `await native.start(); await native.cli.<verb>(...); await native.stop();` — there is no argv CLI.
-- Directory roles: `projectDir` (default `.moku/tauri/`) = the generated, GITIGNORED, fully regenerable Tauri project (contains `src-tauri/`); `outDir` (default `dist-native/`) = final packaged installers per target (`dist-native/<target>/`).
+- Directory roles: `projectDir` (default `.moku/tauri/`) = the generated, GITIGNORED, fully regenerable Tauri project (contains `src-tauri/`); `outDir` (default `dist-native/`) = final packaged artifacts per target (`dist-native/<target>/`).
 
 ### Pipeline and events
-`build.run({ target })` walks `PHASE_ORDER` = scaffold → codegen → icons → compile → bundle → collect, sequentially, stopping at the first failing phase. It emits the GLOBAL framework events `native:phase` (start/progress/done/error per phase) and `native:complete` (on success) — declared in `src/config.ts` (D-003), emitted by build, hooked by cli for live rendering, hookable by any plugin without a depends edge. `doctor:check` stays a per-plugin event (declared by doctor; hooking it needs a `depends: [doctorPlugin]` edge). The icons phase is a permanent v1 no-op (D-015): no icon-source config field exists, so it always reports done with detail "skipped". compile+bundle share ONE `tauri build` subprocess; a failure is always attributed to compile and bundle is never emitted.
+`build.run({ target })` walks `PHASE_ORDER` = scaffold → codegen → icons → compile → bundle → collect, sequentially, stopping at the first failing phase. `build.prepare({ target })` runs the first three and stops (cli.dev calls it first). It emits the GLOBAL framework events `native:phase` (start/progress/done/error per phase) and `native:complete` (on success) — declared in `src/config.ts` (D-003), emitted by build, hooked by cli for live rendering, hookable by any plugin without a depends edge. `doctor:check` stays a per-plugin event (declared by doctor; hooking it needs a `depends: [doctorPlugin]` edge) and is emitted per check AS IT SETTLES. codegen owns the mobile story: generate → `tauri.mobileInit({ target })` when completeness is `not-initialized` → completeness gate → idempotent `project.patchMobile({ target, runner: tauri.runner() })`. The icons phase is real: `project.ensureIconSource()` (config `app.icon` or a generated placeholder PNG) then `tauri.icon({ source })`, skipped only when the generated icon is newer AND mobileInit did not just run. compile+bundle share ONE `tauri build` subprocess; the transition is LIVE (first output line matching /bundling/i closes compile and opens bundle) and a failure is attributed to whichever phase is open (A15). `BuildResult.phases` always carries six entries.
 
 ### Seams and conventions
-- `tauri` is the ONLY plugin that spawns processes (invocation: explicit PATH-walked `node` + `require.resolve("@tauri-apps/cli/tauri.js")` — never `bunx tauri`, never `process.execPath` which is bun; D-013).
-- Every subprocess output line is scrubbed (known secret env-var names + Shannon-entropy gating) before reaching any log, callback, or error.
-- Signing config carries env-var REFERENCES only; doctor checks presence (`ctx.env.has`), never values.
+- `tauri` is the ONLY plugin that spawns processes (invocation: explicit PATH-walked `node` + `require.resolve("@tauri-apps/cli/tauri.js")` — never `bunx tauri`, never `process.execPath` which is bun; D-013). `tauri.runner()` exposes that pair so the generated Xcode/Android build phase can be rewritten to it.
+- Every subprocess output line is scrubbed (known secret env-var names + Shannon-entropy gating, with path/`::`/UUID exemptions) before reaching any log, callback, or error.
+- Signing config carries env-var REFERENCES and identifiers only; doctor checks presence (`ctx.env.has`) and counts, never values.
 - All CLI output flows through the branded kit `@moku-labs/common/cli` (MC1); logging via `ctx.log` (MC2); env via `ctx.env` (MC3).
 - Dev teardown is owned by the tauri dev seam's own control flow (process-group spawn, SIGINT/SIGTERM handlers, `DevHandle.stop()`) — there is no `onStop` (D-002); cli awaits the handle but never holds or stops it.
-- `project` owns `clean` (D-006); `cli.clean` is a thin delegate, confirm-gated when wiping the whole projectDir.
+- `project` owns `clean` (D-006); `cli.clean` is a thin delegate, confirm-gated when wiping the whole projectDir. `assertCleanableRoot` refuses a `projectDir` that is the cwd, `$HOME`, a filesystem root, or an ancestor of the cwd.
 
 ## Quick Reference
 
@@ -35,11 +35,13 @@ A native app is a SEPARATE `createApp` (e.g. `src/native.ts`) composed BESIDE th
 import {
   createApp, createPlugin,            // framework API (Layer 3 factory + consumer plugin factory)
   projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin,
-  TARGETS, PHASE_ORDER,               // constants
+  TARGETS, PHASE_ORDER, hostTargets,  // constants + host-target helper
+  TauriError,                         // the one runtime value from a plugin (namespaces are type-only)
   type Config, type Events, type Target, type NativePhase,
   type NativePhaseEvent, type NativeCompleteEvent,
-  type CapabilityConfigMap, type SigningConfig,
-  Project, Tauri, Build, Doctor, Cli  // per-plugin type namespaces (e.g. Tauri.DevHandle, Tauri.TauriError)
+  type CapabilityConfigMap, type SigningConfig, type AppleSigning, type AppleExportMethod,
+  type PluginLike, type PluginApiOf, type RequireFn,
+  type Project, type Tauri, type Build, type Doctor, type Cli  // TYPE-ONLY namespaces
 } from "@moku-labs/native";
 
 // Layer 3
@@ -51,31 +53,34 @@ const native = createApp({
 await native.start();
 
 // cli verbs (typed methods, no argv parsing)
-native.cli.build(opts?: { target?: Target; all?: boolean }): Promise<void>;
-native.cli.dev(opts?: { target?: Target }): Promise<void>;      // resolves on clean/signal exit
+native.cli.build(opts?: { target?: Target; all?: boolean; simulator?: boolean; aab?: boolean }): Promise<void>;
+native.cli.dev(opts?: { target?: Target }): Promise<void>;      // prepares first; resolves on clean/signal exit
 native.cli.doctor(opts?: { target?: Target }): Promise<boolean>; // caller sets process.exitCode
 native.cli.clean(opts?: { target?: Target }): Promise<void>;    // no target => confirm-gated full wipe
 
 // build pipeline
-native.build.run(opts: { target: Target }): Promise<Build.BuildResult>;
-native.build.runAll(opts?: { targets?: readonly Target[] }): Promise<readonly Build.BuildResult[]>; // sequential, never Promise.all
+native.build.prepare(opts: { target: Target }): Promise<void>;  // scaffold + codegen + icons only
+native.build.run(opts: { target: Target; simulator?: boolean; aab?: boolean }): Promise<Build.BuildResult>;
+native.build.runAll(opts?: { targets?: readonly Target[]; simulator?: boolean; aab?: boolean }): Promise<readonly Build.BuildResult[]>; // sequential, never Promise.all
 
 // project (files only, never spawns)
 native.project.generate(opts: { target: Target }): Promise<{ written: string[]; unchanged: string[]; skipped: string[] }>;
 native.project.completeness(opts: { target: Target }): Project.CompletenessResult; // "not-applicable" | "not-initialized" | "incomplete" | "complete"
-native.project.patchMobile(opts: { target: "ios" | "android" }): Promise<{ patched: string[]; unchanged: string[] }>;
+native.project.patchMobile(opts: { target: "ios" | "android"; runner?: Project.MobileRunner }): Promise<{ patched: string[]; unchanged: string[] }>;
+native.project.ensureIconSource(): Promise<string>;             // app.icon, else a generated placeholder PNG
 native.project.clean(opts?: { target?: Target }): Promise<{ removed: readonly string[] }>;
 native.project.resolve<K extends keyof CapabilityConfigMap>(name: K, config?: CapabilityConfigMap[K]): Project.ResolvedCapability;
 native.project.isKnownCapability(name: string): name is keyof CapabilityConfigMap;
 native.project.registryRows(): ReadonlyArray<Project.RegistryRow>;
 native.project.requiredFiles(platform: "ios" | "android"): readonly string[];
 
-// tauri (the only subprocess seam; one-shot verbs throw Tauri.TauriError on non-zero exit)
-native.tauri.icon(opts: { source: string }): Promise<Tauri.RunResult>;
-native.tauri.build(opts: { target: Target; onTick?: (t: Tauri.CompileTick) => void; onOutput?: (line: string) => void }): Promise<Tauri.RunResult>;
-native.tauri.mobileInit(opts: { platform: "ios" | "android" }): Promise<Tauri.RunResult>; // NOT idempotent — gate on completeness() first
+// tauri (the only subprocess seam; one-shot verbs throw TauriError on non-zero exit)
+native.tauri.icon(opts: { source: string }): Promise<Tauri.RunResult>;   // always --output <projectDir>/src-tauri/icons
+native.tauri.build(opts: { target: Target; simulator?: boolean; exportMethod?: AppleExportMethod; aab?: boolean; onTick?: (t: Tauri.CompileTick) => void; onOutput?: (line: string) => void }): Promise<Tauri.RunResult>;
+native.tauri.mobileInit(opts: { target: "ios" | "android" }): Promise<Tauri.RunResult>; // NOT idempotent — gate on completeness() first
 native.tauri.dev(opts: { target?: Target; onOutput?: (line: string) => void }): Promise<Tauri.DevHandle>;
 native.tauri.version(): Promise<{ cliVersion: string } | null>;  // null = CLI not invokable (never throws)
+native.tauri.runner(): { nodePath: string; tauriJsPath: string }; // feeds project.patchMobile
 
 // doctor (never throws on check failures; rejected checks become internal-error "fail" rows)
 native.doctor.run(opts?: { target?: Target }): Promise<Doctor.DoctorReport>; // { ok, checks } — warn never flips ok
@@ -90,13 +95,13 @@ type Target = "macos" | "windows" | "linux" | "ios" | "android";
 type NativePhase = "scaffold" | "codegen" | "icons" | "compile" | "bundle" | "collect";
 
 type Config = {
-  app: { name: string; identifier: string; version?: string };
+  app: { name: string; identifier: string; version?: string; icon?: string; category?: string; buildNumber?: string };
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
   system: ReadonlyArray<{ name: string }>;
   capabilities: Partial<CapabilityConfigMap>;
-  targets: readonly Target[];
-  projectDir: string;   // default ".moku/tauri"
-  outDir: string;       // default "dist-native"
+  targets: readonly Target[];   // default hostTargets(process.platform) — mobile is opt-in
+  projectDir: string;           // default ".moku/tauri"
+  outDir: string;               // default "dist-native"
   signing: SigningConfig;
 };
 
@@ -108,8 +113,22 @@ type CapabilityConfigMap = {
   "deep-link": { mode: "scheme"; scheme: string };
 };
 
+type AppleExportMethod = "app-store-connect" | "release-testing" | "debugging";
+
+type AppleSigning = {
+  teamId?: string;                  // bundle.iOS.developmentTeam
+  signingIdentity?: string;         // bundle.macOS.signingIdentity ("-" = ad-hoc)
+  providerShortName?: string;       // bundle.macOS.providerShortName
+  entitlements?: string;            // consumer plist, relative to cwd
+  appStore?: boolean;               // generate a sandbox Entitlements.plist when `entitlements` is unset (macos)
+  exportMethod?: AppleExportMethod; // tauri ios build --export-method
+  macosMinimumSystemVersion?: string;
+  iosMinimumSystemVersion?: string;
+};
+
 type SigningConfig = {
-  android?: { keystorePath?: string; keystorePasswordEnv?: string; keyAlias?: string };
+  apple?: AppleSigning;
+  android?: { keystorePath?: string; keystorePasswordEnv?: string; keyPasswordEnv?: string; keyAlias?: string };
   windows?: { certificateThumbprint?: string };
 };
 
@@ -124,55 +143,79 @@ type CheckResult = { id: string; target: Target | "host"; status: "pass" | "warn
 type DevHandle = { url: string; ready: Promise<void>; exited: Promise<{ code: number | null; signal: string | null }>; stop(): Promise<void> };
 
 class TauriError extends Error {
-  kind: "toolchain-missing" | "config-invalid" | "compile-failed" | "signing-failed" | "device-unavailable" | "cancelled" | "unknown";
+  kind: "toolchain-missing" | "platform-missing" | "config-invalid" | "compile-failed"
+      | "xcode-script-failed" | "signing-failed" | "device-unavailable" | "cancelled" | "unknown";
   exitCode: number | null;
-  stderrTail: string; // already scrubbed — safe to log
+  stderrTail: string; // already scrubbed — signal lines, a "…" separator, then the last 10 lines
 }
 
-type BuildResult = { target: Target; outPath: string; artifacts: readonly string[]; durationMs: number; phases: ReadonlyArray<{ phase: NativePhase; durationMs: number }> };
+type BuildResult = { target: Target; outPath: string; artifacts: readonly string[]; durationMs: number; phases: ReadonlyArray<{ phase: NativePhase; durationMs: number }> }; // always six phases
 ```
 
-Config defaults (framework `defaultConfig`): `app: { name: "", identifier: "" }` (must be set; validated), `web: { build: "bun run build", devCommand: "bun run dev", devUrl: "http://localhost:5173", dist: "dist" }`, `system: []`, `capabilities: {}`, `targets: TARGETS` (all five), `projectDir: ".moku/tauri"`, `outDir: "dist-native"`, `signing: {}`.
+Config defaults (framework `defaultConfig`): `app: { name: "", identifier: "" }` (must be set; validated), `web: { build: "bun run build", devCommand: "bun run dev", devUrl: "http://localhost:5173", dist: "dist" }`, `system: []`, `capabilities: {}`, `targets: hostTargets(process.platform)` (darwin→["macos"], win32→["windows"], linux→["linux"], other→[]), `projectDir: ".moku/tauri"`, `outDir: "dist-native"`, `signing: {}`.
 
-Per-plugin configs (via `createApp({ pluginConfigs })`):
+Per-plugin configs (each plugin's own defaults; overridable via `createApp({ pluginConfigs })`):
 - `tauri: { spawnImpl?: SpawnFn; nodePath?: string; readiness: { intervalMs: number; timeoutMs: number } }` — defaults: undefined / undefined / `{ intervalMs: 250, timeoutMs: 60_000 }`.
-- `doctor: { probeImpl?: ProbeFn }` — default undefined (real which/--version subprocess probes).
+- `doctor: { probeImpl?: ProbeFn; probeTimeoutMs: number }` — defaults: undefined / `10_000` (a check that outruns the budget yields a warn).
 - `cli: { renderImpl?: (line: string) => void; confirmImpl?: (question: string) => Promise<boolean> }` — defaults undefined (branded console + styled confirm from `@moku-labs/common/cli`).
+- `env` (core, seeded in `src/config.ts`): `{ providers: [workerSafeProcessEnv()] }`. A19 — core-plugin config is a SHALLOW merge, so supplying `providers` REPLACES this list: re-add `workerSafeProcessEnv()` or `ctx.env.get("PATH")` goes undefined and every build fails with `[native] Could not locate a \`node\` binary on PATH.` (The typed `createApp` pluginConfigs map covers regular plugins only; the kernel still merges an `env` key at runtime.)
+
+## Signing and store builds
+
+Config holds identifiers and env-var NAMES. Secrets stay in the environment and Tauri reads them itself: `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID`, or `APPLE_API_KEY` + `APPLE_API_ISSUER` + `APPLE_API_KEY_PATH` (either complete set satisfies doctor), plus `APPLE_CERTIFICATE` + `APPLE_CERTIFICATE_PASSWORD` for a CI keychain. Android passwords are read by Gradle via `System.getenv("<keystorePasswordEnv>")` / `System.getenv("<keyPasswordEnv ?? keystorePasswordEnv>")` from the `// MOKU-SIGNING-START…END` block `patchMobile` maintains in `gen/android/app/build.gradle.kts` (no `keystore.properties` is written; dropping `keystorePath` removes the block). `signing.apple.appStore === true` with `entitlements` unset generates `src-tauri/Entitlements.plist` (app-sandbox + network-client) for macOS. Unsigned dev builds and iOS simulator builds need NO credentials at all — doctor's signing check is warn-only for exactly that reason.
+
+## iOS simulator
+
+`native.cli.build({ target: "ios", simulator: true })` → `tauri ios build --target aarch64-sim` (x86_64 on an Intel host), never `--export-method`, and `collect` matches `gen/apple/build/*-sim/*.app` (a DIRECTORY, copied recursively) instead of `gen/apple/build/**/*.ipa`. Prerequisites, all checked by `native doctor`: rust targets `aarch64-apple-ios` + `aarch64-apple-ios-sim` (`rustup target add …`), `xcodegen` (`brew install xcodegen`), `pod` (`brew install cocoapods`) — the `ios-tools` check, fail posture — and an installed iOS platform/simulator runtime (`xcodebuild -downloadPlatform iOS`) — the `ios-platform` check, warn posture. The first iOS build runs `tauri ios init` once and then rewrites the runner Tauri baked into `gen/apple/project.yml` and `gen/apple/*.xcodeproj/project.pbxproj` to the absolute `"<node>" "<tauri.js>"` pair (B10) — the detected `node tauri`/`bun tauri` command does not resolve inside Xcode.
+
+## Breaking changes (this release)
+
+| What breaks | Migration |
+|---|---|
+| `web.dev.command` / `web.dev.url` | flat `web.devCommand` / `web.devUrl` |
+| `tauri.mobileInit({ platform })` | `tauri.mobileInit({ target })` |
+| `Build`/`Cli`/`Doctor`/`Project`/`Tauri` namespaces are type-only | `import { TauriError } from "@moku-labs/native"` |
+| default `targets` is the host desktop target, not all five | set `targets` explicitly for `ios`/`android` |
+| `Project.RegistryRow` plugin fields optional (`tray` is a cargo feature) | null-check `npmPackage`/`crate`/`rustInit` |
 
 ## File Structure
 
 ```
 src/
-  config.ts               # Layer 1: Config/Events types, TARGETS, PHASE_ORDER, CapabilityConfigMap,
-                          #   SigningConfig, createCoreConfig("native"), createPlugin/createCore exports
-  index.ts                # Layer 2: createCore(...5 plugins), framework pluginConfigs defaults,
-                          #   public exports: createApp, createPlugin, constants, types, plugin barrel
+  config.ts               # Layer 1: Config/Events types, TARGETS, PHASE_ORDER, hostTargets,
+                          #   CapabilityConfigMap, SigningConfig/AppleSigning, PluginLike/RequireFn,
+                          #   createCoreConfig("native") + the env provider seed
+  index.ts                # Layer 2: createCore(...5 plugins) — no pluginConfigs; public exports:
+                          #   createApp, createPlugin, constants, TauriError, types, plugin barrel
   plugins/
-    index.ts              # barrel: plugin instances + type namespaces (Project, Tauri, Build, Doctor, Cli)
+    index.ts              # barrel: plugin instances + TYPE-ONLY namespaces (Project, Tauri, Build, Doctor, Cli)
     project/              # Complex tier
-      index.ts types.ts api.ts registry.ts writer.ts completeness.ts patch.ts clean.ts
-      generators/         # tauri-conf.ts cargo.ts rust.ts capabilities.ts sidecar.ts types.ts
+      index.ts types.ts api.ts registry.ts writer.ts completeness.ts patch.ts clean.ts icon.ts
+      generators/         # tauri-conf.ts cargo.ts rust.ts capabilities.ts build-script.ts
+                          #   entitlements.ts sidecar.ts paths.ts types.ts
     tauri/                # Standard tier
       index.ts types.ts api.ts argv.ts resolve.ts spawn.ts dev.ts stream.ts errors.ts scrub.ts state.ts
     build/                # Standard tier
       index.ts types.ts api.ts pipeline.ts collect.ts
     doctor/               # Complex tier
       index.ts types.ts api.ts report.ts
-      checks/             # index.ts types.ts rustup.ts node.ts xcode.ts android.ts signing.ts
-                          #   completeness.ts versions.ts web-script.ts tauri-cli.ts cross-repo.ts
+      checks/             # index.ts types.ts rustup.ts node.ts xcode.ts ios-tools.ts ios-platform.ts
+                          #   android.ts signing.ts completeness.ts versions.ts web-script.ts
+                          #   tauri-cli.ts cross-repo.ts
     cli/                  # Standard tier
       index.ts types.ts api.ts handlers.ts render.ts state.ts
 tests/                    # framework-level integration only; plugin tests are colocated in
                           #   src/plugins/<name>/__tests__/{unit,integration}/
+  smoke/                  # real-toolchain proof — `bun run test:smoke` only, never `bun run test`
 ```
 
 ## Plugins
 
-- **project** — Capability registry + `.moku/tauri` generators (tauri.conf.json, Cargo.toml, main.rs/lib.rs, capability JSON, Info.ios.plist sidecar) + write-if-changed writer + mobile completeness gate + Android-signing patch + clean; never spawns | tier: Complex | API: generate, completeness, patchMobile, clean, resolve, isKnownCapability, registryRows, requiredFiles | events: none (onInit validates global config).
-- **tauri** — The only `@tauri-apps/cli` subprocess seam: argv builders, injectable spawn, process-group dev lifecycle with devUrl readiness poll, compile-tick stream parsing, TauriError taxonomy, entropy-gated secret scrubbing; NO onStop by design (D-002) | tier: Standard | API: icon, build, mobileInit, dev, version | events: none.
-- **build** — Sequential per-target pipeline (scaffold→codegen→icons→compile→bundle→collect); depends [project, tauri]; owns collect (BUNDLE_LOCATIONS glob table → outDir/<target>/, zero matches is an error); runAll is sequential (shared Cargo target/ lock) | tier: Standard | API: run, runAll | events: emits global native:phase + native:complete.
-- **doctor** — Parallel diagnosis via checks/ registry (rustup, node, xcode, android, signing presence, mobile completeness, npm-vs-crate version skew, web-script existence, tauri-cli, cross-repo warns); Promise.allSettled — rejected checks become internal-error fails; warns never flip `ok` | tier: Complex | API: run | events: declares + emits doctor:check per completed check.
-- **cli** — Typed verb surface (build/dev/doctor/clean), NO argv parsing; branded rendering via @moku-labs/common/cli (MC1); live progress via hooks on native:phase/native:complete/doctor:check; depends on all four other plugins | tier: Standard | API: build, dev, doctor, clean | events: none declared — hooks only.
+- **project** — Capability registry + `.moku/tauri` generators (tauri.conf.json, Cargo.toml with cargo features, build.rs, main.rs/lib.rs, capability JSON, Entitlements.plist, Info.ios.plist sidecar) + write-if-changed writer + mobile completeness gate + the mobile patch pass (Android signing block + the absolute runner rewrite) + the placeholder icon + guarded clean; never spawns | tier: Complex | API: generate, completeness, patchMobile, ensureIconSource, clean, resolve, isKnownCapability, registryRows, requiredFiles | events: none (onInit validates global config).
+- **tauri** — The only `@tauri-apps/cli` subprocess seam: argv builders (simulator/export-method/aab), injectable spawn resolving on `close` not `exit`, process-group dev lifecycle with devUrl readiness poll, compile-tick stream parsing, TauriError taxonomy, entropy-gated secret scrubbing, `runner()`; NO onStop by design (D-002) | tier: Standard | API: icon, build, mobileInit, dev, version, runner | events: none.
+- **build** — Sequential per-target pipeline (scaffold→codegen→icons→compile→bundle→collect) plus `prepare` (first three); depends [project, tauri] resolved ONCE as deps; owns collect (glob table → outDir/<target>/, simulator `.app` vs device `.ipa`, zero matches is an error); runAll is sequential (shared Cargo target/ lock) | tier: Standard | API: prepare, run, runAll | events: emits global native:phase + native:complete.
+- **doctor** — Parallel diagnosis via checks/ registry (rustup, node, xcode, ios-tools, ios-platform, android, signing presence/counts, mobile completeness, npm-vs-crate version skew, web-script existence, tauri-cli, cross-repo warns); Promise.allSettled — rejected checks become internal-error fails; each check races `probeTimeoutMs` and a timeout is a warn; warns never flip `ok` | tier: Complex | API: run | events: declares + emits doctor:check per completed check, as it settles.
+- **cli** — Typed verb surface (build/dev/doctor/clean), NO argv parsing; ONE branded console built in createState (`ctx.state.ui`); live progress via hooks on native:phase/native:complete/doctor:check (doctor rows print once, live; the summary is counts only); a failed build prints the scrubbed `stderrTail` in a box before the error; depends on all four other plugins | tier: Standard | API: build, dev, doctor, clean | events: none declared — hooks only.
 
 Dependency graph (D-007): project and tauri are dependency-free (Wave 1); build → [project, tauri] and doctor → [project, tauri] (Wave 2); cli → [project, tauri, build, doctor] (Wave 3). Initialization order follows the plugin array: project, tauri, build, doctor, cli.
 
@@ -188,17 +231,20 @@ import { systemPlugins } from "./system";
 
 export const native = createApp({
   config: {
-    app: { name: "MyApp", identifier: "com.example.myapp" },
+    app: { name: "MyApp", identifier: "com.example.myapp", icon: "assets/icon.png" },
     web: { build: "bun run build", devCommand: "bun run dev", devUrl: "http://localhost:5173", dist: "dist" },
     system: systemPlugins,
-    capabilities: { "deep-link": { mode: "scheme", scheme: "myapp" } }
+    capabilities: { "deep-link": { mode: "scheme", scheme: "myapp" } },
+    targets: ["macos", "ios"],              // default: the host's own desktop target
+    signing: { apple: { teamId: "ABCDE12345", exportMethod: "app-store-connect" } }
   }
 });
 
 // scripts/native-build.ts
 import { native } from "../src/native";
 await native.start();
-await native.cli.build({ target: "macos" }); // installers land in dist-native/macos/
+await native.cli.build({ target: "macos" });          // installers land in dist-native/macos/
+await native.cli.build({ target: "ios", simulator: true }); // unsigned .app in dist-native/ios/
 await native.stop();
 ```
 
@@ -207,11 +253,11 @@ Add `.moku/` and `dist-native/` to the consumer `.gitignore`. A real `node` bina
 ## Error handling
 
 - Every framework error message is `[native]`-prefixed with an actionable second line (fix-it style).
-- `tauri` one-shot verbs throw classified `TauriError` (kind + exitCode + scrubbed stderrTail).
-- `build` emits `native:phase` status "error" for the failing phase, then rethrows; later phases never start; `runAll` stops at the first failing target.
-- `doctor.run` never throws on check failures — a rejected check becomes a `"fail"` CheckResult with an internal-error message.
+- `tauri` one-shot verbs throw classified `TauriError` (kind + exitCode + scrubbed stderrTail). Kinds, most specific first: `xcode-script-failed` (the Xcode "Build Rust Code" phase), `signing-failed`, `toolchain-missing`, `platform-missing` (iOS SDK/simulator platform not installed — `xcodebuild -downloadPlatform iOS`), `device-unavailable`, `config-invalid`, `compile-failed`, `cancelled` (signal), `unknown`. Lines matching `^\s*Warn\b` are never classified (every unsigned simulator build prints a code-signing warning).
+- `build` emits `native:phase` status "error" for the OPEN phase (compile or bundle), then rethrows; later phases never start; `runAll` stops at the first failing target.
+- `doctor.run` never throws on check failures — a rejected check becomes a `"fail"` CheckResult with an internal-error message; a timed-out check becomes a `"warn"`.
 - `cli.dev` resolves cleanly on signal-terminated exits (code null, e.g. Ctrl-C) and throws only on a numeric non-zero exit code.
-- `cli.clean()` without a target gates the full projectDir wipe behind a styled confirm; declining resolves without deleting.
+- `cli.clean()` without a target gates the full projectDir wipe behind a styled confirm; declining resolves without deleting. `clean()` itself refuses an unsafe `projectDir` (cwd, `$HOME`, filesystem root, ancestor of the cwd).
 - Config validation (project.onInit, composition time): empty app.name, non-reverse-DNS app.identifier, missing web.build/web.devCommand/web.devUrl/web.dist, unknown config.system names, deep-link composed without a scheme.
 
 See llms-full.txt for verbatim type definitions, the full config/event catalog, per-check details, and extension patterns. Per-plugin READMEs: src/plugins/{project,tauri,build,doctor,cli}/README.md.

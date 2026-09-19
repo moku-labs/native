@@ -17,6 +17,19 @@ export default defineConfig({
             "src/plugins/**/__tests__/integration/**/*.test.ts"
           ]
         }
+      },
+      {
+        // Real-toolchain proof (A13). Opt-in only: `bun run test:smoke`, never `bun run test`
+        // — it drives a real `tauri build` (cargo compiles from scratch on a cold cache),
+        // so the budget is 30 minutes and the files run one at a time to keep a single
+        // Cargo target/ lock uncontended.
+        test: {
+          name: "smoke",
+          include: ["tests/smoke/**/*.test.ts"],
+          testTimeout: 30 * 60 * 1000,
+          hookTimeout: 30 * 60 * 1000,
+          fileParallelism: false
+        }
       }
     ],
     coverage: {

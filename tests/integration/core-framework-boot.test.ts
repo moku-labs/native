@@ -6,6 +6,7 @@
  * S03 — project.onInit validates app identity at createApp time (not at first verb).
  * S04 — Consumer plugin composes into the chain with ctx.log/ctx.env present.
  * S20 — env core plugin resolves real host variables; targets default to the host's own.
+ * S21 — replacing the env providers list breaks node resolution (A19 migration note).
  *
  * All apps compose through the SHIPPED package entry (`src/index.ts`) — never a
  * `createCore` re-composition — with every subprocess/render seam injected.
@@ -15,7 +16,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { Doctor, NativePhaseEvent, Target } from "../../src/index";
+import type { Doctor, NativePhaseEvent, Target, Tauri } from "../../src/index";
 import { createApp, createPlugin, hostTargets } from "../../src/index";
 import { createTestApp, VALID_APP_CONFIG } from "./helpers/create-test-app";
 import { spawnBuildSucceeds } from "./helpers/fixtures";
@@ -335,5 +336,57 @@ describe("S20 — env core plugin providers + host-derived default targets", () 
     expect(observed?.targets).toEqual(hostTargets(process.platform));
     expect(observed?.targets).not.toContain("ios");
     expect(observed?.targets).not.toContain("android");
+  });
+});
+
+describe("S21 — replacing the env providers list breaks node resolution (A19)", () => {
+  it("fails the build with the [native] node-not-found error and never spawns", async () => {
+    const { projectDir, outDir } = await makeTempDirs();
+
+    const spawnCalls: Array<readonly string[]> = [];
+    const recordingSpawn: Tauri.SpawnFn = opts => {
+      spawnCalls.push(opts.cmd);
+      return spawnBuildSucceeds(opts);
+    };
+
+    // `env` is a CORE plugin: core types `createApp({ pluginConfigs })` from the framework's
+    // REGULAR plugins only, so this key is reachable at runtime (the kernel merges it as
+    // cascade level 4 — spec/03 §5) but not through the typed literal. Passing the options
+    // as a pre-built object is what a consumer replacing the provider list actually gets,
+    // and it is exactly the A19 hazard: the merge is shallow, so `providers: []` REPLACES
+    // the framework's `[workerSafeProcessEnv()]` instead of extending it.
+    const options = {
+      config: {
+        ...VALID_APP_CONFIG,
+        app: { name: "Test App", identifier: "com.example.testapp" },
+        projectDir,
+        outDir,
+        targets: ["macos"] as const
+      },
+      pluginConfigs: {
+        // No `nodePath` — node resolution has to walk the PATH ctx.env hands it.
+        tauri: { spawnImpl: recordingSpawn },
+        cli: {
+          renderImpl: () => {
+            /* silent */
+          }
+        },
+        env: { providers: [] }
+      }
+    };
+    const app = createApp(options);
+
+    expect(app.env.get("PATH")).toBeUndefined();
+
+    // The icons phase is the first verb that needs the CLI, so that is where it dies.
+    await expect(app.build.run({ target: "macos" })).rejects.toThrow(
+      /^\[native\] Could not locate a `node` binary on PATH\./
+    );
+    await expect(app.build.run({ target: "macos" })).rejects.toThrow(
+      /Install Node\.js \(or make sure your version manager/
+    );
+
+    // Nothing was spawned: resolution fails before the subprocess seam is reached.
+    expect(spawnCalls).toEqual([]);
   });
 });
