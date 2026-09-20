@@ -20,11 +20,12 @@ code, and tray is desktop-only (filtered from every mobile target-set).
 | `types.ts` | shared types and the public `Api` surface |
 | `api.ts` | API factory: capability resolution + the generate/patch/clean/icon delegations |
 | `validate.ts` | composition-time global-config validation, called from `onInit` |
-| `layout.ts` | **the one owner of the output layout** — the desktop bundle-FORMAT table and the mobile `gen/<platform>` name, exposed as `getBundleLayout({ target })` |
+| `layout.ts` | **the one owner of the output layout** — the desktop bundle-FORMAT table, the mobile `gen/<platform>` name and `genDirectoryPath(projectDir, target)`, exposed as `getBundleLayout({ target })` |
 | `registry.ts` | the capability registry rows, the name guard, and `resolve()` |
 | `writer.ts` | write-if-changed (content hash) + the write-path guard |
 | `icon.ts` | the embedded 1024x1024 placeholder PNG |
 | `clean.ts` | target-scoped destructive cleanup behind the clean guards |
+| `paths.ts` | **the one owner of path normalization/containment** — realpath resolution, case rules, and the "is this derived state?" predicate shared by `clean.ts` and `validate.ts` |
 | `generators/*.ts` | one generated artifact each (see the table below) |
 | `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
 | `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` |
@@ -111,17 +112,22 @@ Studio, so a build of a freshly-initialised tree fails on its first build phase.
 `<node> <tauri.js> <verb>` invocation, with each path quoted so paths containing spaces
 survive:
 
-| Platform | Files rewritten | Line prefix kept | Quote form |
+| Platform | Files rewritten | Everything else on the line | Quote form |
 |---|---|---|---|
 | ios | `gen/apple/project.yml` | `script: ` (with any indent / `- `) | `"…"` (YAML scalar) |
 | ios | `gen/apple/*.xcodeproj/project.pbxproj` | `shellScript = "` | `\"…\"` (inside a pbxproj string) |
 | android | `gen/android/buildSrc/**/*.{kt,kts,gradle}`, the two top-level `build.gradle.kts` | the string literal's opening `"` | `\"…\"` (inside a source string) |
 
-The match is **runner-agnostic**: on every line carrying ` ios xcode-script` /
-` android android-studio-script`, whatever sits between the line's prefix and the verb is
-replaced — no literal is hard-coded. Omit `runner` and the rewrite is skipped. The pass is
-idempotent: a second run rewrites the absolute pair onto itself and reports every file
-unchanged.
+The match is **runner-agnostic but narrow**: on every line carrying ` ios xcode-script` /
+` android android-studio-script`, only the runner-shaped token run directly before the verb is
+replaced — `<binary> tauri` (optionally path-qualified), `npm run tauri --`, a bare `tauri`, or
+an already-absolute quoted pair. Everything else survives byte for byte, including a shell
+preamble such as `set -e` / `cd "$SRCROOT" &&` and the verb's own arguments. Each path is
+escaped for the double-quoted shell word it lands in (`\`, `"`, `$`, backtick), and a path
+containing a line break is refused with a `[native]` error. Omit `runner` and the rewrite is
+skipped. The pass is idempotent: a second run rewrites the absolute pair onto itself and reports
+every file unchanged — but an absolute pair whose Node path CHANGED (an fnm/nvm switch) is
+re-patched, not left stale.
 
 ## Signing
 
@@ -137,6 +143,10 @@ signingConfigs { maybeCreate("release").apply { storeFile = file(…); keyAlias 
   keyPassword = System.getenv("<keyPasswordEnv ?? keystorePasswordEnv>") } }
 buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("release") } }
 ```
+
+Every interpolated value (keystore path, key alias, env-var names) is escaped for a
+double-quoted Kotlin literal first — `\`, `"`, `$` and newlines — so a path with a quote
+in it cannot close the literal, and a `$` cannot interpolate a Gradle expression.
 
 No `keystore.properties` is written any more. Dropping `signing.android.keystorePath`
 removes the block *and* a legacy `keystore.properties` left by an older build (a single
@@ -159,12 +169,28 @@ named file inside `gen/android`, never a recursive remove).
 unset — `bundle.iOS` and `bundle.android` stay as empty objects, `bundle.macOS` is omitted
 entirely.
 
-## Safety: the clean guard
+## Safety: the path rules
 
-`projectDir` is gitignored build output, so `clean()` is destructive by design. Before any
-path is computed, `assertCleanableRoot(root, cwd, home)` refuses a `projectDir` that is the
-current working directory, the home directory, a filesystem root, or an ancestor of the
-cwd, with:
+`projectDir` is gitignored build output, so `clean()` is destructive by design. One helper
+(`paths.ts`) decides what counts as derived state, and both the destructive guard and the
+composition-time config check ask it — so what `createApp` accepts and what `clean()` is
+willing to delete can never drift apart.
+
+**The rule is positive containment, not a blacklist.** A directory is derived state only if
+it resolves strictly INSIDE the current working directory (or inside the OS temp root,
+where test and smoke workspaces are `mkdtemp`'d), and is not — and does not contain — the
+cwd or the home directory. `~/Documents` is refused for the same reason `/` is: it was
+never derived state, it just is not on a list of famous paths.
+
+| Rule | Why |
+|---|---|
+| resolved with `realpath` when the path exists | a symlink pointing out of the project is judged where it lands, not where it reads |
+| compared NFC-normalized, case-insensitively on darwin/win32 | `/Repo/App` and `/repo/app` are the same directory there |
+| must be strictly inside cwd or the temp root | an absolute path elsewhere on the disk is never this app's build output |
+| must not be, or contain, cwd or home | a `projectDir` that swallows the checkout deletes the checkout |
+| must not be a filesystem root | — |
+
+Before any path is computed, `assertCleanableRoot(root, cwd, home, platform)` applies it:
 
 ```
 [native] Refusing to clean projectDir "<root>".
@@ -175,10 +201,13 @@ It is a pure predicate and it is tested as one — an unsafe path is never hande
 `clean()`. Every surviving candidate path is then validated against `projectDir` by
 `assertWithinRoot` before deletion.
 
-The writer has the mirror-image guard: `assertWritablePath` refuses to write into
-`target/`, `.gradle/`, `DerivedData` or `Pods`, scanning **only the path below
-`projectDir`** — a repository checked out under a directory called `target` is a normal
-checkout, not a violation.
+The writer has the mirror-image guard. `assertWritablePath` refuses:
+
+- any path **outside `projectDir`** — an empty, `..`-leading or absolute relative form:
+  `[native] Refusing to write outside projectDir: <path>.`
+- any path through `target/`, `.gradle/`, `DerivedData` or `Pods`, scanning **only the path
+  below `projectDir`** — a repository checked out under a directory called `target` is a
+  normal checkout, not a violation.
 
 ## Configuration
 
@@ -187,10 +216,24 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 (all declared in the framework's `src/config.ts`).
 
 `onInit` runs `validate.ts` over the global config at composition time and throws
-`[native]`-prefixed errors for: a missing/empty `app.name`, a non-reverse-DNS `app.identifier`, missing
-`web.build`/`web.devCommand`/`web.devUrl`/`web.dist`, any `config.system` entry the
-registry doesn't recognize, and a `"deep-link"` entry in `config.system` without a
-matching non-empty `capabilities["deep-link"].scheme`.
+`[native]`-prefixed errors for:
+
+| Config | Rejected when |
+|---|---|
+| `app.name` | missing or empty |
+| `app.identifier` | not reverse-DNS |
+| `app.version` | not `MAJOR.MINOR.PATCH[-+suffix]` — it lands raw in a Cargo TOML string |
+| `app.buildNumber` | anything but word characters and dots — it lands raw in plist/JSON |
+| `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
+| `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
+| `projectDir` / `outDir` | resolving outside the project (same rule as the clean guard) |
+| `config.system` entries | not in the capability registry |
+| `capabilities["deep-link"].scheme` | missing, or not a valid URL scheme, while `deep-link` is composed |
+
+The value rules exist because each of those strings is interpolated **verbatim** into a
+generated file: a quote in the wrong place rewrites the file around it. Failing at
+`createApp` is also what makes the `projectDir` rule useful — the misconfiguration is
+reported before anything is generated, not at clean time.
 
 ### Capability registry (5 rows)
 

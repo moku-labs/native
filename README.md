@@ -182,7 +182,7 @@ Three behaviours worth knowing before the first build:
 
 - **Placeholder icon.** `project.ensureIconSource()` returns `path.resolve(app.icon)` and throws a `[native]` fix-it when that file is missing. With `app.icon` unset it writes an embedded 1024×1024 PNG to `<projectDir>/placeholder-icon.png` and returns that. The icons phase reports `generated`, `placeholder`, or `up to date`.
 - **`tray` is a cargo feature, not a plugin.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. Every other registry row is a real plugin, so `RegistryRow.npmPackage`/`crate` are optional and consumers of `getRegistryRows()` null-check them.
-- **`clean()` refuses an unsafe root.** `assertCleanableRoot` throws before any path is computed when `projectDir` is the cwd, the home directory, a filesystem root, or an ancestor of the cwd:
+- **`clean()` refuses anything that is not derived state.** The rule is positive containment, not a blacklist: `projectDir` must resolve strictly *inside* the cwd (or the OS temp root, where test workspaces live) and must not be — or contain — the cwd or the home directory, nor be a filesystem root. Symlinks are resolved with `realpath`, and comparison is case-insensitive on macOS/Windows. `assertCleanableRoot` throws before any path is computed, and `createApp` rejects the same `projectDir`/`outDir` up front:
 
   ```
   [native] Refusing to clean projectDir "<root>".
@@ -257,7 +257,7 @@ The first iOS build also runs `tauri ios init` once, then rewrites the build pha
 
 ## When a build fails
 
-A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (cause lines first, then the raw tail — `cli` prints it in a branded box above the error line). Classification runs per line over both streams, most specific first:
+A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it in a branded box above the error line, each line truncated to 160 characters). Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
 
 | `kind` | Means |
 |---|---|

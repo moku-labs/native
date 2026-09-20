@@ -46,10 +46,10 @@ type BuildResult = {
 |---|---|---|
 | `scaffold` | own | Ensures `projectDir` exists. Nothing else: the mobile `gen/` tree is initialized in `codegen`, because `tauri ios\|android init --ci` refuses to run before `tauri.conf.json` exists. |
 | `codegen` | `project` + `tauri` | `project.generate()` first. Mobile then: `tauri.mobileInit()` when `project.getCompleteness()` is `"not-initialized"`, the completeness gate (an `"incomplete"` tree **fails fast** with a `[native]` fix-it pointing at `native doctor` / `native clean --target <t>` — a partial tree is never silently re-initialized), then the idempotent `project.patchMobile({ target, runner: tauri.getRunner() })` pass — Tauri's generated build phase calls a bare `node tauri` command that does not exist. |
-| `icons` | `project` + `tauri` | Source from `project.ensureIconSource()` (`config.app.icon`, or a generated 1024×1024 placeholder), then `tauri.icon({ source })`. Regeneration is skipped **only** when `src-tauri/icons/icon.png` is newer than the source AND this pass did not run `mobileInit` (a fresh `gen/` tree ships Tauri's default icons). Detail: `"up to date"`, `"generated"` or `"placeholder"`. |
+| `icons` | `project` + `tauri` | Source from `project.ensureIconSource()` (`config.app.icon`, or a generated 1024×1024 placeholder), then `tauri.icon({ source })`. Regeneration is skipped **only** when `src-tauri/icons/icon.png` exists, the stamp beside it (`src-tauri/icons/.source` — absolute source path, size, mtime) still describes the current source, AND this pass did not run `mobileInit` (a fresh `gen/` tree ships Tauri's default icons). The stamp is what makes pointing `app.icon` at an OLDER file regenerate, which an mtime comparison alone misses. Detail: `"up to date"`, `"generated"` or `"placeholder"`. |
 | `compile` | `tauri.build()` | One subprocess covers compile+bundle (D-013); `compile` carries the live `onTick` progress stream (`status: "progress"`, real crate counts, never a fake percentage). |
 | `bundle` | (same subprocess) | The transition is **live**: the first output line matching the bundling pattern closes `compile` and opens `bundle` while the subprocess is still running. No transition line: `compile` closes at exit and `bundle` is reported with a zero duration. A failure is attributed to whichever phase is open, so a bundling/signing error reads as `bundle`, not `compile`. |
-| `collect` | own (`collect.ts`) | Locates artifacts via the layout from `project.getBundleLayout({ target })`, copies them to `outDir/<target>/`. The artifact flavour picks ONE pattern set, never two: iOS collects the `*-sim/*.app` with `simulator` and the `.ipa` otherwise; Android collects `**/*.aab` with `aab` and `**/*.apk` otherwise — a stale artifact from the other flavour can never ship. **Zero matches is an error** — never a silent empty success. |
+| `collect` | own (`collect.ts`) | Locates artifacts via the layout from `project.getBundleLayout({ target })`, copies them to `outDir/<target>/`. The artifact flavour picks ONE pattern set, never two: iOS collects the `*-sim/*.app` with `simulator` and the `.ipa` otherwise; Android collects `bundle/**/*elease*/*.aab` with `aab` and `apk/**/*elease*/*.apk` otherwise (the release flavour is pinned in the glob: Gradle writes every build type side by side, so an unpinned `outputs/**` pattern ships a debug installer) — a stale artifact from the other flavour can never ship. Each destination is REMOVED before the copy (`fs.cp` merges into an existing `.app`, leaving stale files inside the bundle), after asserting it is strictly inside `<outDir>/<target>` and that directory strictly inside `outDir`. Matches are deduplicated by destination name, last one wins. **Zero matches is an error** — never a silent empty success. |
 
 ## Events
 
@@ -75,10 +75,12 @@ artifact context).
   (Cargo's release output), mobile under `src-tauri/` (the `gen/<platform>/` tree) — and
   `bundlePatterns(layout, target, opts)` turns the layout's format directories into globs.
   Copies use `fs.cp(..., { recursive: true })` so a macOS `.app` bundle (a directory) and
-  single-file installers copy through the same call.
+  single-file installers copy through the same call, over a destination removed first and
+  proven to sit inside the delivery directory (`artifactDestination()`).
 - **Simulator vs device** — `collectArtifacts(..., { simulator: true })` matches
   `gen/apple/build/*-sim/*.app` and **never** a device `.ipa`; a plain iOS pass matches
-  `gen/apple/build/**/*.ipa` and never the simulator bundle. A simulator build is unsigned and
+  `gen/apple/build/**/*.ipa` and never the simulator bundle — one `.ipa` name per delivery,
+  however many stale arch directories still hold a copy. A simulator build is unsigned and
   produces a `.app` DIRECTORY whose name carries the product's display name, spaces included —
   hence the recursive copy.
 - **Dependencies resolved once** — `createBuildApi` resolves `project` and `tauri` at

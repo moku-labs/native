@@ -87,7 +87,9 @@ pluginConfigs: {
 
 `probeTimeoutMs` bounds every check twice over: the real probe hands it to `spawn` as its
 `timeout`, and `run()` races each check against it. A check that outruns the budget yields
-`[native] doctor check "<id>" timed out.` as a **warn** — a slow toolchain probe is not a broken
+`[native] doctor check "<id>" timed out.` as a **warn**, reported under the id the check
+itself would have produced (`Check.resultId(scope)` — `signing-macos`, not `signing`), so the
+row lines up with the live one the cli already printed — a slow toolchain probe is not a broken
 toolchain, so it never flips `report.ok`.
 
 ## Design notes

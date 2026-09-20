@@ -24,7 +24,9 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
   (Android: emit a store bundle instead of an apk) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
   hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` is framed in a
-  branded `box` above the `[native]` error line, then the error rethrows unchanged.
+  branded `box` above the `[native]` error line (tail lines wider than 160 characters are
+  truncated with an ellipsis, so one huge diagnostic cannot wrap the box into noise), then the
+  error rethrows unchanged.
 - **`dev`** — awaits `build.prepare({ target })` first, so `tauri dev` never meets a
   half-generated tree; the target defaults to the host target and a host with no
   desktop target throws the `[native]` fix-it error. Then it runs the dev loop

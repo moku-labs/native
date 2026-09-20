@@ -60,7 +60,10 @@ app.tauri.getRunner(): { nodePath: string; tauriJsPath: string }
   };
   ```
   There is no stdout "ready" marker (tauri#4740) — `ready` resolves from a `devUrl` readiness
-  poll and rejects (reaping the process group) if the configured timeout elapses first. A second
+  poll (each probe bounded by a 2s fetch timeout) and rejects, reaping the process group, if the
+  configured timeout elapses first. It also rejects the moment the session is over —
+  `[native] dev session stopped before the dev server became ready.` — so Ctrl-C or a dev
+  process that died on a taken port never polls out the full window. A second
   concurrent `dev()` call throws `[native] tauri dev already running`. Every dev-process output
   line runs through the same entropy-gated scrubber as the one-shot verbs before reaching
   `onOutput` (the render seam `cli`'s dev verb consumes) or the debug log — no output path
@@ -91,6 +94,10 @@ SDK platform reports both (`Found no destinations … No devices found`), and on
 fix-it helps. `config-invalid` is anchored to a failure verb so an ordinary `tauri.conf.json`
 mention in progress output is not classified as a config error.
 
+Only **signal lines** (the ones the `stderrTail` section lists) are classified: a 50k-line
+xcodebuild log narrates `CodeSign <path>` and exports the whole keychain environment, and one
+such incidental mention must never decide the taxonomy for the build.
+
 Lines matching `^\s*Warn\b` are excluded from classification entirely. Every unsigned iOS
 simulator build prints `Warn No code signing certificates found …`, which is harmless — matching
 it would bucket *every* iOS failure as `signing-failed`. `no code signing` is deliberately not a
@@ -102,10 +109,12 @@ signing pattern; a real refusal says `No signing certificate "…" found` or
 A plain "last 20 lines" tail is useless for xcodebuild: those lines are a simulator destination
 list, while the cause sits hundreds of lines earlier. The tail is built instead as
 
-1. up to **15 signal lines** from the whole scrubbed output — lines matching
-   `\berror\b[: ]`, `^\s*Error\b`, `panicked`, `Cannot find`, `not found`, `failed` —
-   de-duplicated, in original order, skipping `export …` environment dumps and
-   `*_ERROR` / `WARNINGS_AS_ERRORS` build-setting echoes;
+1. the **last 15 signal lines** of the scrubbed output — lines matching
+   `\berror\b[: ]`, `^\s*Error\b`, `panicked`, `cannot find`, `not found`, `no <x> found`,
+   `not installed`, `PhaseScriptExecution`, `failed` — de-duplicated, in original order,
+   skipping `export …` environment dumps and `*_ERROR` / `WARNINGS_AS_ERRORS` build-setting
+   echoes. The last ones, not the first: a long build restates its early warnings while the
+   failure that stopped it is at the end;
 2. a `…` separator line (omitted when nothing looked like a cause);
 3. the **last 10 lines** verbatim.
 
@@ -136,16 +145,31 @@ needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global 
   `handle.stop()` for explicit teardown, and cleanup on natural process exit. This also covers
   Ctrl-C, where `onStop` would never fire anyway.
 - **Secret scrubbing** — every subprocess output line is routed through `scrub.ts` before it
-  reaches a log, a callback, or a thrown error: known secret env-var names (`APPLE_PASSWORD`,
-  `APPLE_CERTIFICATE*`, `TAURI_SIGNING_*`, …) are always masked; any other sufficiently long,
-  high-entropy token is masked too (Shannon entropy, not a fixed denylist). Two exemptions from
-  the entropy pass: tokens containing a path separator or `::` (cargo registry paths, temp dirs,
-  artifact paths, URLs and panic backtraces all clear the entropy bar, and masking them would
-  delete the only actionable part of a build failure), and tokens that are nothing but a
-  canonical 8-4-4-4-12 UUID plus a short `key:` prefix and punctuation — roughly half of all
-  UUIDs clear the bar, which turned `id:41E558D0-…` in every simulator destination list into a
-  mask. Both exemptions are applied AFTER the known-name pass, so `APPLE_API_KEY_PATH=/Users/…`
-  is still masked.
+  reaches a log, a callback, or a thrown error. Four passes, in order:
+
+  | Pass | Masks |
+  |---|---|
+  | known env-var names | `APPLE_PASSWORD`, `APPLE_CERTIFICATE*`, `TAURI_SIGNING_*`, `ANDROID_KEY*_PASSWORD`, whatever the value's entropy. A quoted value is captured whole, so a password with spaces does not leak its tail |
+  | URL userinfo | `scheme://user:token@host` → `scheme://[native:scrubbed]@host`, always — a URL is location-shaped and would otherwise be exempt |
+  | long hex runs | a standalone run of ≥ 32 hex characters (digests, keys); hex tops out at exactly 4 bits/char, so the entropy pass can never reach it |
+  | Shannon entropy | any remaining token ≥ 20 chars above 4 bits/char |
+
+  A location-shaped token (one carrying `/`, `\` or `::`) is not exempt from the entropy pass —
+  it is scanned **segment by segment**, so `/var/tmp/<secret>/App.dmg` loses only the secret
+  while the path stays readable. Three things stay readable by name: canonical 8-4-4-4-12 UUIDs
+  plus a short `key:` prefix (roughly half of all UUIDs clear the entropy bar, which turned
+  `id:41E558D0-…` in every simulator destination list into a mask), the cargo registry's
+  `index.crates.io-<hash>` segment, and a git sha announced by `commit `, `rev ` or `#`.
+  Everything is applied AFTER the known-name pass, so `APPLE_API_KEY_PATH=/Users/…` is still
+  masked whole.
+- **Group signal only when we made the group** — `dev` spawns `detached`, so its child is a
+  process group leader and SIGTERM/SIGKILL go to the negated pid, reaping tauri's own
+  cargo/xcodebuild/gradle children with it. One-shot verbs spawn attached: the child shares this
+  process's group, so signalling `-pid` would hit an unrelated group or fail with ESRCH inside an
+  abort handler (an unhandled rejection). Those are signalled by plain pid. Both signals are
+  best-effort — a process that exited a microsecond earlier must not fail a teardown — and the
+  SIGKILL rung waits a short settle window for the exit instead of claiming the process is gone
+  the instant the signal is sent.
 - **`close`, not `exit`** — a run resolves when the child's stdio pipes close, not when the
   process exits. tauri's own children (xcodebuild, gradle, cargo) inherit those pipes and keep
   writing after the parent is gone; resolving on `exit` drops exactly the tail an error message
