@@ -28,8 +28,10 @@ code, and tray is desktop-only (filtered from every mobile target-set).
 | `paths.ts` | **the one owner of path normalization/containment** — realpath resolution, case rules, the project-anchor walk, and the "is this derived state?" / "may we deliver here?" predicates shared by `clean.ts`, `validate.ts` and (via the API) `build`'s collect guard |
 | `generators/*.ts` | one generated artifact each (see the table below) |
 | `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
+| `mobile/files.ts` | **the one owner of which generated files a patch may touch** — never anything under `gen/*/build` |
 | `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` |
 | `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
+| `mobile/xcode-settings.ts` | the iOS entitlements-modification setting (`project.pbxproj` + `project.yml`) |
 | `mobile/patch.ts` | orchestration only — which patches a platform needs, and in which order |
 
 ## Generated artifacts
@@ -96,6 +98,11 @@ app.project.getRequiredFiles({ target: "android" }); // => required gen/android 
   brand-new app packages without drawing an icon first.
 - `clean({ target? })` — deletes derived state. Mobile `target` → `gen/<platform>` only;
   desktop `target` → that target's bundle output; omitted → the whole `projectDir`.
+- `clearMobileBuildOutput({ target })` — removes the PREVIOUS build output of a mobile
+  target so the next compile writes into an empty tree: `gen/apple/build` for iOS, nothing
+  for Android (Gradle manages its own `build` tree and reuses it correctly). Missing
+  directory → `{ removed: [] }`. `build` calls it at the start of the compile phase; see
+  [iOS rebuilds](#ios-rebuilds).
 - `resolveDerivedPath(path)` — the one comparable form every containment guard in this
   framework compares in: real path (symlinks followed), NFC, case-folded where the
   filesystem is. `build`'s collect guard borrows it rather than keeping a second, lexical
@@ -144,6 +151,53 @@ first Xcode/Android-Studio build phase, with nothing in the log pointing back he
 ```
 
 A file that never mentions the verb is simply unchanged.
+
+## iOS rebuilds
+
+A first iOS build of a clean tree passes; the SECOND build of the same tree used to fail
+twice over. Both failures are the generated project's, not the app's, so both are patched
+here.
+
+**Xcode: the entitlements file.** A capability plugin's build script rewrites
+`<app>_iOS.entitlements` while Xcode is compiling, and Xcode refuses:
+
+```
+error: Entitlements file "<app>_iOS.entitlements" was modified during the build,
+which is not supported
+```
+
+`patchMobile({ target: "ios" })` therefore adds the setting Xcode itself names, whether or
+not a `runner` is passed:
+
+| File | Where | Written as |
+|---|---|---|
+| `gen/apple/*.xcodeproj/project.pbxproj` | every `buildSettings = { … }` block, once, at its siblings' indentation | `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;` |
+| `gen/apple/project.yml` | each target's `settings.base` (never a `settingGroups` block) | `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: true` |
+
+`project.yml` carries it so a later xcodegen regeneration writes it back into the pbxproj.
+Both transforms are pure text: line endings (CRLF included), indentation and every
+neighbouring line survive byte for byte, a block that already carries the setting is left
+alone, and a block that turned it OFF is rewritten to `YES`. A second pass reports every
+file unchanged.
+
+**Tauri: the previous build output.** `tauri ios build` renames its fresh `.app` into the
+archive the previous build left behind:
+
+```
+failed to rename app …/gen/apple/build/<app>_iOS.xcarchive/Products/Applications/<Name>.app:
+Directory not empty (os error 66)
+```
+
+`clearMobileBuildOutput({ target: "ios" })` removes `gen/apple/build` before the compiler
+starts. It is a recursive delete, so it passes the same derived-path gate as `clean()` AND
+a containment check: the REAL path of `gen/apple/build` (symlinks resolved) must sit
+strictly inside the real `projectDir`. A `build` symlink pointing elsewhere is refused,
+never followed:
+
+```
+[native] Refusing to remove build output outside projectDir: <real path>.
+  Remove that link by hand — "<path>" must be a real directory inside <projectDir>.
+```
 
 ## Signing
 

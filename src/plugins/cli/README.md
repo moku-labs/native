@@ -24,11 +24,13 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
   (Android: emit a store bundle instead of an apk) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
   hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` is framed in a
-  branded `box` above the `[native]` error line (each tail line is truncated with an ellipsis
-  to the branded console's own width minus the box chrome, floor 40, so the whole box fits
-  the terminal instead of wrapping into noise — the width comes from `ui.width`, which
-  `terminalWidth()` bound to `process.stdout.columns`, clamped to 60–160 and falling back to
-  66 when the stream has no columns), then the error rethrows unchanged.
+  branded `box` above the `[native]` error line, then the error rethrows unchanged. How wide
+  a tail line may be is one pure decision, `tailLineBound(process.stdout.columns)`:
+
+  | stdout | bound | why |
+  |---|---|---|
+  | a terminal, 120 columns | 114 (`terminalWidth()` clamps 60–160, minus the box chrome, floor 40) | a single Rust/xcodebuild diagnostic runs thousands of characters and would wrap the box into noise |
+  | no columns (CI, `native build > build.log`, any pipe) | none — every line is kept whole | nothing wraps against a file, and truncating deletes the only copy of the toolchain's own error text |
 - **`dev`** — awaits `build.prepare({ target })` first, so `tauri dev` never meets a
   half-generated tree; the target defaults to the host target and a host with no
   desktop target throws the `[native]` fix-it error. Then it runs the dev loop
