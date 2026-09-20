@@ -4,7 +4,7 @@
  * instead of deep inside `tauri build`.
  */
 import type { Config } from "../../config";
-import { isDerivedPath } from "./paths";
+import { isDeliveryPath, isDerivedPath } from "./paths";
 import { assertKnownCapabilities } from "./registry";
 
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/i;
@@ -51,33 +51,55 @@ function assertShape(
 }
 
 /**
- * Validates that a configured output directory is derived state this app may own — it
- * must resolve strictly inside the current working directory (or the OS temp root, where
- * test workspaces live). This is the composition-time twin of the clean guard: a
- * `projectDir` that `clean()` would refuse to delete now fails at `createApp` instead.
+ * Validates that `projectDir` is derived state this app may own — it must resolve strictly
+ * inside the project (the nearest repository/workspace root at or above the cwd) or inside
+ * the OS temp root, where test workspaces live. This is the composition-time twin of the
+ * clean guard: a `projectDir` that `clean()` would refuse to delete now fails at
+ * `createApp` instead.
  *
- * @param field - `"projectDir"` or `"outDir"`, used verbatim in the error.
- * @param value - The configured directory.
- * @param example - The default value, quoted in the fix-it line.
- * @throws {Error} When the directory resolves outside the project.
+ * @param value - The configured project directory.
+ * @throws {Error} When the directory is not derived state this app may delete.
  * @example
  * ```ts
- * assertDerivedDirectory("projectDir", global.projectDir, ".moku/tauri");
+ * assertDerivedDirectory(global.projectDir);
  * ```
  */
-function assertDerivedDirectory(field: string, value: string, example: string): void {
+function assertDerivedDirectory(value: string): void {
   if (isDerivedPath(value)) return;
 
   throw new Error(
-    `[native] config.${field} "${value}" resolves outside the project.\n  Set config.${field} to a path inside the current working directory, such as "${example}".`
+    `[native] config.projectDir "${value}" resolves outside the project.\n  Set config.projectDir to a path inside the project, such as ".moku/tauri".`
+  );
+}
+
+/**
+ * Validates that `outDir` may receive delivered artifacts. Deliberately looser than
+ * {@link assertDerivedDirectory}: `outDir` is written into and replaced file by file, never
+ * recursively cleaned, so a CI cache mount or a shared artifacts volume outside the
+ * checkout is legitimate. Only a filesystem root, the home directory, and an ancestor of
+ * the working or home directory are refused.
+ *
+ * @param value - The configured delivery directory.
+ * @throws {Error} When the directory is one this app must not write installers into.
+ * @example
+ * ```ts
+ * assertDeliveryDirectory(global.outDir);
+ * ```
+ */
+function assertDeliveryDirectory(value: string): void {
+  if (isDeliveryPath(value)) return;
+
+  throw new Error(
+    `[native] config.outDir "${value}" is a directory this app must not deliver into.\n  Set config.outDir to a dedicated delivery directory such as "dist-native".`
   );
 }
 
 /**
  * Validates the global config at composition time — throws `[native]`-formatted errors
  * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, `projectDir`/`outDir` outside the project,
- * unknown `config.system` names, or a `deep-link` composition missing its scheme.
+ * generated file they are written into, a `projectDir` outside the project, an `outDir`
+ * this app must not deliver into, unknown `config.system` names, or a `deep-link`
+ * composition missing its scheme.
  *
  * @param global - Frozen global framework config.
  * @throws {Error} When identity, web wiring, interpolated values, derived directories,
@@ -153,11 +175,12 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     'Reference the password by variable NAME, such as "ANDROID_KEY_PASSWORD" — never the password itself.'
   );
 
-  // Stanza 3 — the directories this framework writes into and deletes from. Checked with
-  // the same containment rule the destructive clean guard uses, so a projectDir clean()
-  // would refuse fails here, at createApp, instead of at clean time.
-  assertDerivedDirectory("projectDir", global.projectDir, ".moku/tauri");
-  assertDerivedDirectory("outDir", global.outDir, "dist-native");
+  // Stanza 3 — the directories this framework writes into and deletes from. projectDir is
+  // checked with the same containment rule the destructive clean guard uses, so a
+  // projectDir clean() would refuse fails here, at createApp, instead of at clean time.
+  // outDir is only ever written into, and gets the looser delivery rule.
+  assertDerivedDirectory(global.projectDir);
+  assertDeliveryDirectory(global.outDir);
 
   // Stanza 4 — the composed capability set. Names are validated against the registry, and
   // deep-link is the one row that cannot be packaged from its defaults alone.

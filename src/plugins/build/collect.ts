@@ -3,10 +3,11 @@
  * the project plugin (`project.getBundleLayout`) and arrives here as a {@link BundleLayout};
  * this file only turns it into globs and copies what they match.
  */
-import { cp, glob, mkdir, rm } from "node:fs/promises";
+import { cp, glob, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { BuildFlavor, Target } from "../../config";
 import type { BundleLayout } from "../project/layout";
+import type { PathResolver } from "./types";
 
 /**
  * Release-flavour Android outputs. Gradle writes every build type side by side
@@ -50,6 +51,14 @@ export type CollectResult = { outPath: string; artifacts: readonly string[] };
  * looks for exactly the artifact that build produced.
  */
 export type CollectOptions = BuildFlavor;
+
+/**
+ * Everything one collect pass needs beyond its paths: the build flavour, plus the path
+ * resolver every containment comparison goes through. The resolver is the project plugin's
+ * `resolveDerivedPath` — this phase deletes a destination before copying onto it, and a
+ * lexically-contained path can still be a symlink into another tree.
+ */
+export type CollectInput = CollectOptions & { resolvePath: PathResolver };
 
 /**
  * Picks the glob patterns for one collect pass, relative to {@link bundleRoot}. An iOS
@@ -107,31 +116,38 @@ function isStrictlyInside(child: string, parent: string): boolean {
  * containment facts — delivery directory strictly inside the output directory, destination
  * strictly inside the delivery directory — are established here, before any removal.
  *
- * @param opts - The three paths involved.
+ * Both facts are established on REAL paths: `opts.resolvePath` follows symlinks and folds
+ * case exactly as the project plugin's clean guard does. A lexical comparison reads
+ * `<outDir>/<target>` as contained even when it is a link into an unrelated tree — and the
+ * next statement would delete that tree.
+ *
+ * @param opts - The three paths involved plus the resolver to compare them with.
  * @param opts.outputDirectory - The installer delivery root (`config.outDir`).
  * @param opts.outPath - The target's delivery directory (`<outDir>/<target>`).
  * @param opts.artifactName - The matched artifact's base name.
+ * @param opts.resolvePath - `project.resolveDerivedPath` — real path, comparable form.
  * @returns The absolute-or-relative destination path, in the same form as `outPath`.
  * @throws {Error} `[native]` when either path escapes the directory that must contain it.
  * @example
  * ```ts
- * artifactDestination({ outputDirectory: "dist-native", outPath: "dist-native/macos", artifactName: "App.dmg" });
+ * artifactDestination({ outputDirectory: "dist-native", outPath: "dist-native/macos", artifactName: "App.dmg", resolvePath });
  * ```
  */
 export function artifactDestination(opts: {
   outputDirectory: string;
   outPath: string;
   artifactName: string;
+  resolvePath: PathResolver;
 }): string {
-  const deliveryRoot = path.resolve(opts.outputDirectory);
-  const deliveryDirectory = path.resolve(opts.outPath);
+  const deliveryRoot = opts.resolvePath(opts.outputDirectory);
+  const deliveryDirectory = opts.resolvePath(opts.outPath);
   const destination = path.join(opts.outPath, opts.artifactName);
 
   if (!isStrictlyInside(deliveryDirectory, deliveryRoot)) {
-    throw refuseOutside(opts.outPath, deliveryRoot);
+    throw refuseOutside(opts.outPath, path.resolve(opts.outputDirectory));
   }
-  if (!isStrictlyInside(path.resolve(destination), deliveryDirectory)) {
-    throw refuseOutside(destination, deliveryDirectory);
+  if (!isStrictlyInside(opts.resolvePath(destination), deliveryDirectory)) {
+    throw refuseOutside(destination, path.resolve(opts.outPath));
   }
   return destination;
 }
@@ -160,21 +176,25 @@ function refuseOutside(offending: string, root: string): Error {
  * (`.dmg`/`.exe`/`.msi`/`.AppImage`/`.deb`/`.rpm`/`.ipa`/`.aab`/`.apk`) both work through
  * the same call, and REPLACES an existing destination first — `cp` merges into a directory,
  * which would leave stale files inside a `.app` bundle and break its signature. Matches are
- * deduplicated by destination name (last match wins), so stale arch directories cannot put
- * the same installer in the artifact list twice. Zero matches is an error, never a silent
- * empty success — a shippable artifact is the whole point of this phase.
+ * deduplicated by destination name, keeping the NEWEST one, so stale arch directories cannot
+ * put the same installer in the artifact list twice — and cannot ship yesterday's binary
+ * either, which is what "whichever the glob happened to yield last" amounted to. Zero
+ * matches is an error, never a silent empty success — a shippable artifact is the whole
+ * point of this phase.
  *
  * @param projectDirectory - The generated Tauri project root (contains `src-tauri/`).
  * @param target - The packaging target being collected.
  * @param outputDirectory - The installer delivery root (`config.outDir`).
  * @param layout - The target's bundle layout, from `project.getBundleLayout`.
- * @param opts - Collect options (`simulator` collects the iOS `.app` instead of an `.ipa`;
- *   `aab` collects the Android store bundle instead of the `.apk`).
+ * @param input - The build flavour (`simulator` collects the iOS `.app` instead of an `.ipa`;
+ *   `aab` collects the Android store bundle instead of the `.apk`) plus the path resolver
+ *   the containment guard compares with.
  * @returns The delivery directory and the copied artifact paths.
- * @throws {Error} When no glob pattern for `target` matches any file.
+ * @throws {Error} When no glob pattern for `target` matches any file, or when a path escapes
+ *   the directory that must contain it.
  * @example
  * ```ts
- * const { outPath } = await collectArtifacts(projectDir, "macos", "dist-native", layout);
+ * const { outPath } = await collectArtifacts(projectDir, "macos", "dist-native", layout, { resolvePath });
  * ```
  */
 export async function collectArtifacts(
@@ -182,17 +202,11 @@ export async function collectArtifacts(
   target: Target,
   outputDirectory: string,
   layout: BundleLayout,
-  opts?: CollectOptions
+  input: CollectInput
 ): Promise<CollectResult> {
   const root = bundleRoot(projectDirectory, layout);
-  const patterns = bundlePatterns(layout, target, opts);
-
-  const matches = new Map<string, string>();
-  for (const pattern of patterns) {
-    for await (const match of glob(pattern, { cwd: root })) {
-      matches.set(path.basename(match), match);
-    }
-  }
+  const patterns = bundlePatterns(layout, target, input);
+  const matches = await newestMatchPerName(root, patterns);
 
   if (matches.size === 0) {
     const globbedRoots = patterns.map(pattern => path.join(root, pattern)).join(", ");
@@ -206,12 +220,74 @@ export async function collectArtifacts(
 
   const artifacts: string[] = [];
   for (const [artifactName, match] of matches) {
-    const source = path.join(root, match);
-    const destination = artifactDestination({ outputDirectory, outPath, artifactName });
+    const source = path.join(root, match.relativePath);
+    const destination = artifactDestination({
+      outputDirectory,
+      outPath,
+      artifactName,
+      resolvePath: input.resolvePath
+    });
     await rm(destination, { recursive: true, force: true });
     await cp(source, destination, { recursive: true });
     artifacts.push(destination);
   }
 
   return { outPath, artifacts };
+}
+
+/** One glob match, with the modification time that decides a name collision. */
+type ArtifactMatch = { relativePath: string; modifiedAtMs: number };
+
+/**
+ * Globs every pattern and keeps, per destination name, the most recently modified match.
+ * A mobile build leaves one directory per arch and never prunes the ones it did not rebuild,
+ * so the same installer name legitimately exists several times; the one this build just
+ * produced is the newest.
+ *
+ * @param root - The output root the patterns are relative to.
+ * @param patterns - The glob patterns for this target and flavour.
+ * @returns The winning match per base name, in first-seen order.
+ * @example
+ * ```ts
+ * await newestMatchPerName(root, ["gen/apple/build/**\/*.ipa"]);
+ * ```
+ */
+async function newestMatchPerName(
+  root: string,
+  patterns: readonly string[]
+): Promise<Map<string, ArtifactMatch>> {
+  const matches = new Map<string, ArtifactMatch>();
+
+  for (const pattern of patterns) {
+    for await (const relativePath of glob(pattern, { cwd: root })) {
+      const name = path.basename(relativePath);
+      const modifiedAtMs = await modifiedAt(path.join(root, relativePath));
+      const previous = matches.get(name);
+      if (previous === undefined || modifiedAtMs > previous.modifiedAtMs) {
+        matches.set(name, { relativePath, modifiedAtMs });
+      }
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * Reads a path's modification time, treating an unreadable path as the oldest possible one
+ * so it can never beat a match we could actually stat.
+ *
+ * @param target - The path to stat.
+ * @returns The modification time in milliseconds.
+ * @example
+ * ```ts
+ * await modifiedAt("/repo/.moku/tauri/src-tauri/target/release/bundle/dmg/App.dmg");
+ * ```
+ */
+async function modifiedAt(target: string): Promise<number> {
+  try {
+    const stats = await stat(target);
+    return stats.mtimeMs;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
 }

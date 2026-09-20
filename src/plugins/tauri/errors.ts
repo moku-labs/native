@@ -69,9 +69,14 @@ const IGNORED_LINE_PATTERN = /^\s*Warn\b/;
  * xcodebuild log, where the last lines are a destination list and the cause sits
  * hundreds of lines earlier — and the only lines the taxonomy is allowed to classify
  * over, so that an ordinary `CodeSign <path>` progress line cannot outrank them.
+ *
+ * Because it is the gate, it must admit every trigger {@link TAXONOMY_PATTERNS} keys on:
+ * a bucket whose only realistic line is not a signal line is unreachable however well its
+ * own pattern is written. `not booted` (device-unavailable) and `invalid config`
+ * (config-invalid) announce themselves with neither an "error" nor a "failed".
  */
 const SIGNAL_LINE_PATTERN =
-  /\berror\b[: ]|^\s*Error\b|panicked|cannot find|not found|no \S+ found|not installed|PhaseScriptExecution|failed/i;
+  /\berror\b[: ]|^\s*Error\b|panicked|cannot find|not found|no \S+ found|not installed|not booted|invalid config|PhaseScriptExecution|failed/i;
 
 /**
  * Lines that read like a cause but never are: Xcode dumps the whole build environment

@@ -487,7 +487,11 @@ export async function runPipeline(
       target,
       ctx.global.outDir,
       deps.project.getBundleLayout({ target }),
-      { simulator: opts.simulator, aab: opts.aab }
+      {
+        simulator: opts.simulator,
+        aab: opts.aab,
+        resolvePath: deps.project.resolveDerivedPath
+      }
     )
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });

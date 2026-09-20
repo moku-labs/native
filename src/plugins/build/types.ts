@@ -33,6 +33,13 @@ export type RunOptions = BuildFlavor & { target: Target };
 export type RunAllOptions = BuildFlavor & { targets?: readonly Target[] | undefined };
 
 /**
+ * Resolves a path to the comparable form containment is measured in — real path, symlinks
+ * followed, case folded. Always `project.resolveDerivedPath`: the project plugin owns that
+ * rule, and the collect guard must answer exactly what the clean guard answers.
+ */
+export type PathResolver = (target: string) => string;
+
+/**
  * The dependency API slices the pipeline calls, resolved ONCE in `createBuildApi` and
  * threaded through every phase — `Pick` rather than the whole `Api`, so the exact
  * cross-plugin surface build depends on (D-007) is readable in one place.
@@ -40,7 +47,12 @@ export type RunAllOptions = BuildFlavor & { targets?: readonly Target[] | undefi
 export type BuildDeps = {
   readonly project: Pick<
     ProjectApi,
-    "generate" | "getBundleLayout" | "getCompleteness" | "patchMobile" | "ensureIconSource"
+    | "generate"
+    | "getBundleLayout"
+    | "getCompleteness"
+    | "patchMobile"
+    | "ensureIconSource"
+    | "resolveDerivedPath"
   >;
   readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "getRunner">;
 };

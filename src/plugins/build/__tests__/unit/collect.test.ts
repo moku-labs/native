@@ -1,12 +1,20 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { TARGETS } from "../../../../config";
 import { bundleLayout } from "../../../project/layout";
+import { comparableRealPath } from "../../../project/paths";
 import { artifactDestination, bundlePatterns, bundleRoot, collectArtifacts } from "../../collect";
+
+/** The real resolver the pipeline threads in, from `project.resolveDerivedPath`. */
+const resolvePath = (target: string): string => comparableRealPath(target);
+
+/** Timestamps far enough apart that no filesystem's mtime granularity can blur them. */
+const OLDER = new Date(Date.now() - 600_000);
+const NEWER = new Date(Date.now() - 1000);
 
 describe("bundlePatterns", () => {
   it("has a non-empty glob pattern list for every target", () => {
@@ -53,20 +61,53 @@ describe("artifactDestination", () => {
   it("joins the artifact name onto the target's delivery directory", () => {
     const outPath = path.join(outDir, "macos");
 
-    expect(artifactDestination({ outputDirectory: outDir, outPath, artifactName: "App.dmg" })).toBe(
-      path.join(outPath, "App.dmg")
-    );
+    expect(
+      artifactDestination({
+        outputDirectory: outDir,
+        outPath,
+        artifactName: "App.dmg",
+        resolvePath
+      })
+    ).toBe(path.join(outPath, "App.dmg"));
   });
 
   it("refuses an artifact name that escapes the delivery directory", () => {
     const outPath = path.join(outDir, "macos");
 
     expect(() =>
-      artifactDestination({ outputDirectory: outDir, outPath, artifactName: "../escaped.dmg" })
+      artifactDestination({
+        outputDirectory: outDir,
+        outPath,
+        artifactName: "../escaped.dmg",
+        resolvePath
+      })
     ).toThrow(/^\[native\] Refusing to collect/);
     expect(() =>
-      artifactDestination({ outputDirectory: outDir, outPath, artifactName: ".." })
+      artifactDestination({ outputDirectory: outDir, outPath, artifactName: "..", resolvePath })
     ).toThrow(/^\[native\] Refusing to collect/);
+  });
+
+  it("refuses a delivery directory that is a symlink out of the output directory", async () => {
+    // A lexical guard reads `<outDir>/macos` as contained. Only a real-path guard sees that
+    // the collect pass is about to `rm -r` a directory in a different tree entirely.
+    const escapeTarget = await mkdtemp(path.join(tmpdir(), "moku-native-destination-escape-"));
+    const outPath = path.join(outDir, "macos");
+    await symlink(escapeTarget, outPath, "dir");
+
+    try {
+      expect(() =>
+        artifactDestination({
+          outputDirectory: outDir,
+          outPath,
+          artifactName: "App.dmg",
+          resolvePath
+        })
+      ).toThrow(/^\[native\] Refusing to collect/);
+    } finally {
+      // Explicit unlink: the symlink is removed, never followed.
+      await unlink(outPath);
+      await rm(escapeTarget, { recursive: true, force: true });
+    }
   });
 
   it("refuses a delivery directory that is not strictly inside the output directory", () => {
@@ -74,14 +115,16 @@ describe("artifactDestination", () => {
       artifactDestination({
         outputDirectory: outDir,
         outPath: outDir,
-        artifactName: "App.dmg"
+        artifactName: "App.dmg",
+        resolvePath
       })
     ).toThrow(/^\[native\] Refusing to collect/);
     expect(() =>
       artifactDestination({
         outputDirectory: outDir,
         outPath: path.join(outDir, "..", "elsewhere"),
-        artifactName: "App.dmg"
+        artifactName: "App.dmg",
+        resolvePath
       })
     ).toThrow(/^\[native\] Refusing to collect/);
   });
@@ -106,7 +149,9 @@ describe("collectArtifacts", () => {
     await mkdir(dmgDir, { recursive: true });
     await writeFile(path.join(dmgDir, "MyApp_1.0.0_aarch64.dmg"), "dmg-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"));
+    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"), {
+      resolvePath
+    });
 
     expect(result.outPath).toBe(path.join(outDir, "macos"));
     expect(result.artifacts).toEqual([path.join(outDir, "macos", "MyApp_1.0.0_aarch64.dmg")]);
@@ -123,7 +168,9 @@ describe("collectArtifacts", () => {
     await mkdir(path.join(appDir, "Contents"), { recursive: true });
     await writeFile(path.join(appDir, "Contents", "Info.plist"), "plist-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"));
+    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"), {
+      resolvePath
+    });
 
     const copiedApp = path.join(outDir, "macos", "MyApp.app");
     expect(result.artifacts).toContain(copiedApp);
@@ -144,7 +191,7 @@ describe("collectArtifacts", () => {
     await mkdir(path.join(staleApp, "Contents"), { recursive: true });
     await writeFile(path.join(staleApp, "Contents", "Stale.dylib"), "stale-bytes", "utf8");
 
-    await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"));
+    await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"), { resolvePath });
 
     // A merged copy would leave the stale file inside the bundle and break its signature.
     expect(existsSync(path.join(staleApp, "Contents", "Stale.dylib"))).toBe(false);
@@ -162,7 +209,9 @@ describe("collectArtifacts", () => {
     await writeFile(path.join(root, "bundle", "deb", "app.deb"), "b", "utf8");
     await writeFile(path.join(root, "bundle", "rpm", "app.rpm"), "c", "utf8");
 
-    const result = await collectArtifacts(projectDir, "linux", outDir, bundleLayout("linux"));
+    const result = await collectArtifacts(projectDir, "linux", outDir, bundleLayout("linux"), {
+      resolvePath
+    });
 
     expect(result.artifacts.map(artifact => path.basename(artifact)).toSorted()).toEqual([
       "app.AppImage",
@@ -186,14 +235,37 @@ describe("collectArtifacts", () => {
     await mkdir(outputsDir, { recursive: true });
     await writeFile(path.join(outputsDir, "app-release.apk"), "apk-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"));
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
+      resolvePath
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
   });
 
+  it("refuses to collect into a symlinked delivery directory, removing nothing", async () => {
+    const escapeTarget = await mkdtemp(path.join(tmpdir(), "moku-native-collect-escape-"));
+    const bystander = path.join(escapeTarget, "keep-me");
+    await writeFile(bystander, "bystander-bytes", "utf8");
+
+    const dmgDir = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
+    await mkdir(dmgDir, { recursive: true });
+    await writeFile(path.join(dmgDir, "MyApp.dmg"), "dmg-bytes", "utf8");
+    await symlink(escapeTarget, path.join(outDir, "macos"), "dir");
+
+    try {
+      await expect(
+        collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"), { resolvePath })
+      ).rejects.toThrow(/^\[native\] Refusing to collect/);
+      expect(await readFile(bystander, "utf8")).toBe("bystander-bytes");
+    } finally {
+      await unlink(path.join(outDir, "macos"));
+      await rm(escapeTarget, { recursive: true, force: true });
+    }
+  });
+
   it("throws a [native]-formatted error naming the globbed roots when nothing matches", async () => {
     await expect(
-      collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"))
+      collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"), { resolvePath })
     ).rejects.toThrow(
       /^\[native\] No macos installer artifacts found\.\n {2}Checked .*bundle\/dmg\/\*\.dmg.*bundle\/macos\/\*\.app/
     );
@@ -227,7 +299,8 @@ describe("collectArtifacts — android artifact flavour", () => {
     await seedBoth();
 
     const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
-      aab: true
+      aab: true,
+      resolvePath
     });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.aab")]);
@@ -236,14 +309,19 @@ describe("collectArtifacts — android artifact flavour", () => {
   it("default: collects the apk and never the store bundle", async () => {
     await seedBoth();
 
-    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"));
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
+      resolvePath
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
   });
 
   it("aab with nothing built: names the aab pattern in the [native] error", async () => {
     await expect(
-      collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), { aab: true })
+      collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
+        aab: true,
+        resolvePath
+      })
     ).rejects.toThrow(/Checked .*outputs\/bundle\/.*\.aab/);
   });
 
@@ -254,7 +332,9 @@ describe("collectArtifacts — android artifact flavour", () => {
     await writeFile(path.join(outputs, "apk", "universal", "debug", "app-debug.apk"), "debug");
     await writeFile(path.join(outputs, "apk", "universal", "release", "app-release.apk"), "apk");
 
-    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"));
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
+      resolvePath
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
   });
@@ -267,7 +347,8 @@ describe("collectArtifacts — android artifact flavour", () => {
     await writeFile(path.join(outputs, "bundle", "universalRelease", "app-release.aab"), "aab");
 
     const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
-      aab: true
+      aab: true,
+      resolvePath
     });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.aab")]);
@@ -322,7 +403,8 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await seedSimulatorApp();
 
     const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
-      simulator: true
+      simulator: true,
+      resolvePath
     });
 
     const copiedApp = path.join(outDir, "ios", "My Test App.app");
@@ -336,7 +418,8 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await seedDeviceIpa();
 
     const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
-      simulator: true
+      simulator: true,
+      resolvePath
     });
 
     expect(result.artifacts.map(artifact => path.basename(artifact))).toEqual(["My Test App.app"]);
@@ -346,31 +429,71 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await seedSimulatorApp();
     await seedDeviceIpa();
 
-    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"));
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      resolvePath
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "ios", "My Test App.ipa")]);
   });
 
-  it("device: reports one artifact per name when stale arch directories repeat it", async () => {
-    await seedDeviceIpa();
-    const staleArchDir = path.join(
+  /** Seeds a second arch directory carrying the same installer name. */
+  async function seedSecondArchIpa(content: string): Promise<string> {
+    const archDir = path.join(
       bundleRoot(projectDir, bundleLayout("ios")),
       "gen",
       "apple",
       "build",
       "x86_64"
     );
-    await mkdir(staleArchDir, { recursive: true });
-    await writeFile(path.join(staleArchDir, "My Test App.ipa"), "stale-ipa-bytes", "utf8");
+    await mkdir(archDir, { recursive: true });
+    const ipaPath = path.join(archDir, "My Test App.ipa");
+    await writeFile(ipaPath, content, "utf8");
+    return ipaPath;
+  }
 
-    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"));
+  it("device: reports one artifact per name when stale arch directories repeat it", async () => {
+    await seedDeviceIpa();
+    await seedSecondArchIpa("stale-ipa-bytes");
+
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      resolvePath
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "ios", "My Test App.ipa")]);
   });
 
+  it("device: ships the NEWEST build when a stale arch directory repeats the name", async () => {
+    const fresh = await seedDeviceIpa();
+    const stale = await seedSecondArchIpa("stale-ipa-bytes");
+    await utimes(fresh, NEWER, NEWER);
+    await utimes(stale, OLDER, OLDER);
+
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      resolvePath
+    });
+
+    expect(await readFile(result.artifacts[0] as string, "utf8")).toBe("ipa-bytes");
+  });
+
+  it("device: ships the newest build whichever directory the glob returns last", async () => {
+    const stale = await seedDeviceIpa();
+    const fresh = await seedSecondArchIpa("second-arch-bytes");
+    await utimes(stale, OLDER, OLDER);
+    await utimes(fresh, NEWER, NEWER);
+
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      resolvePath
+    });
+
+    expect(await readFile(result.artifacts[0] as string, "utf8")).toBe("second-arch-bytes");
+  });
+
   it("simulator with nothing built: names the simulator pattern in the [native] error", async () => {
     await expect(
-      collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), { simulator: true })
+      collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+        simulator: true,
+        resolvePath
+      })
     ).rejects.toThrow(
       /^\[native\] No ios installer artifacts found\.\n {2}Checked .*gen\/apple\/build\/\*-sim\/\*\.app/
     );

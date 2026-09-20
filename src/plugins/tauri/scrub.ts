@@ -20,7 +20,7 @@ const ENTROPY_THRESHOLD_BITS_PER_CHAR = 4;
  * secrets: cargo registry paths, temp dirs, artifact paths, URLs and panic
  * backtraces all clear the entropy bar as a whole, and masking them destroys the
  * only actionable part of a build failure. A location is not exempt, though — it
- * is scanned SEGMENT by segment, so a secret pasted into a path is still masked
+ * is scanned PART by part, so a secret pasted into a path is still masked
  * while the readable part of the path survives. Known secret env-var assignments
  * are masked by name BEFORE any of this, so a secret whose value is a path
  * (`APPLE_API_KEY_PATH`) is still masked whole.
@@ -29,6 +29,15 @@ const LOCATION_TOKEN_PATTERN = /[/\\]|::/;
 
 /** One path segment of a location-shaped token (the run between two separators). */
 const PATH_SEGMENT_PATTERN = /[^/\\]+/g;
+
+/**
+ * One PART of a path segment — the run between two `-`, `.` or `#` delimiters. A build tree
+ * glues a readable name to a short hash with exactly those three characters
+ * (`libtauri_app-9f8e7d6c5b4a3210.rlib`, `main-3f2a9c1b.css`, `<repo>.git#<sha>`), and the
+ * glued whole clears the entropy bar while none of its parts do. Judging the parts keeps
+ * every ordinary build path readable; a secret still owns a whole part and is still masked.
+ */
+const SEGMENT_PART_PATTERN = /[^-.#]+/g;
 
 /**
  * The cargo registry's index segment — `index.crates.io-<hash>` and its git-era
@@ -58,10 +67,13 @@ const URL_USERINFO_PATTERN = /([a-z][\w+.-]{0,30}:\/\/)[^\s/@]{1,256}@/gi;
 const LONG_HEX_RUN_PATTERN = /(^|[^\w-])([\da-f]{32,})(?![\w-])/gi;
 
 /**
- * Context that turns a long hex run into an identifier rather than a secret: a git sha
- * announced by `commit `, `rev ` or a leading `#`.
+ * Context that turns a long hex run into a published identifier rather than a secret: a git
+ * sha announced by `commit `, `rev ` or the `#` fragment of a cargo `git+<url>` source, and
+ * a `Cargo.lock` `checksum = "…"` digest. A BARE `#` is not enough — it prefixes anchors,
+ * issue numbers and shell comments, so any secret glued behind one would walk straight
+ * through. Every run is bounded: a scrubber walks every line of a 50k-line build log.
  */
-const SHA_CONTEXT_PATTERN = /(?:\bcommit\s|\brev\s|#)$/i;
+const SHA_CONTEXT_PATTERN = /(?:\bcommit\s|\brev\s|git\+\S{1,256}#|checksum\s{0,4}=\s{0,4}")$/i;
 
 /** A canonical 8-4-4-4-12 hex UUID — a device/simulator identifier, never a secret. */
 const UUID_PATTERN = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gi;
@@ -91,7 +103,7 @@ const KNOWN_SECRET_ENV_PREFIXES = [
 /**
  * Scrubs a line (or block) of subprocess output, in four passes: known secret
  * env-var assignments, URL userinfo, long hexadecimal runs, then any remaining
- * high-entropy token (per path segment, for location-shaped tokens).
+ * high-entropy token (per segment part, for location-shaped tokens).
  *
  * @param text - Raw subprocess output.
  * @returns The scrubbed text, safe to log/display/embed in an error message.
@@ -174,7 +186,7 @@ function maskLongHexRuns(text: string): string {
  * exceeds {@link ENTROPY_THRESHOLD_BITS_PER_CHAR}.
  *
  * @param text - Text already passed through {@link maskLongHexRuns}.
- * @returns Text with every high-entropy token (or path segment) masked.
+ * @returns Text with every high-entropy token (or segment part) masked.
  * @example
  * ```ts
  * maskHighEntropyTokens("token: Tr0ub4dor&3Zx9Qm7Lp2Vy8Wn5Rk1Bc6Ds4Fg");
@@ -186,10 +198,10 @@ function maskHighEntropyTokens(text: string): string {
 
 /**
  * Masks one whitespace-delimited token. A location-shaped token keeps its structure and
- * is judged segment by segment; anything else is judged whole.
+ * is judged part by part; anything else is judged whole.
  *
  * @param token - A single whitespace-delimited token.
- * @returns The token, or the mask, or the token with its secret segments masked.
+ * @returns The token, or the mask, or the token with its secret parts masked.
  * @example
  * ```ts
  * maskToken("/var/tmp/aB3xQ9zP1mK7vR2tY8wL4nC6jF0sH5dG/App.dmg");
@@ -202,18 +214,31 @@ function maskToken(token: string): string {
   if (token.includes(MASK)) return token;
 
   if (LOCATION_TOKEN_PATTERN.test(token)) {
-    return token.replaceAll(PATH_SEGMENT_PATTERN, segment =>
-      isHighEntropy(segment) ? MASK : segment
-    );
+    return token.replaceAll(PATH_SEGMENT_PATTERN, segment => maskSegmentParts(segment));
   }
   return isHighEntropy(token) ? MASK : token;
 }
 
 /**
- * Tests whether a token (or one path segment of one) is long AND high-entropy
+ * Masks the high-entropy PARTS of one path segment, leaving the delimiters — and every
+ * readable part around a secret — in place.
+ *
+ * @param segment - One path segment of a location-shaped token.
+ * @returns The segment with each secret part replaced by the mask.
+ * @example
+ * ```ts
+ * maskSegmentParts("libtauri_app-9f8e7d6c5b4a3210.rlib"); // unchanged
+ * ```
+ */
+function maskSegmentParts(segment: string): string {
+  return segment.replaceAll(SEGMENT_PART_PATTERN, part => (isHighEntropy(part) ? MASK : part));
+}
+
+/**
+ * Tests whether a token (or one part of a path segment) is long AND high-entropy
  * enough to mask.
  *
- * @param token - A whitespace-delimited token or one of its path segments.
+ * @param token - A whitespace-delimited token or one part of a path segment.
  * @returns Whether it should be masked.
  * @example
  * ```ts

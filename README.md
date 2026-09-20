@@ -182,12 +182,14 @@ Three behaviours worth knowing before the first build:
 
 - **Placeholder icon.** `project.ensureIconSource()` returns `path.resolve(app.icon)` and throws a `[native]` fix-it when that file is missing. With `app.icon` unset it writes an embedded 1024×1024 PNG to `<projectDir>/placeholder-icon.png` and returns that. The icons phase reports `generated`, `placeholder`, or `up to date`.
 - **`tray` is a cargo feature, not a plugin.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. Every other registry row is a real plugin, so `RegistryRow.npmPackage`/`crate` are optional and consumers of `getRegistryRows()` null-check them.
-- **`clean()` refuses anything that is not derived state.** The rule is positive containment, not a blacklist: `projectDir` must resolve strictly *inside* the cwd (or the OS temp root, where test workspaces live) and must not be — or contain — the cwd or the home directory, nor be a filesystem root. Symlinks are resolved with `realpath`, and comparison is case-insensitive on macOS/Windows. `assertCleanableRoot` throws before any path is computed, and `createApp` rejects the same `projectDir`/`outDir` up front:
+- **`clean()` refuses anything that is not derived state.** The rule is positive containment, not a blacklist: `projectDir` must resolve strictly *inside* the **project anchor** (or a usable OS temp root, where test workspaces live) and must not be — or contain — the anchor, the cwd or the home directory, nor be a filesystem root. The anchor is the nearest ancestor of the cwd carrying a `.git` entry or a `workspaces` `package.json`, stopping before `$HOME` and the filesystem root — so an absolute `projectDir` at a monorepo root still validates when the script runs from `packages/app`. A temp root that is a filesystem root, or that is/contains `$HOME`, grants nothing (`os.tmpdir()` follows `TMPDIR`). Symlinks are resolved with `realpath`, and comparison is case-insensitive on macOS/Windows. `assertCleanableRoot` throws before any path is computed, and `createApp` rejects the same `projectDir` up front:
 
   ```
   [native] Refusing to clean projectDir "<root>".
     Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".
   ```
+
+- **`outDir` gets the looser rule.** It is written into and replaced file by file, never recursively cleaned, so a CI cache mount or a shared artifacts volume outside the checkout is legitimate. `createApp` refuses only a filesystem root, `$HOME` itself, and any ancestor of the cwd or of `$HOME`. The `collect` phase then resolves both `outDir` and each destination to their **real** paths before removing anything, so a symlinked `<outDir>/<target>` pointing into another tree is refused rather than wiped.
 
 > [!IMPORTANT]
 > **Do not replace `pluginConfigs.env.providers`.** The framework seeds `[workerSafeProcessEnv()]` in `src/config.ts` so `ctx.env.get("PATH")` resolves. Core-plugin config is a **shallow merge**, so passing your own `providers` array replaces that list instead of extending it — `PATH` goes `undefined` and every build dies with `[native] Could not locate a \`node\` binary on PATH.` If you override it, re-add the provider: `providers: [workerSafeProcessEnv(), yourProvider]`. (The typed `createApp({ pluginConfigs })` map covers the framework's own plugins only, so reaching `env` at Layer 3 takes a cast — the kernel still merges it at runtime.)
@@ -257,7 +259,7 @@ The first iOS build also runs `tauri ios init` once, then rewrites the build pha
 
 ## When a build fails
 
-A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it in a branded box above the error line, each line truncated to 160 characters). Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
+A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it in a branded box above the error line, each line truncated to the branded console's width minus the box chrome). Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
 
 | `kind` | Means |
 |---|---|

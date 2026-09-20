@@ -159,25 +159,47 @@ export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): voi
   ui.check(report.ok, report.ok ? "All checks passed" : "One or more checks failed");
 }
 
-/**
- * Widest tail line the failure box keeps. A single Rust/xcodebuild diagnostic can run
- * thousands of characters; unbounded, it wraps the branded box into unreadable noise.
- */
-const MAX_TAIL_LINE_LENGTH = 160;
+/** Columns the box's own borders and padding occupy around a tail line. */
+const BOX_CHROME_COLUMNS = 6;
 
 /**
- * Truncates one tail line to {@link MAX_TAIL_LINE_LENGTH}, marking the cut with an ellipsis.
+ * Floor for the tail budget. Below this a diagnostic is cut so short it names nothing, so a
+ * very narrow console gets a wrapped line rather than a useless one.
+ */
+const MIN_TAIL_LINE_LENGTH = 40;
+
+/**
+ * Widest tail line the failure box keeps, derived from the branded console's own width —
+ * the kit already knows what it aligns to, so nothing here reads `process.stdout`. A single
+ * Rust/xcodebuild diagnostic can run thousands of characters; unbounded, it wraps the
+ * branded box into unreadable noise, and a fixed bound wide enough to matter (160) wrapped
+ * every ordinary 80-column terminal just the same.
  *
- * @param line - One line of the scrubbed stderr tail.
- * @returns The line, at most `MAX_TAIL_LINE_LENGTH` characters long.
+ * @param consoleWidth - The branded console's width (`ui.width`).
+ * @returns The maximum tail line length for that width.
  * @example
  * ```ts
- * truncateLine("error: " + "x".repeat(400)); // "error: xxx…"
+ * maxTailLineLength(66); // 60
  * ```
  */
-function truncateLine(line: string): string {
-  if (line.length <= MAX_TAIL_LINE_LENGTH) return line;
-  return `${line.slice(0, MAX_TAIL_LINE_LENGTH - 1)}…`;
+function maxTailLineLength(consoleWidth: number): number {
+  return Math.max(MIN_TAIL_LINE_LENGTH, consoleWidth - BOX_CHROME_COLUMNS);
+}
+
+/**
+ * Truncates one tail line to `budget`, marking the cut with an ellipsis.
+ *
+ * @param line - One line of the scrubbed stderr tail.
+ * @param budget - The maximum length, from {@link maxTailLineLength}.
+ * @returns The line, at most `budget` characters long.
+ * @example
+ * ```ts
+ * truncateLine("error: " + "x".repeat(400), 60); // "error: xxx…"
+ * ```
+ */
+function truncateLine(line: string, budget: number): string {
+  if (line.length <= budget) return line;
+  return `${line.slice(0, budget - 1)}…`;
 }
 
 /**
@@ -195,7 +217,8 @@ function truncateLine(line: string): string {
  */
 export function renderBuildFailure(ui: BrandConsole, error: unknown): void {
   const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
+  const budget = maxTailLineLength(ui.width);
 
-  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line)));
+  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line, budget)));
   ui.error(error instanceof Error ? error.message : String(error));
 }

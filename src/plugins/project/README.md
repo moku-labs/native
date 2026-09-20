@@ -25,7 +25,7 @@ code, and tray is desktop-only (filtered from every mobile target-set).
 | `writer.ts` | write-if-changed (content hash) + the write-path guard |
 | `icon.ts` | the embedded 1024x1024 placeholder PNG |
 | `clean.ts` | target-scoped destructive cleanup behind the clean guards |
-| `paths.ts` | **the one owner of path normalization/containment** — realpath resolution, case rules, and the "is this derived state?" predicate shared by `clean.ts` and `validate.ts` |
+| `paths.ts` | **the one owner of path normalization/containment** — realpath resolution, case rules, the project-anchor walk, and the "is this derived state?" / "may we deliver here?" predicates shared by `clean.ts`, `validate.ts` and (via the API) `build`'s collect guard |
 | `generators/*.ts` | one generated artifact each (see the table below) |
 | `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
 | `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` |
@@ -96,6 +96,11 @@ app.project.getRequiredFiles({ target: "android" }); // => required gen/android 
   brand-new app packages without drawing an icon first.
 - `clean({ target? })` — deletes derived state. Mobile `target` → `gen/<platform>` only;
   desktop `target` → that target's bundle output; omitted → the whole `projectDir`.
+- `resolveDerivedPath(path)` — the one comparable form every containment guard in this
+  framework compares in: real path (symlinks followed), NFC, case-folded where the
+  filesystem is. `build`'s collect guard borrows it rather than keeping a second, lexical
+  copy — a lexical guard is walked around by a single symlink. For comparison only, never
+  for display or a filesystem call.
 - `resolve(name, config?)` — typed registry lookup; throws when `name` isn't in the
   registry, or when resolving `"deep-link"` without a non-empty `scheme`.
 - `isKnownCapability(name)` — runtime narrowing guard for capability names arriving
@@ -128,6 +133,17 @@ containing a line break is refused with a `[native]` error. Omit `runner` and th
 skipped. The pass is idempotent: a second run rewrites the absolute pair onto itself and reports
 every file unchanged — but an absolute pair whose Node path CHANGED (an fnm/nvm switch) is
 re-patched, not left stale.
+
+A file that invokes the verb behind a runner shape the match does **not** recognize is an
+error, never an "unchanged" file — reporting success there ships a tree that fails on its
+first Xcode/Android-Studio build phase, with nothing in the log pointing back here:
+
+```
+[native] Could not find a Tauri runner command before "ios xcode-script" in <file>.
+  Set pluginConfigs.tauri.nodePath, or report the runner line Tauri generated.
+```
+
+A file that never mentions the verb is simply unchanged.
 
 ## Signing
 
@@ -172,25 +188,40 @@ entirely.
 ## Safety: the path rules
 
 `projectDir` is gitignored build output, so `clean()` is destructive by design. One helper
-(`paths.ts`) decides what counts as derived state, and both the destructive guard and the
-composition-time config check ask it — so what `createApp` accepts and what `clean()` is
-willing to delete can never drift apart.
+(`paths.ts`) decides what counts as derived state, and the destructive guard, the
+composition-time config check and build's collect guard (through
+`project.resolveDerivedPath`) all ask it — so what `createApp` accepts, what `clean()` is
+willing to delete and what `collect` is willing to overwrite can never drift apart.
 
 **The rule is positive containment, not a blacklist.** A directory is derived state only if
-it resolves strictly INSIDE the current working directory (or inside the OS temp root,
-where test and smoke workspaces are `mkdtemp`'d), and is not — and does not contain — the
+it resolves strictly INSIDE the project anchor (or inside a usable OS temp root, where test
+and smoke workspaces are `mkdtemp`'d), and is not — and does not contain — the anchor, the
 cwd or the home directory. `~/Documents` is refused for the same reason `/` is: it was
 never derived state, it just is not on a list of famous paths.
+
+The **anchor** is the nearest ancestor of the cwd (the cwd itself included) carrying a
+`.git` entry or a `package.json` with a `workspaces` field, stopping before `$HOME` and
+before a filesystem root; with no marker anywhere the cwd stands. The cwd alone is the wrong
+boundary: a monorepo script runs from `packages/app` while its absolute `projectDir` lives
+at the repository root, and measuring against the cwd rejects a perfectly ordinary layout.
+The walk is a pure function over an injectable filesystem probe.
 
 | Rule | Why |
 |---|---|
 | resolved with `realpath` when the path exists | a symlink pointing out of the project is judged where it lands, not where it reads |
 | compared NFC-normalized, case-insensitively on darwin/win32 | `/Repo/App` and `/repo/app` are the same directory there |
-| must be strictly inside cwd or the temp root | an absolute path elsewhere on the disk is never this app's build output |
-| must not be, or contain, cwd or home | a `projectDir` that swallows the checkout deletes the checkout |
+| must be strictly inside the anchor or the temp root | an absolute path elsewhere on the disk is never this app's build output |
+| must not be, or contain, the anchor, cwd or home | a `projectDir` that swallows the checkout deletes the checkout |
 | must not be a filesystem root | — |
+| a temp root that is a filesystem root, or that is/contains `$HOME`, grants nothing | `os.tmpdir()` follows `TMPDIR`, so the second allowed root is consumer-controlled; `TMPDIR=/` would otherwise bless the whole disk |
 
-Before any path is computed, `assertCleanableRoot(root, cwd, home, platform)` applies it:
+`outDir` gets a **looser** rule (`isDeliveryPath`): it is written into and replaced file by
+file, never recursively cleaned, so a CI cache mount or a shared artifacts volume outside
+the checkout is legitimate. Only a filesystem root, the home directory itself, and any
+ancestor of the cwd or of `$HOME` are refused.
+
+Before any path is computed, `assertCleanableRoot(root, cwd, home, platform)` applies the
+`projectDir` rule:
 
 ```
 [native] Refusing to clean projectDir "<root>".
@@ -226,7 +257,8 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 | `app.buildNumber` | anything but word characters and dots — it lands raw in plist/JSON |
 | `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
 | `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
-| `projectDir` / `outDir` | resolving outside the project (same rule as the clean guard) |
+| `projectDir` | resolving outside the project (the same rule as the clean guard) |
+| `outDir` | a filesystem root, `$HOME`, or an ancestor of the cwd or `$HOME` |
 | `config.system` entries | not in the capability registry |
 | `capabilities["deep-link"].scheme` | missing, or not a valid URL scheme, while `deep-link` is composed |
 

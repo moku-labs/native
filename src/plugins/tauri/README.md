@@ -96,7 +96,12 @@ mention in progress output is not classified as a config error.
 
 Only **signal lines** (the ones the `stderrTail` section lists) are classified: a 50k-line
 xcodebuild log narrates `CodeSign <path>` and exports the whole keychain environment, and one
-such incidental mention must never decide the taxonomy for the build.
+such incidental mention must never decide the taxonomy for the build. That makes the signal
+filter part of the taxonomy's contract: every trigger in the table above has to be admitted
+by it, or its bucket is unreachable however well its own pattern is written. `not booted`
+and `invalid config` announce themselves with neither an "error" nor a "failed", so both are
+signal triggers in their own right; a table test feeds one real-shaped line per alternative
+through `classify` to keep that true.
 
 Lines matching `^\s*Warn\b` are excluded from classification entirely. Every unsigned iOS
 simulator build prints `Warn No code signing certificates found …`, which is harmless — matching
@@ -111,10 +116,10 @@ list, while the cause sits hundreds of lines earlier. The tail is built instead 
 
 1. the **last 15 signal lines** of the scrubbed output — lines matching
    `\berror\b[: ]`, `^\s*Error\b`, `panicked`, `cannot find`, `not found`, `no <x> found`,
-   `not installed`, `PhaseScriptExecution`, `failed` — de-duplicated, in original order,
-   skipping `export …` environment dumps and `*_ERROR` / `WARNINGS_AS_ERRORS` build-setting
-   echoes. The last ones, not the first: a long build restates its early warnings while the
-   failure that stopped it is at the end;
+   `not installed`, `not booted`, `invalid config`, `PhaseScriptExecution`, `failed` —
+   de-duplicated, in original order, skipping `export …` environment dumps and `*_ERROR` /
+   `WARNINGS_AS_ERRORS` build-setting echoes. The last ones, not the first: a long build
+   restates its early warnings while the failure that stopped it is at the end;
 2. a `…` separator line (omitted when nothing looked like a cause);
 3. the **last 10 lines** verbatim.
 
@@ -155,13 +160,22 @@ needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global 
   | Shannon entropy | any remaining token ≥ 20 chars above 4 bits/char |
 
   A location-shaped token (one carrying `/`, `\` or `::`) is not exempt from the entropy pass —
-  it is scanned **segment by segment**, so `/var/tmp/<secret>/App.dmg` loses only the secret
-  while the path stays readable. Three things stay readable by name: canonical 8-4-4-4-12 UUIDs
-  plus a short `key:` prefix (roughly half of all UUIDs clear the entropy bar, which turned
-  `id:41E558D0-…` in every simulator destination list into a mask), the cargo registry's
-  `index.crates.io-<hash>` segment, and a git sha announced by `commit `, `rev ` or `#`.
-  Everything is applied AFTER the known-name pass, so `APPLE_API_KEY_PATH=/Users/…` is still
-  masked whole.
+  it is scanned **part by part**, where a part is the run between two `-`, `.` or `#`
+  delimiters. Judging whole segments masked ordinary build output: a build tree glues a
+  readable name to a short hash with exactly those characters, and the glued whole clears the
+  entropy bar while none of its parts do — `libtauri_app-9f8e7d6c5b4a3210.rlib`,
+  `moku-native-app-abcdefghijklmnop.dSYM`, Xcode's `DerivedData/<name>-<hash>/`, a
+  content-hashed `main-3f2a9c1b.css`. A secret still owns a whole part, so
+  `/var/tmp/<secret>/App.dmg` still loses only the secret.
+
+  Three things stay readable by name: canonical 8-4-4-4-12 UUIDs plus a short `key:` prefix
+  (roughly half of all UUIDs clear the entropy bar, which turned `id:41E558D0-…` in every
+  simulator destination list into a mask), the cargo registry's `index.crates.io-<hash>`
+  segment, and a published digest announced by its context — `commit `, `rev `, a cargo
+  `git+<url>#` source fragment, or `Cargo.lock`'s `checksum = "`. A **bare** `#` is not
+  enough: it prefixes anchors, issue numbers and shell comments, so any secret glued behind
+  one would walk straight through. Everything is applied AFTER the known-name pass, so
+  `APPLE_API_KEY_PATH=/Users/…` is still masked whole.
 - **Group signal only when we made the group** — `dev` spawns `detached`, so its child is a
   process group leader and SIGTERM/SIGKILL go to the negated pid, reaping tauri's own
   cargo/xcodebuild/gradle children with it. One-shot verbs spawn attached: the child shares this
@@ -174,6 +188,12 @@ needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global 
   process exits. tauri's own children (xcodebuild, gradle, cargo) inherit those pipes and keep
   writing after the parent is gone; resolving on `exit` drops exactly the tail an error message
   is made of. The group-kill ladder still watches `exit`.
+- **The one `process.env` read (a reviewed MC3 exception)** — `spawn.ts`'s
+  `inheritedEnvironment()` returns `process.env` as the base a spawned tauri CLI subprocess
+  inherits: PATH, the cargo/rustup toolchain variables, the signing overrides. It is
+  subprocess inheritance, not a config read, so `ctx.env` is the wrong tool — the child needs
+  the parent's whole environment object, not one looked-up value. It stays a single named
+  function carrying the `@env-allow` marker, so the exception is one line wide and greppable.
 - **cwd fallback** — one-shot verbs run in `projectDir` once it exists, else in the consumer's
   cwd: `icon`/`version` legitimately run before `scaffold` created it, and spawning into a
   missing directory would fail with a bare `ENOENT`. `dev` always needs the generated project.

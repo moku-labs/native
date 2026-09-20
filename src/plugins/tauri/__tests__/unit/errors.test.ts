@@ -137,6 +137,47 @@ describe("classify", () => {
   });
 });
 
+describe("classify — every taxonomy alternative is reachable", () => {
+  // One real-shaped line per alternative in the taxonomy table. The classifier only ever
+  // looks at SIGNAL lines, so an alternative whose only realistic line is not a signal line
+  // is unreachable in production however well its own pattern is written.
+  it.each([
+    ["xcode-script-failed", String.raw`PhaseScriptExecution Build\ Rust\ Code /repo/Script-80C.sh`],
+    ["signing-failed", "codesign failed with exit code 1"],
+    ["signing-failed", 'error: No signing certificate "iOS Development" found'],
+    ["signing-failed", "error: app_iOS requires a provisioning profile"],
+    ["signing-failed", "failed to notarize the app bundle"],
+    ["signing-failed", "error: unable to unlock the login keychain"],
+    ["signing-failed", "signtool.exe failed: SignTool Error: no certificates were found"],
+    ["signing-failed", "jarsigner error: unable to sign jar"],
+    ["signing-failed", "error: keystore file does not exist"],
+    ["toolchain-missing", "sh: tauri: command not found"],
+    ["toolchain-missing", "xcode-select: error: tool 'xcodebuild' requires Xcode"],
+    ["toolchain-missing", "Error: ANDROID_HOME is not set"],
+    ["toolchain-missing", "ndk not found"],
+    ["toolchain-missing", "ndk is not installed"],
+    ["toolchain-missing", "rustup: command not found"],
+    ["toolchain-missing", "sh: cargo: not found"],
+    ["platform-missing", "iOS 18.2 is not installed. Please download and install the platform"],
+    ["platform-missing", "xcodebuild: error: Found no destinations for the scheme 'app_iOS'"],
+    ["device-unavailable", "No devices found."],
+    ["device-unavailable", "error: device not found"],
+    ["device-unavailable", "Unable to lookup in current state: simulator not booted"],
+    ["device-unavailable", "simulator not found"],
+    ["device-unavailable", "no emulators found"],
+    ["device-unavailable", "adb: no devices/emulators found"],
+    ["config-invalid", "failed to parse /repo/src-tauri/tauri.conf.json"],
+    ["config-invalid", "failed to read /repo/src-tauri/tauri.conf.json"],
+    ["config-invalid", "invalid config: unknown field `bundle.foo`"],
+    ["config-invalid", "schema validation failed"],
+    ["compile-failed", "error[E0432]: unresolved import `foo`"],
+    ["compile-failed", "error: could not compile `app` (lib) due to 1 previous error"],
+    ["compile-failed", "compilation failed"]
+  ])("classifies %s from %j", (kind, line) => {
+    expect(classify(1, line).kind).toBe(kind);
+  });
+});
+
 describe("classify — stderrTail", () => {
   const destinations = Array.from(
     { length: 12 },

@@ -128,12 +128,64 @@ describe("scrub", () => {
     const sha = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
     expect(scrub(`commit ${sha}`)).toBe(`commit ${sha}`);
     expect(scrub(`rev ${sha}`)).toBe(`rev ${sha}`);
-    expect(scrub(`#${sha}`)).toBe(`#${sha}`);
+  });
+
+  it("preserves a git sha announced by the cargo git+ source it belongs to", () => {
+    const line =
+      "git+https://github.com/tauri-apps/plugins-workspace#9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+    expect(scrub(line)).toBe(line);
+  });
+
+  it("masks a long hex run announced by nothing but a bare #", () => {
+    const secret = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+    expect(scrub(`#${secret}`)).toBe("#[native:scrubbed]");
+  });
+
+  it("preserves a Cargo.lock checksum (a published digest, not a secret)", () => {
+    const line = 'checksum = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"';
+    expect(scrub(line)).toBe(line);
+  });
+
+  it("preserves a cargo registry source reference", () => {
+    const line =
+      "Compiling serde v1.0.190 (registry+https://github.com/rust-lang/crates.io-index#serde@1.0.190)";
+    expect(scrub(line)).toBe(line);
   });
 
   it("preserves the crates.io registry path segment", () => {
     const line =
       "Compiling serde (/Users/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f)";
     expect(scrub(line)).toBe(line);
+  });
+});
+
+describe("scrub — build paths whose segments clear the entropy bar as a whole", () => {
+  it.each([
+    [
+      "a cargo rlib carrying its metadata hash",
+      "/repo/.moku/tauri/src-tauri/target/release/deps/libtauri_app-9f8e7d6c5b4a3210.rlib"
+    ],
+    [
+      "a dependency rlib",
+      "/repo/.moku/tauri/src-tauri/target/release/deps/libserde_json-4b1c9a7e2f3d5608.rlib"
+    ],
+    [
+      "an Xcode DerivedData workspace directory",
+      "/Users/alex/Library/Developer/Xcode/DerivedData/smoke-two-hejevvdkuvivblgxsjzgmphfevnl/Build/Products/Release-iphoneos"
+    ],
+    [
+      "a debug-symbol bundle",
+      "/repo/.moku/tauri/src-tauri/target/release/moku-native-app-abcdefghijklmnop.dSYM"
+    ],
+    ["a content-hashed web asset", "/repo/dist/assets/main-3f2a9c1b.css"]
+  ])("preserves %s", (_label, line) => {
+    expect(scrub(line)).toBe(line);
+  });
+
+  it("still masks a secret that occupies a whole path part", () => {
+    const secret = "aB3xQ9zP1mK7vR2tY8wL4nC6jF0sH5dG";
+    const directory = "/repo/.moku/tauri/src-tauri/target/release/bundle/dmg";
+
+    expect(scrub(`${directory}/App-${secret}.dmg`)).toBe(`${directory}/App-[native:scrubbed].dmg`);
   });
 });

@@ -2,6 +2,7 @@
    validator must accept or reject (the SigningConfig invariant), never a password. */
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../../../../config";
@@ -182,16 +183,31 @@ describe("validateProjectConfig — derived directory containment", () => {
     ["a personal directory as projectDir", { projectDir: path.join(homedir(), "Documents") }],
     ["the home directory as projectDir", { projectDir: homedir() }],
     ["a filesystem root as projectDir", { projectDir: path.join(path.sep, "..") }],
-    ["a personal directory as outDir", { outDir: path.join(homedir(), "Documents") }]
+    ["the home directory as outDir", { outDir: homedir() }],
+    ["an ancestor of the home directory as outDir", { outDir: path.dirname(homedir()) }],
+    ["a filesystem root as outDir", { outDir: path.join(path.sep, "..") }],
+    ["an ancestor of the working directory as outDir", { outDir: path.dirname(process.cwd()) }]
   ])("rejects %s", (_label, patch) => {
     expect(() => validateProjectConfig(config(patch))).toThrow(
       /^\[native] config\.(projectDir|outDir) /
     );
   });
 
-  it("names the fix in the error's second line", () => {
+  it("accepts an outDir outside the project — a CI cache mount is never recursively cleaned", () => {
+    expect(() =>
+      validateProjectConfig(config({ outDir: path.join(homedir(), "Library", "Caches", "moku") }))
+    ).not.toThrow();
+  });
+
+  it("names the fix in the projectDir error's second line", () => {
     expect(() => validateProjectConfig(config({ projectDir: homedir() }))).toThrow(
-      'Set config.projectDir to a path inside the current working directory, such as ".moku/tauri".'
+      'Set config.projectDir to a path inside the project, such as ".moku/tauri".'
+    );
+  });
+
+  it("names the fix in the outDir error's second line", () => {
+    expect(() => validateProjectConfig(config({ outDir: homedir() }))).toThrow(
+      'Set config.outDir to a dedicated delivery directory such as "dist-native".'
     );
   });
 });

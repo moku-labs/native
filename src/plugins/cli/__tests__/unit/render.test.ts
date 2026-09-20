@@ -242,7 +242,7 @@ describe("renderBuildFailure", () => {
     expect(lines.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("truncates an over-long tail line so the box stays readable in a terminal", () => {
+  it("truncates an over-long tail line to the branded console's own width", () => {
     const { lines, ui } = createSink();
     const longLine = `error: ${"x".repeat(400)}`;
     const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
@@ -253,9 +253,10 @@ describe("renderBuildFailure", () => {
     renderBuildFailure(ui, error);
 
     const text = lines.join("\n");
-    expect(text).not.toContain("x".repeat(200));
     expect(text).toContain("…");
-    for (const line of lines) expect(line.length).toBeLessThan(200);
+    // The whole box — borders included — fits the width the console aligns to, so it never
+    // wraps in a terminal of that width.
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(ui.width);
   });
 
   it("renders the error line without a box when the stderr tail is empty", () => {

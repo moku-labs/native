@@ -8,6 +8,7 @@ import type { Config as GlobalConfig, Target, TauriRunner } from "../../../../co
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import { bundleLayout } from "../../../project/layout";
+import { comparableRealPath } from "../../../project/paths";
 import type { CompletenessResult } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
@@ -36,7 +37,8 @@ function createProjectMock(iconSource: string) {
     getBundleLayout: vi.fn((opts: { target: Target }) => bundleLayout(opts.target)),
     getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
-    ensureIconSource: vi.fn(async () => iconSource)
+    ensureIconSource: vi.fn(async () => iconSource),
+    resolveDerivedPath: vi.fn((target: string) => comparableRealPath(target))
   };
 }
 

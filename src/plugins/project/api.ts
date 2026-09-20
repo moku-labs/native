@@ -19,6 +19,7 @@ import type { BundleLayout } from "./layout";
 import { bundleLayout } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
 import { patchMobile } from "./mobile/patch";
+import { comparableRealPath } from "./paths";
 import { isKnownCapability, registryRows, resolve, unknownCapabilityError } from "./registry";
 import type {
   Api,
@@ -88,6 +89,26 @@ function getRequiredFiles(opts: { target: MobileTarget }): readonly string[] {
  */
 function getBundleLayout(opts: { target: Target }): BundleLayout {
   return bundleLayout(opts.target);
+}
+
+/**
+ * Resolves a path to the one comparable form every containment guard in this framework
+ * compares in: absolute, symlinks followed, and case-folded where the filesystem is. This
+ * plugin owns that rule (the clean guard and the config check are built on it), and build's
+ * collect guard borrows it through the API rather than keeping a second, lexical copy — a
+ * lexical guard is walked around by a single symlink.
+ *
+ * For comparison only — the result is never a path to display or to hand to the filesystem.
+ *
+ * @param target - The path to resolve, absolute or relative to the process cwd.
+ * @returns The comparable form of the real path.
+ * @example
+ * ```ts
+ * resolveDerivedPath("dist-native/macos"); // "/repo/app/dist-native/macos"
+ * ```
+ */
+function resolveDerivedPath(target: string): string {
+  return comparableRealPath(target);
 }
 
 /**
@@ -236,6 +257,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
     getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
     clean: runClean,
+    resolveDerivedPath,
     ensureIconSource,
     resolve,
     isKnownCapability,

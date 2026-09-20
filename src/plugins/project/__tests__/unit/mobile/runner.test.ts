@@ -189,6 +189,42 @@ describe("patchRunner", () => {
     expect(result).toEqual({ patched: [], unchanged: [projectYml] });
   });
 
+  it("throws when a file carries the verb but no recognizable runner before it", async () => {
+    const genDir = path.join(dir, "src-tauri", "gen", "apple");
+    await mkdir(genDir, { recursive: true });
+    const projectYml = path.join(genDir, "project.yml");
+    await writeFile(projectYml, projectYmlFor("deno task tauri-cli"), "utf8");
+
+    await expect(patchRunner(dir, genDir, { target: "ios", runner: RUNNER })).rejects.toThrow(
+      `[native] Could not find a Tauri runner command before "ios xcode-script" in ${projectYml}.\n  Set pluginConfigs.tauri.nodePath, or report the runner line Tauri generated.`
+    );
+  });
+
+  it("throws for an unrecognizable Android runner too", async () => {
+    const genDir = path.join(dir, "src-tauri", "gen", "android");
+    await mkdir(genDir, { recursive: true });
+    const gradleFile = path.join(genDir, "build.gradle.kts");
+    await writeFile(
+      gradleFile,
+      'val command = "deno task tauri-cli android android-studio-script"'
+    );
+
+    await expect(patchRunner(dir, genDir, { target: "android", runner: RUNNER })).rejects.toThrow(
+      `[native] Could not find a Tauri runner command before "android android-studio-script" in ${gradleFile}.`
+    );
+  });
+
+  it("leaves a file that never mentions the verb unchanged", async () => {
+    const genDir = path.join(dir, "src-tauri", "gen", "apple");
+    await mkdir(genDir, { recursive: true });
+    const projectYml = path.join(genDir, "project.yml");
+    await writeFile(projectYml, "targets:\n  MyApp_iOS:\n    type: application\n", "utf8");
+
+    const result = await patchRunner(dir, genDir, { target: "ios", runner: RUNNER });
+
+    expect(result).toEqual({ patched: [], unchanged: [projectYml] });
+  });
+
   it("skips derived Android build output while patching buildSrc sources", async () => {
     const genDir = path.join(dir, "src-tauri", "gen", "android");
     const sourceDir = path.join(genDir, "buildSrc", "src", "main", "java");

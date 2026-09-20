@@ -498,7 +498,12 @@ Behavior:
       double-quoted shell word it lands in (\, ", $, backtick) and a path containing a line
       break is refused with a [native] error. Omit `runner` and the rewrite is skipped. A second
       pass reports every file unchanged — but an absolute pair whose node path CHANGED (an
-      fnm/nvm switch) is re-patched, not left stale.
+      fnm/nvm switch) is re-patched, not left stale. A file that carries the verb behind a
+      runner shape the match does NOT recognize throws
+      '[native] Could not find a Tauri runner command before "<verb>" in <file>.\n  Set
+      pluginConfigs.tauri.nodePath, or report the runner line Tauri generated.' rather than
+      being reported unchanged — reporting success there ships a tree that fails on its first
+      build phase. A file that never mentions the verb stays unchanged.
     * Android: the same rewrite for " android android-studio-script" across
       gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts, PLUS a
       sentinel-delimited `// MOKU-SIGNING-START … // MOKU-SIGNING-END` block in
@@ -516,11 +521,23 @@ Behavior:
 - clean({ target? }): mobile target => gen/<platform> only; desktop target => that target's
   bundle output; omitted => the whole projectDir. `assertCleanableRoot(root, cwd, home,
   platform)` runs FIRST, on the positive-containment rule from paths.ts: projectDir must
-  resolve (realpath, NFC + case-insensitive on darwin/win32) strictly INSIDE the cwd or the
-  OS temp root, and must not be — or contain — the cwd or the home directory, nor be a
-  filesystem root. "~/Documents" is refused for the same reason "/" is: it is not derived
-  state. Every surviving candidate path is validated against projectDir by assertWithinRoot
-  before deletion.
+  resolve (realpath, NFC + case-insensitive on darwin/win32) strictly INSIDE the PROJECT
+  ANCHOR or a usable OS temp root, and must not be — or contain — the anchor, the cwd or the
+  home directory, nor be a filesystem root. "~/Documents" is refused for the same reason "/"
+  is: it is not derived state. Every surviving candidate path is validated against projectDir
+  by assertWithinRoot before deletion.
+  containmentAnchor(cwd, home, platform, probe): the nearest ancestor of the cwd (cwd
+  included) carrying a .git entry or a package.json with a "workspaces" field, walking up but
+  stopping BEFORE $HOME and before a filesystem root; no marker anywhere => the cwd stands.
+  Measuring against the cwd alone broke a monorepo whose absolute projectDir sits at the
+  repository root while the script runs from packages/app. Pure function over an injectable
+  AnchorProbe { hasEntry, readText }.
+  A temp root that IS a filesystem root, or that is/contains $HOME, grants nothing —
+  os.tmpdir() follows TMPDIR, so TMPDIR=/ would otherwise bless the whole disk.
+- resolveDerivedPath(path): the ONE comparable form every containment guard compares in —
+  realResolve (symlinks followed) + NFC + case folding on darwin/win32. Comparison only,
+  never for display or a filesystem call. build's collect guard consumes it through
+  BuildDeps instead of keeping a second, lexical copy.
 - resolve(name, config?): typed registry lookup; throws when name isn't in the registry, or
   when resolving "deep-link" without a non-empty scheme.
 - getRegistryRows(): fresh COPIES — a caller can never mutate the registry.
@@ -703,11 +720,16 @@ Secret scrubbing (scrub.ts): four passes, in order.
      "commit ", "rev " or a leading "#" stays readable.
   4. Shannon entropy: any remaining token of length >= 20 at or above 4.0 bits/char.
 A location-shaped token (one carrying "/", "\" or "::") is NOT exempt from the entropy
-pass — it is scanned SEGMENT by SEGMENT, so /var/tmp/<secret>/App.dmg loses only the secret
-while the path stays readable. Kept readable by name: canonical 8-4-4-4-12 UUIDs with an
-optional short key: prefix/punctuation (simulator destination lists), the cargo registry's
-index.crates.io-<hash> segment, and context-announced git shas. No output path bypasses the
-scrubber.
+pass — it is scanned PART by PART, where a part is the run between two "-", "." or "#"
+delimiters, so /var/tmp/<secret>/App.dmg loses only the secret while a build name glued to a
+hash stays readable: libtauri_app-<hash>.rlib, moku-native-app-<hash>.dSYM, Xcode's
+DerivedData/<name>-<hash>/, a content-hashed main-<hash>.css. Judging whole segments masked
+all four. Kept readable by name: canonical 8-4-4-4-12 UUIDs with an optional short key:
+prefix/punctuation (simulator destination lists), the cargo registry's
+index.crates.io-<hash> segment, and a published digest announced by its context — "commit ",
+"rev ", a cargo git+<url># source fragment, or Cargo.lock's `checksum = "`. A BARE "#" is
+not a context: it prefixes anchors, issue numbers and shell comments. No output path
+bypasses the scrubber.
 
 ====================================================================
 7. BUILD PLUGIN (Standard tier — src/plugins/build/)
@@ -776,7 +798,7 @@ Phase semantics (pipeline.ts):
 | icons | project + tauri | source = await project.ensureIconSource(); regeneration is skipped ONLY when src-tauri/icons/icon.png exists, the stamp file src-tauri/icons/.source (absolute source path + size + mtime) still matches the current source, AND this pass did not run mobileInit (a fresh gen/ tree ships Tauri's default icons) — an mtime comparison alone would miss app.icon switching to an OLDER file. Else tauri.icon({ source }). detail: "up to date" / "generated" / "placeholder". |
 | compile | tauri.build() | ONE subprocess covers compile+bundle. compile carries the live onTick progress stream. |
 | bundle | (same subprocess) | LIVE transition on the first /bundling/i output line; zero-duration fallback when absent; a failure is attributed to the OPEN phase. |
-| collect | own (collect.ts) | Locates artifacts via the layout from project.getBundleLayout({ target }), copies to outDir/<target>/, REMOVING each destination first (fs.cp merges into an existing .app and would keep stale files inside the bundle) after asserting the destination is strictly inside <outDir>/<target> and that directory strictly inside outDir. Matches are deduplicated by destination name, last one wins. ZERO matches is an error — never a silent empty success. |
+| collect | own (collect.ts) | Locates artifacts via the layout from project.getBundleLayout({ target }), copies to outDir/<target>/, REMOVING each destination first (fs.cp merges into an existing .app and would keep stale files inside the bundle) after asserting — on REAL paths, through project.resolveDerivedPath threaded in as CollectInput.resolvePath — that the destination is strictly inside <outDir>/<target> and that directory strictly inside outDir; a lexical guard reads a symlinked <outDir>/<target> as contained and the next statement deletes the tree it points at. Matches are deduplicated by destination name, keeping the NEWEST by mtime (a mobile build leaves one directory per arch and never prunes the ones it did not rebuild, so "whichever the glob yielded last" could ship yesterday's binary). ZERO matches is an error — never a silent empty success. |
 
 prepare({ target }) runs scaffold -> codegen -> icons and stops: everything that makes the
 generated project buildable, without invoking the build verb. cli.dev calls it first.
@@ -935,8 +957,10 @@ Behavior (api.ts):
   platform throws a [native] error) or every configured target with { all: true } (ignores
   target). simulator/aab pass straight through to build.run/build.runAll. On failure the
   classified TauriError's scrubbed stderrTail is framed in a branded box ABOVE the [native]
-  error line — each tail line truncated to 160 chars with an ellipsis, so one huge diagnostic
-  cannot wrap the box into noise — then the error rethrows unchanged.
+  error line — each tail line truncated with an ellipsis to max(40, ui.width - 6), the
+  branded console's own width minus the box chrome, so the whole box fits the terminal the
+  kit aligns to (a fixed 160 wrapped every 80-column terminal); the width comes from
+  ui.width, never a raw process.stdout read — then the error rethrows unchanged.
 - dev(opts?): awaits build.prepare({ target }) FIRST, so `tauri dev` never meets a
   half-generated tree; then tauri.dev(...) and the handle's `ready` then `exited`, forwarding
   scrubbed output lines to the render seam. It NEVER stores the handle and NEVER calls stop()
@@ -1112,9 +1136,13 @@ indented actionable second line ("  <fix-it / next command>").
   - '[native] app.buildNumber "<x>" is not a valid build number.' (/^[\w.]+$/ — raw in plist/JSON)
   - '[native] signing.android.keystorePasswordEnv "<x>" is not a valid environment variable
     name.' (and keyPasswordEnv — each lands raw inside a Kotlin System.getenv("…") call)
-  - '[native] config.projectDir "<x>" resolves outside the project.' (and outDir — the SAME
+  - '[native] config.projectDir "<x>" resolves outside the project.' (the SAME
     positive-containment rule the destructive clean guard uses, so a projectDir clean() would
     refuse fails at createApp instead of at clean time)
+  - '[native] config.outDir "<x>" is a directory this app must not deliver into.' — the LOOSER
+    isDeliveryPath rule: outDir is written into and replaced file by file, never recursively
+    cleaned, so a CI cache mount outside the checkout is legitimate. Refused: a filesystem
+    root, $HOME itself, an ancestor of the cwd or of $HOME.
   - unknown config.system capability names
   - '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is
     missing.', plus a scheme that is not a valid URL scheme (/^[a-z][a-z\d+.-]*$/i)
@@ -1147,9 +1175,14 @@ indented actionable second line ("  <fix-it / next command>").
   No match: kind = "cancelled" when the exit code is null (signal-terminated), else "unknown".
   Only SIGNAL lines are classified: a 50k-line xcodebuild log narrates "CodeSign <path>" and
   exports the whole keychain environment, and one such mention must not decide the taxonomy.
+  That makes the signal filter part of the taxonomy's contract: every trigger above must be
+  admitted by it, or its bucket is unreachable. "not booted" (device-unavailable) and
+  "invalid config" (config-invalid) carry neither an "error" nor a "failed", so both are
+  signal triggers in their own right; a table test feeds one real-shaped line per taxonomy
+  alternative through classify() to keep that true.
   stderrTail is built as: the LAST 15 de-duplicated SIGNAL lines of the scrubbed output
   (/\berror\b[: ]/, /^\s*Error\b/, panicked, cannot find, not found, no <x> found, not
-  installed, PhaseScriptExecution, failed — skipping
+  installed, not booted, invalid config, PhaseScriptExecution, failed — skipping
   `export …` dumps and *_ERROR build-setting echoes), a "…" separator, then the last 10 lines
   verbatim. A plain "last 20 lines" tail is useless for xcodebuild, where the cause sits
   hundreds of lines above a simulator destination list.
