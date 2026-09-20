@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Config, MobileTarget, Target } from "../../config";
-import { clean } from "./clean";
+import { clean, clearMobileBuildOutput } from "./clean";
 import { generateBuildScript } from "./generators/build-script";
 import { generateCapabilities } from "./generators/capabilities";
 import { generateCargo } from "./generators/cargo";
@@ -251,12 +251,35 @@ export function createProjectApi(ctx: ProjectContext): Api {
     return result;
   };
 
+  /**
+   * Removes the previous build output of a mobile target, so the next compile writes into
+   * an empty tree — iOS only (Gradle manages Android's own `build` tree). Guarded by the
+   * same derived-path rule as {@link runClean}.
+   *
+   * @param opts - The clear options.
+   * @param opts.target - The mobile platform whose previous build output to remove.
+   * @returns The paths actually removed — empty when there was nothing to remove.
+   * @example
+   * ```ts
+   * await runClearMobileBuildOutput({ target: "ios" });
+   * ```
+   */
+  const runClearMobileBuildOutput = async (opts: { target: MobileTarget }) => {
+    const result = await clearMobileBuildOutput(ctx.global.projectDir, opts.target);
+    ctx.log.debug("project:clearMobileBuildOutput", {
+      target: opts.target,
+      removed: result.removed.length
+    });
+    return result;
+  };
+
   return {
     generate: generateArtifacts,
     getBundleLayout,
     getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
     clean: runClean,
+    clearMobileBuildOutput: runClearMobileBuildOutput,
     resolveDerivedPath,
     ensureIconSource,
     resolve,
