@@ -1,8 +1,9 @@
 /**
  * @file project plugin — target-scoped destructive cleanup (pure path computation + guarded rm).
  */
+import type { Stats } from "node:fs";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -197,20 +198,50 @@ export function isClearableBuildOutput(
  *
  * @param root - The configured `projectDir`.
  * @param candidate - The build-output directory a clear pass wants to remove.
- * @throws {Error} When `projectDir` is not derived state, or when the candidate's real path
- *   is not strictly inside it.
+ * @param isRealDirectory - Whether the candidate is a real directory rather than a link or a
+ *   file (default `true` — callers that have not looked at the entry assert containment only).
+ * @throws {Error} When `projectDir` is not derived state, when the candidate is not a real
+ *   directory, or when its real path is not strictly inside `projectDir`.
  * @example
  * ```ts
  * assertClearableBuildOutput("/repo/.moku/tauri", "/repo/.moku/tauri/src-tauri/gen/apple/build");
  * ```
  */
-export function assertClearableBuildOutput(root: string, candidate: string): void {
+export function assertClearableBuildOutput(
+  root: string,
+  candidate: string,
+  isRealDirectory = true
+): void {
   assertCleanableRoot(root);
-  if (isClearableBuildOutput(root, candidate)) return;
+  if (isRealDirectory && isClearableBuildOutput(root, candidate)) return;
 
   throw new Error(
     `[native] Refusing to remove build output outside projectDir: ${realResolve(candidate)}.\n  Remove that link by hand — "${candidate}" must be a real directory inside ${realResolve(root)}.`
   );
+}
+
+/**
+ * Reads a directory entry WITHOUT following it — the link itself, never its target — and
+ * reports an absent path as "no entry" rather than as a failure.
+ *
+ * `existsSync` and every other stat that follows links answers "no" for a DANGLING link, so
+ * a `build` symlink whose target is gone would look like a missing directory and skip the
+ * guard that exists to refuse it. `lstat` sees the link.
+ *
+ * @param target - The path to inspect.
+ * @returns The entry's own stats, or undefined when nothing is there.
+ * @example
+ * ```ts
+ * (await lstatSafe("/repo/.moku/tauri/src-tauri/gen/apple/build"))?.isDirectory();
+ * ```
+ */
+async function lstatSafe(target: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(target);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 /**
@@ -220,9 +251,11 @@ export function assertClearableBuildOutput(root: string, candidate: string): voi
  * `Directory not empty (os error 66)`. Android removes nothing — Gradle owns its `build`
  * tree and reuses it correctly.
  *
- * A missing directory is fine (nothing removed). Everything else goes through
+ * A missing directory is fine (nothing removed). Everything that IS there goes through
  * {@link assertClearableBuildOutput} first, so a symlinked `build` is refused instead of
- * followed out of the project.
+ * followed out of the project. The entry is read with {@link lstatSafe}: a dangling link is
+ * an entry like any other here, and reaches the guard rather than passing for a missing
+ * directory.
  *
  * @param projectDirectory - The Tauri project root.
  * @param target - The mobile packaging target.
@@ -240,9 +273,12 @@ export async function clearMobileBuildOutput(
 ): Promise<CleanResult> {
   const root = path.resolve(projectDirectory);
   const buildOutput = mobileBuildOutputPath(root, target);
-  if (!buildOutput || !existsSync(buildOutput)) return { removed: [] };
+  if (!buildOutput) return { removed: [] };
 
-  assertClearableBuildOutput(root, buildOutput);
+  const entry = await lstatSafe(buildOutput);
+  if (!entry) return { removed: [] };
+
+  assertClearableBuildOutput(root, buildOutput, entry.isDirectory());
 
   await rm(buildOutput, { recursive: true, force: true });
   return { removed: [buildOutput] };

@@ -269,7 +269,7 @@ Android needs neither: Gradle manages its own `build` tree.
 
 ## When a build fails
 
-A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it in a branded box above the error line). In a terminal each tail line is cut to the terminal's width minus the box chrome; with no terminal — CI, or `native build > build.log` — nothing is cut, so a piped log keeps the full toolchain diagnostic. Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
+A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it above the error line). In a terminal it is a branded box and each tail line is cut to the terminal's width minus the box chrome; with no terminal — CI, or `native build > build.log` — there is no box and nothing is cut, so a piped log keeps the full toolchain diagnostic on plain, unpadded lines. Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
 
 | `kind` | Means |
 |---|---|

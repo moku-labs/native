@@ -214,28 +214,48 @@ function renderYmlSetting(indent: string): string {
 
 /**
  * Reads the `base:` mapping a target's `settings:` line opens — the one block in
- * `project.yml` that holds build settings. A `settings:` line followed by anything else
- * (`groups: [app]`, a `base:` at the same depth) owns no such block.
+ * `project.yml` that holds build settings.
  *
- * @param settingsLine - The candidate `settings:` line.
- * @param next - The line directly below it, if any.
- * @returns The `base:` line and its indentation, or undefined when there is none.
+ * The block is walked, not peeked at: `base:` is a direct child of `settings:`, but not
+ * necessarily the FIRST one — xcodegen is equally happy with `settings:` followed by
+ * `groups: [app]` and `base:` below it. So every line indented deeper than `settings:` is
+ * scanned until the block dedents, and the first `base:` sitting at the direct-child level
+ * wins; a nested `base:` deeper inside somebody else's sub-mapping does not. A `settings:`
+ * block carrying no `base:` at all owns no such block and is left alone.
+ *
+ * @param lines - Every line of the file.
+ * @param settingsIndex - Index of the candidate `settings:` line.
+ * @returns The `base:` line, its index and its indentation, or undefined when there is none.
  * @example
  * ```ts
- * baseMappingAt({ body: "    settings:", ending: "\n" }, { body: "      base:", ending: "\n" });
+ * baseMappingAt(splitLines("    settings:\n      groups: [app]\n      base:\n"), 0);
  * ```
  */
 function baseMappingAt(
-  settingsLine: SourceLine,
-  next: SourceLine | undefined
-): { line: SourceLine; indent: string } | undefined {
-  const settings = YML_SETTINGS_PATTERN.exec(settingsLine.body);
-  if (!settings || !next) return undefined;
+  lines: readonly SourceLine[],
+  settingsIndex: number
+): { line: SourceLine; index: number; indent: string } | undefined {
+  const settingsLine = lines[settingsIndex];
+  const settings = settingsLine && YML_SETTINGS_PATTERN.exec(settingsLine.body);
+  if (!settings) return undefined;
 
-  const indent = YML_BASE_PATTERN.exec(next.body)?.[1];
-  if (indent === undefined || indent.length <= (settings[1] ?? "").length) return undefined;
+  const settingsIndent = (settings[1] ?? "").length;
+  let childIndent: number | undefined;
 
-  return { line: next, indent };
+  for (let index = settingsIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) break;
+    if (line.body.trim().length === 0) continue;
+
+    const indent = indentOf(line.body);
+    if (indent.length <= settingsIndent) break;
+
+    childIndent ??= indent.length;
+    if (indent.length !== childIndent) continue;
+    if (YML_BASE_PATTERN.test(line.body)) return { line, index, indent };
+  }
+
+  return undefined;
 }
 
 /**
@@ -285,8 +305,10 @@ export function applyPbxprojEntitlementsSetting(existing: string): string {
 
 /**
  * Adds the setting to every target's `settings.base` block in a generated `project.yml`, so
- * an xcodegen regeneration writes it back into the pbxproj. Only a `base:` mapping directly
- * under a `settings:` mapping is touched — a `settingGroups:` block is somebody else's.
+ * an xcodegen regeneration writes it back into the pbxproj. Only a `base:` mapping that is a
+ * direct child of a `settings:` mapping is touched — a `settingGroups:` block is somebody
+ * else's. A blank line inside the block does not end it: YAML mappings end at a dedent, so
+ * an entry printed below an empty line is still seen and never duplicated.
  *
  * @param existing - The current `project.yml` content.
  * @returns The content with the setting under each target's `settings.base`.
@@ -303,19 +325,21 @@ export function applyProjectYmlEntitlementsSetting(existing: string): string {
   while (index < lines.length) {
     const line = lines[index];
     if (!line) break;
+
+    const base = baseMappingAt(lines, index);
     patched.push(line);
     index += 1;
-
-    const base = baseMappingAt(line, lines[index]);
     if (!base) continue;
 
-    patched.push(base.line);
-    index += 1;
+    // Everything between the `settings:` line and its `base:` line — `groups: [app]` and
+    // friends — is copied through untouched, the `base:` line included.
+    patched.push(...lines.slice(index, base.index + 1));
+    index = base.index + 1;
 
     const { block, next } = collectBlock(
       lines,
       index,
-      entry => entry.body.trim().length > 0 && indentOf(entry.body).length > base.indent.length
+      entry => entry.body.trim().length === 0 || indentOf(entry.body).length > base.indent.length
     );
     index = next;
 

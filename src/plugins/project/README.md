@@ -175,10 +175,13 @@ not a `runner` is passed:
 | `gen/apple/project.yml` | each target's `settings.base` (never a `settingGroups` block) | `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: true` |
 
 `project.yml` carries it so a later xcodegen regeneration writes it back into the pbxproj.
-Both transforms are pure text: line endings (CRLF included), indentation and every
-neighbouring line survive byte for byte, a block that already carries the setting is left
-alone, and a block that turned it OFF is rewritten to `YES`. A second pass reports every
-file unchanged.
+The `base:` mapping is found by walking the `settings:` block, so it is picked up wherever
+it sits among its siblings (`groups: [app]` above it included), and a `settings:` block
+without one is left alone. Both transforms are pure text: line endings (CRLF included),
+indentation and every neighbouring line survive byte for byte, a block that already carries
+the setting is left alone — a blank line does not end a YAML mapping, so an entry below one
+still counts — and a block that turned it OFF is rewritten to `YES`. A second pass reports
+every file unchanged.
 
 **Tauri: the previous build output.** `tauri ios build` renames its fresh `.app` into the
 archive the previous build left behind:
@@ -190,9 +193,10 @@ Directory not empty (os error 66)
 
 `clearMobileBuildOutput({ target: "ios" })` removes `gen/apple/build` before the compiler
 starts. It is a recursive delete, so it passes the same derived-path gate as `clean()` AND
-a containment check: the REAL path of `gen/apple/build` (symlinks resolved) must sit
-strictly inside the real `projectDir`. A `build` symlink pointing elsewhere is refused,
-never followed:
+a containment check: `gen/apple/build` must be a real directory whose REAL path (symlinks
+resolved) sits strictly inside the real `projectDir`. The entry is read with `lstat`, so a
+DANGLING `build` link reaches the gate instead of passing for a missing directory. A `build`
+symlink is refused, never followed:
 
 ```
 [native] Refusing to remove build output outside projectDir: <real path>.

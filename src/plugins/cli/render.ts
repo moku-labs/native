@@ -329,13 +329,17 @@ function truncateLine(line: string, budget: number | undefined): string {
 }
 
 /**
- * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
- * in a branded box, then the `[native]` error line. Cause first, verdict second —
- * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
- * failure (or an empty tail) prints the error line alone.
+ * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail first,
+ * then the `[native]` error line. Cause first, verdict second — the tail is the only place
+ * the real toolchain diagnostic survives. A non-`TauriError` failure (or an empty tail)
+ * prints the error line alone.
  *
- * Tail lines are cut to the terminal's width, and only when there IS a terminal: piped and
- * CI output keeps every line whole ({@link tailLineBound}).
+ * How the tail is framed follows the stream, for the same reason its lines are (or are not)
+ * truncated ({@link tailLineBound}). With a terminal attached it is a branded box, cut to
+ * the terminal's width. With none — CI, `native build > build.log`, a pipe — every line is
+ * printed plainly, in order: the box pads each line to the widest one, so a single
+ * 5000-character Rust diagnostic would pad the entire tail to 5000 columns and bloat the
+ * very log the lines were kept whole for.
  *
  * @param ui - The branded console to render through.
  * @param error - The failure thrown by `build.run`/`build.runAll`.
@@ -353,6 +357,14 @@ export function renderBuildFailure(
   const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
   const budget = tailLineBound(columns);
 
-  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line, budget)));
+  if (stderrTail) {
+    const tailLines = stderrTail.split(/\r?\n/);
+    if (budget === undefined) {
+      for (const line of tailLines) ui.line(line);
+    } else {
+      ui.box(tailLines.map(line => truncateLine(line, budget)));
+    }
+  }
+
   ui.error(error instanceof Error ? error.message : String(error));
 }

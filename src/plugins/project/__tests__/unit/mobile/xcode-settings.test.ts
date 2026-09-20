@@ -222,6 +222,53 @@ describe("applyProjectYmlEntitlementsSetting", () => {
     expect(patched).not.toMatch(/[^\r]\n/);
   });
 
+  it("finds a base: that sits below another key inside the same settings block", () => {
+    const groupsFirst = [
+      "targets:",
+      "  MyApp_iOS:",
+      "    settings:",
+      "      groups: [app]",
+      "      base:",
+      "        ENABLE_BITCODE: false",
+      ""
+    ];
+
+    const patched = applyProjectYmlEntitlementsSetting(groupsFirst.join("\n"));
+
+    expect(patched).toBe(
+      [
+        "targets:",
+        "  MyApp_iOS:",
+        "    settings:",
+        "      groups: [app]",
+        "      base:",
+        YML_SETTING,
+        "        ENABLE_BITCODE: false",
+        ""
+      ].join("\n")
+    );
+    expect(patched.split("\n").filter(line => line === YML_SETTING)).toHaveLength(1);
+  });
+
+  it("sees a setting separated from its siblings by a blank line — no duplicate key", () => {
+    // A blank line does not end a YAML mapping: the entry below it is still in settings.base.
+    const withBlankLine = [
+      "targets:",
+      "  MyApp_iOS:",
+      "    settings:",
+      "      base:",
+      "        ENABLE_BITCODE: false",
+      "",
+      YML_SETTING,
+      ""
+    ].join("\n");
+
+    const patched = applyProjectYmlEntitlementsSetting(withBlankLine);
+
+    expect(patched).toBe(withBlankLine);
+    expect(patched.split("\n").filter(line => line === YML_SETTING)).toHaveLength(1);
+  });
+
   it("leaves a project.yml whose targets carry no settings.base untouched", () => {
     const withoutBase = ["targets:", "  MyApp_iOS:", "    settings:", "      groups: [app]", ""];
 

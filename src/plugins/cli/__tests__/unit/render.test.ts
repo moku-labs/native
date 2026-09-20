@@ -247,14 +247,14 @@ describe("renderDoctorSummary", () => {
 });
 
 describe("renderBuildFailure", () => {
-  it("boxes the scrubbed stderr tail ABOVE the [native] error line", () => {
-    const { lines, ui } = createSink();
+  it("boxes the scrubbed stderr tail ABOVE the [native] error line on a terminal", () => {
+    const { lines, ui } = createSink(100);
     const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
       exitCode: 101,
       stderrTail: "error[E0432]: unresolved import `foo`\nerror: could not compile `app`"
     });
 
-    renderBuildFailure(ui, error);
+    renderBuildFailure(ui, error, 100);
 
     const text = lines.join("\n");
     expect(text).toContain("unresolved import `foo`");
@@ -300,6 +300,25 @@ describe("renderBuildFailure", () => {
     // The whole diagnostic survives: a piped log is read afterwards, never wrapped live.
     expect(lines.join("\n")).toContain(`error: ${"x".repeat(200)}`);
     expect(lines.join("\n")).not.toContain("…");
+  });
+
+  it("prints the tail plainly, unboxed, when the stream reports no columns", () => {
+    const { lines, ui } = createSink();
+    const wide = `error: ${"x".repeat(5000)}`;
+    const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
+      exitCode: 101,
+      stderrTail: `error[E0432]: unresolved import \`foo\`\n${wide}`
+    });
+
+    renderBuildFailure(ui, error, undefined);
+
+    // One call per tail line, in order, then the error line — no borders, and above all no
+    // padding: a box pads every line to the widest one, so one 5000-char diagnostic would
+    // bloat the whole piped log.
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe("error[E0432]: unresolved import `foo`");
+    expect(lines[1]).toBe(wide);
+    expect(lines[2]).toContain("[native] tauri compile failed.");
   });
 
   it("truncates to the clamped minimum on a very narrow terminal (40 → 60 → 54)", () => {

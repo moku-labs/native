@@ -323,6 +323,26 @@ describe("clearMobileBuildOutput", () => {
     }
   });
 
+  it("refuses a DANGLING build symlink instead of reporting nothing to remove", async () => {
+    // A dangling link is invisible to a stat that follows links, so it used to slip past the
+    // guard entirely. It points at a path that was never created — nothing to follow.
+    const genDir = path.join(dir, "src-tauri", "gen", "apple");
+    await mkdir(genDir, { recursive: true });
+    const link = path.join(genDir, "build");
+    await symlink(path.join(dir, "never-created"), link, "dir");
+
+    try {
+      await expect(clearMobileBuildOutput(dir, "ios")).rejects.toThrow(
+        "[native] Refusing to remove build output outside projectDir"
+      );
+      await expect(clearMobileBuildOutput(dir, "ios")).rejects.toThrow("must be a real directory");
+      expect(existsSync(link)).toBe(false); // still dangling: the link was never replaced
+    } finally {
+      // Explicit unlink of the link itself: it is removed, never followed.
+      await unlink(link);
+    }
+  });
+
   it("names the fix in the refusal's second line", async () => {
     const genDir = path.join(dir, "src-tauri", "gen", "apple");
     await mkdir(genDir, { recursive: true });
