@@ -4,8 +4,7 @@
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { Config as GlobalConfig, Target } from "../../config";
-import type { projectPlugin } from "../project";
-import type { tauriPlugin } from "../tauri";
+import type { CheckProjectApi, CheckTauriApi } from "./checks/types";
 
 /** Structural probe seam — injectable for tests. */
 export type ProbeFn = (
@@ -42,23 +41,23 @@ export type DoctorEvents = {
 
 /**
  * Domain context for the doctor API factory: core's `PluginCtx` over this plugin's config
- * (it has no state) and the `doctor:check` event it declares, plus `global`, the
- * `log`/`env` core APIs (MC2/MC3), and one `require` overload per real dependency —
- * doctor depends on exactly `project` and `tauri` (D-007).
+ * (it has no state) and the `doctor:check` event it declares, plus `global` and the
+ * `log`/`env` core APIs (MC2/MC3). No `require`: the dependency APIs are resolved once at
+ * the wiring point and travel as {@link DoctorDeps}.
  */
 export type DoctorContext = PluginCtx<Config, Record<string, never>, DoctorEvents> & {
   readonly global: Readonly<GlobalConfig>;
   readonly log: LogApi;
   readonly env: EnvApi;
-  /**
-   * Resolves a dependency plugin's API. The constraint IS doctor's dependency list, and the
-   * API type is read off the resolved instance's own phantom slot — no mirror of core's
-   * registry types.
-   *
-   * @param plugin - `projectPlugin` or `tauriPlugin`.
-   * @returns That plugin's public API.
-   */
-  require<P extends typeof projectPlugin | typeof tauriPlugin>(plugin: P): P["_phantom"]["api"];
+};
+
+/**
+ * The dependency API slices the checks read — doctor depends on exactly `project` and
+ * `tauri` (D-007), and each check only ever sees these narrow surfaces.
+ */
+export type DoctorDeps = {
+  readonly project: CheckProjectApi;
+  readonly tauri: CheckTauriApi;
 };
 
 /** Public API of the doctor plugin. */

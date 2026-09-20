@@ -54,7 +54,7 @@ const spawnDevExitsZero: SpawnFn = async opts => {
 
 /**
  * A fake subprocess where only `dev` exits non-zero (a crashed dev server) — the spawns
- * `build.prepare` issues beforehand (M1) still succeed.
+ * `build.prepare` issues beforehand still succeed.
  */
 const spawnDevFails: SpawnFn = async opts =>
   opts.cmd.includes("dev")
@@ -129,7 +129,7 @@ describe("cli plugin integration", () => {
 
       expect(typeof ok).toBe("boolean");
       const text = lines.join("\n");
-      // The live doctor:check hook prints the row; the summary never repeats it (M7).
+      // The live doctor:check hook prints the row; the summary never repeats it.
       expect(lines.filter(line => line.includes("rustup-targets"))).toHaveLength(1);
       expect(text).toContain("Doctor summary");
       expect(text).toMatch(/pass \d+ · warn \d+ · fail \d+/);
@@ -141,7 +141,7 @@ describe("cli plugin integration", () => {
       vi.unstubAllGlobals();
     });
 
-    it("prepares the project (M1) then resolves once the fake dev process exits cleanly", async () => {
+    it("prepares the project then resolves once the fake dev process exits cleanly", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok")));
       const app = createTestApp({ spawnImpl: spawnDevExitsZero });
 

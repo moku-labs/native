@@ -42,9 +42,9 @@ function compact(
 }
 
 /**
- * Builds the `bundle` block — icon set, optional store metadata, and the Apple signing
- * identifiers. `iOS` and `android` always exist (Tauri expects the keys); `macOS` appears
- * only when something is actually configured for it.
+ * Builds the `bundle` block — icon set, optional store metadata, and the signing
+ * identifiers. `iOS` and `android` always exist (Tauri expects the keys); `macOS` and
+ * `windows` appear only when something is actually configured for them.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns The `bundle` object for tauri.conf.json.
@@ -56,6 +56,7 @@ function compact(
 function buildBundle(input: GeneratorInput) {
   const { app, signing } = input.global;
   const apple = signing.apple ?? {};
+  const windows = compact([["certificateThumbprint", signing.windows?.certificateThumbprint]]);
 
   const macOS = compact([
     ["signingIdentity", apple.signingIdentity],
@@ -76,6 +77,7 @@ function buildBundle(input: GeneratorInput) {
       ["bundleVersion", app.buildNumber]
     ]),
     ...(Object.keys(macOS).length > 0 ? { macOS } : {}),
+    ...(Object.keys(windows).length > 0 ? { windows } : {}),
     android: {}
   };
 }

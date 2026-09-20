@@ -184,7 +184,7 @@ describe("renderDoctorSummary", () => {
     ]
   };
 
-  it("renders pass/warn/fail counts plus the overall verdict (M7)", () => {
+  it("renders pass/warn/fail counts plus the overall verdict", () => {
     const { lines, ui } = createSink();
 
     renderDoctorSummary(ui, mixedReport);
@@ -197,7 +197,7 @@ describe("renderDoctorSummary", () => {
     expect(text).toContain("One or more checks failed");
   });
 
-  it("never repeats the per-check rows — those print once, live from doctor:check (M7)", () => {
+  it("never repeats the per-check rows — those print once, live from doctor:check", () => {
     const { lines, ui } = createSink();
 
     renderDoctorSummary(ui, mixedReport);
@@ -223,7 +223,7 @@ describe("renderDoctorSummary", () => {
 });
 
 describe("renderBuildFailure", () => {
-  it("boxes the scrubbed stderr tail ABOVE the [native] error line (B9)", () => {
+  it("boxes the scrubbed stderr tail ABOVE the [native] error line", () => {
     const { lines, ui } = createSink();
     const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
       exitCode: 101,

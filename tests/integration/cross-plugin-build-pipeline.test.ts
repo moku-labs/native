@@ -231,7 +231,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
         }
 
         if (verb[0] === "android" && verb[1] === "build") {
-          completenessAtBuildVerb = testApp?.app.project.completeness({ target: "android" });
+          completenessAtBuildVerb = testApp?.app.project.getCompleteness({ target: "android" });
           const apkPath = path.join(
             genDir,
             "app",
@@ -267,11 +267,11 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       });
       const { app, projectDir, outDir, events, spawnCalls } = testApp;
 
-      requiredAndroidFiles = app.project.requiredFiles("android");
+      requiredAndroidFiles = app.project.getRequiredFiles({ target: "android" });
       expect(requiredAndroidFiles.length).toBeGreaterThan(0);
 
       // The gate's starting point: no gen/android tree at all.
-      expect(app.project.completeness({ target: "android" })).toEqual({
+      expect(app.project.getCompleteness({ target: "android" })).toEqual({
         status: "not-initialized"
       });
 
@@ -287,7 +287,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
 
       // Completeness flipped not-initialized → complete after init, before the build verb.
       expect(completenessAtBuildVerb).toEqual({ status: "complete" });
-      expect(app.project.completeness({ target: "android" })).toEqual({ status: "complete" });
+      expect(app.project.getCompleteness({ target: "android" })).toEqual({ status: "complete" });
 
       // codegen ran patchMobile: signing lives in Gradle only — no keystore.properties (A11).
       expect(

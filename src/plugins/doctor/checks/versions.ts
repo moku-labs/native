@@ -41,7 +41,7 @@ function parseMajor(input: string): number | undefined {
  * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
-  // M6: the same root web-script resolves — the consumer's own package.json, never src-tauri's.
+  // the same root web-script resolves — the consumer's own package.json, never src-tauri's.
   const packageJsonPath = path.join(path.resolve(input.global.web.cwd ?? "."), "package.json");
 
   let raw: string;
@@ -70,8 +70,8 @@ async function run(input: CheckInput): Promise<CheckResult> {
 
   const declared = { ...pkg.dependencies, ...pkg.devDependencies };
   const skewed: string[] = [];
-  for (const row of input.project.registryRows()) {
-    // A1: a row can be backed by a cargo feature instead of a plugin (tray) — nothing to skew.
+  for (const row of input.project.getRegistryRows()) {
+    // a row can be backed by a cargo feature instead of a plugin (tray) — nothing to skew.
     if (!row.npmPackage || !row.crate || !row.crateRange) continue;
     const declaredVersion = declared[row.npmPackage];
     if (!declaredVersion) continue;

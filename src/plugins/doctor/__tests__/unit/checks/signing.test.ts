@@ -51,16 +51,39 @@ function withApple(apple: { teamId?: string; signingIdentity?: string }) {
 }
 
 describe("signingCheck.appliesTo", () => {
-  it("applies to ios, macos, and android", () => {
+  it("applies to ios, macos, android, and windows", () => {
     expect(signingCheck.appliesTo("ios", createCheckInput().global)).toBe(true);
     expect(signingCheck.appliesTo("macos", createCheckInput().global)).toBe(true);
     expect(signingCheck.appliesTo("android", createCheckInput().global)).toBe(true);
+    expect(signingCheck.appliesTo("windows", createCheckInput().global)).toBe(true);
   });
 
-  it("does not apply to windows, linux, or host", () => {
-    expect(signingCheck.appliesTo("windows", createCheckInput().global)).toBe(false);
+  it("does not apply to linux or host", () => {
     expect(signingCheck.appliesTo("linux", createCheckInput().global)).toBe(false);
     expect(signingCheck.appliesTo("host", createCheckInput().global)).toBe(false);
+  });
+});
+
+describe("signingCheck.run — windows", () => {
+  it("warns when no certificate thumbprint is configured", async () => {
+    const result = await signingCheck.run(createCheckInput({ target: "windows" }));
+
+    expect(result.status).toBe("warn");
+    expect(result.id).toBe("signing-windows");
+    expect(result.message).toContain("no windows signing configured");
+    expect(result.fixIt).toContain("signing.windows.certificateThumbprint");
+  });
+
+  it("passes once a thumbprint is configured, without ever printing it", async () => {
+    const result = await signingCheck.run(
+      createCheckInput({
+        target: "windows",
+        global: { ...baseGlobalConfig, signing: { windows: { certificateThumbprint: "A1B2C3" } } }
+      })
+    );
+
+    expect(result.status).toBe("pass");
+    expect(result.message).not.toContain("A1B2C3");
   });
 });
 

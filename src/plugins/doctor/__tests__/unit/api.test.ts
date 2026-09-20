@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDoctorApi } from "../../api";
 import type { CheckResult, DoctorContext, ProbeFn } from "../../types";
 import { baseGlobalConfig, createEnv } from "./checks/fixtures";
-import { createMockRequire } from "./mock-require";
 
 /** A probe that never settles — the only way to make a check outrun `probeTimeoutMs`. */
 const probeNeverSettles: ProbeFn = () =>
@@ -33,13 +32,13 @@ function createLog(): LogApi {
   } as unknown as LogApi;
 }
 
-/** The two plugin APIs doctor's `require` hands back, narrowed to what checks read. */
+/** The two dependency API slices doctor is wired with, narrowed to what the checks read. */
 const projectApi = {
-  requiredFiles: vi.fn(() => []),
-  completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-  registryRows: vi.fn(() => [])
+  getRequiredFiles: vi.fn(() => []),
+  getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+  getRegistryRows: vi.fn(() => [])
 };
-const tauriApi = { version: vi.fn(async () => ({ cliVersion: "2.0.0" })) };
+const tauriApi = { getVersion: vi.fn(async () => ({ cliVersion: "2.0.0" })) };
 
 /**
  * Builds a mock `DoctorContext` plus the emission sink `doctor:check` lands in.
@@ -63,8 +62,7 @@ function createContext(opts: { probeImpl: ProbeFn; probeTimeoutMs?: number }): {
     state: {},
     emit: (_name, payload) => {
       emitted.push(payload);
-    },
-    require: createMockRequire({ project: projectApi, tauri: tauriApi })
+    }
   };
   return { ctx, emitted };
 }
@@ -75,7 +73,9 @@ describe("createDoctorApi — per-check emission", () => {
     // rustup touches the (slow) probe seam, so signing settles — and emits — first.
     const { ctx, emitted } = createContext({ probeImpl: probeAfter(20) });
 
-    const report = await createDoctorApi(ctx).run({ target: "macos" });
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
 
     expect(emitted.map(result => result.id)).toEqual(["signing-macos", "rustup-targets"]);
     expect(report.checks.map(result => result.id)).toEqual(["rustup-targets", "signing-macos"]);
@@ -84,7 +84,9 @@ describe("createDoctorApi — per-check emission", () => {
   it("emits exactly one event per reported check", async () => {
     const { ctx, emitted } = createContext({ probeImpl: probeAfter(0) });
 
-    const report = await createDoctorApi(ctx).run({ target: "macos" });
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
 
     expect(emitted).toHaveLength(report.checks.length);
     expect(emitted.toSorted((a, b) => a.id.localeCompare(b.id))).toEqual(
@@ -97,7 +99,9 @@ describe("createDoctorApi — probeTimeoutMs", () => {
   it("yields a warn result for a check that outruns the timeout", async () => {
     const { ctx } = createContext({ probeImpl: probeNeverSettles, probeTimeoutMs: 5 });
 
-    const report = await createDoctorApi(ctx).run({ target: "macos" });
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
 
     const rustup = report.checks.find(result => result.id === "rustup-targets");
     expect(rustup?.status).toBe("warn");
@@ -109,7 +113,9 @@ describe("createDoctorApi — probeTimeoutMs", () => {
   it("does not flip report.ok — a timeout is a warn, never a fail", async () => {
     const { ctx, emitted } = createContext({ probeImpl: probeNeverSettles, probeTimeoutMs: 5 });
 
-    const report = await createDoctorApi(ctx).run({ target: "macos" });
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
 
     expect(report.ok).toBe(true);
     expect(emitted).toHaveLength(report.checks.length);
@@ -118,7 +124,9 @@ describe("createDoctorApi — probeTimeoutMs", () => {
   it("leaves a check that settles inside the budget untouched", async () => {
     const { ctx } = createContext({ probeImpl: probeAfter(0), probeTimeoutMs: 1000 });
 
-    const report = await createDoctorApi(ctx).run({ target: "macos" });
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
 
     const rustup = report.checks.find(result => result.id === "rustup-targets");
     expect(rustup?.status).toBe("pass");

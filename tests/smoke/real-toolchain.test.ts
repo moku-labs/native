@@ -213,7 +213,7 @@ describe("real toolchain — iOS simulator", () => {
 
     // The build only got this far because the baked-in `<runner> tauri ios xcode-script`
     // build phase was rewritten to the absolute pair this framework spawns with (B10).
-    const runner = app.tauri.runner();
+    const runner = app.tauri.getRunner();
     const projectYml = await readFile(
       path.join(projectDir, "src-tauri", "gen", "apple", "project.yml"),
       "utf8"

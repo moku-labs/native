@@ -30,10 +30,13 @@ export type FsFacade = {
 };
 
 /** The project plugin's API surface a check may read — narrowed to doctor's three needs. */
-export type CheckProjectApi = Pick<ProjectApi, "requiredFiles" | "completeness" | "registryRows">;
+export type CheckProjectApi = Pick<
+  ProjectApi,
+  "getRequiredFiles" | "getCompleteness" | "getRegistryRows"
+>;
 
 /** The tauri plugin's API surface a check may read — the one probe routed through tauri (D-013). */
-export type CheckTauriApi = Pick<TauriApi, "version">;
+export type CheckTauriApi = Pick<TauriApi, "getVersion">;
 
 /**
  * Fresh input assembled per `(check, scope)` invocation by the doctor API factory.

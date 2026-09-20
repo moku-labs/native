@@ -19,7 +19,7 @@ export type CliHandlers = {
 
 /**
  * Creates the cli hook map. Every handler renders through `ctx.state.ui` — the single
- * branded console the state factory built from the configured render seam (N5) — and
+ * branded console the state factory built from the configured render seam — and
  * `native:phase` additionally keeps the running phase's start time in
  * `ctx.state.progress`, which is what drives the spinner frame.
  *

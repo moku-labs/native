@@ -52,12 +52,12 @@ export function createCheckInput(overrides?: Partial<CheckInput>): CheckInput {
     fs: { readFile: vi.fn(async () => "{}") },
     env: createEnv(),
     project: {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [])
     },
     tauri: {
-      version: vi.fn(async () => ({ cliVersion: "2.0.0" }))
+      getVersion: vi.fn(async () => ({ cliVersion: "2.0.0" }))
     },
     ...overrides
   };

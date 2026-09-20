@@ -19,9 +19,9 @@ describe("completenessCheck.appliesTo", () => {
 describe("completenessCheck.run", () => {
   it("passes with a will-init note when gen/ hasn't been created yet", async () => {
     const project = {
-      requiredFiles: vi.fn(() => ["a", "b"]),
-      completeness: vi.fn(() => ({ status: "not-initialized" as const })),
-      registryRows: vi.fn(() => [])
+      getRequiredFiles: vi.fn(() => ["a", "b"]),
+      getCompleteness: vi.fn(() => ({ status: "not-initialized" as const })),
+      getRegistryRows: vi.fn(() => [])
     };
 
     const result = await completenessCheck.run(createCheckInput({ target: "android", project }));
@@ -32,12 +32,12 @@ describe("completenessCheck.run", () => {
 
   it("fails and names both the missing files and the clean fix-it", async () => {
     const project = {
-      requiredFiles: vi.fn(() => ["build.gradle.kts", "settings.gradle.kts"]),
-      completeness: vi.fn(() => ({
+      getRequiredFiles: vi.fn(() => ["build.gradle.kts", "settings.gradle.kts"]),
+      getCompleteness: vi.fn(() => ({
         status: "incomplete" as const,
         missing: ["settings.gradle.kts"]
       })),
-      registryRows: vi.fn(() => [])
+      getRegistryRows: vi.fn(() => [])
     };
 
     const result = await completenessCheck.run(createCheckInput({ target: "android", project }));
@@ -49,9 +49,9 @@ describe("completenessCheck.run", () => {
 
   it("passes when complete", async () => {
     const project = {
-      requiredFiles: vi.fn(() => ["a"]),
-      completeness: vi.fn(() => ({ status: "complete" as const })),
-      registryRows: vi.fn(() => [])
+      getRequiredFiles: vi.fn(() => ["a"]),
+      getCompleteness: vi.fn(() => ({ status: "complete" as const })),
+      getRegistryRows: vi.fn(() => [])
     };
 
     const result = await completenessCheck.run(createCheckInput({ target: "ios", project }));
@@ -60,12 +60,12 @@ describe("completenessCheck.run", () => {
     expect(result.fixIt).toBeUndefined();
   });
 
-  it("calls project.completeness with the target being diagnosed", async () => {
+  it("calls project.getCompleteness with the target being diagnosed", async () => {
     const completenessFunction = vi.fn(() => ({ status: "complete" as const }));
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: completenessFunction,
-      registryRows: vi.fn(() => [])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: completenessFunction,
+      getRegistryRows: vi.fn(() => [])
     };
 
     await completenessCheck.run(createCheckInput({ target: "ios", project }));

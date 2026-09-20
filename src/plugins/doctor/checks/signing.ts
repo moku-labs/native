@@ -1,13 +1,13 @@
 /**
  * @file doctor plugin check — signing readiness for ios/macos/android: env-var PRESENCE only
- * (never values) plus, for Apple, a count-only keychain identity probe (A14). Warn-only
+ * (never values) plus, for Apple, a count-only keychain identity probe. Warn-only
  * posture: unsigned and simulator builds are legal, so this check never fails.
  */
 import type { CheckResult } from "../types";
 import type { Check, CheckInput } from "./types";
 
 /**
- * The two Apple credential sets Tauri accepts (A14) — either one, complete, is enough.
+ * The two Apple credential sets Tauri accepts — either one, complete, is enough.
  * Presence only: a value is never read, so nothing here can reach a message.
  */
 const APPLE_CREDENTIAL_SETS: ReadonlyArray<{ label: string; vars: readonly string[] }> = [
@@ -18,7 +18,7 @@ const APPLE_CREDENTIAL_SETS: ReadonlyArray<{ label: string; vars: readonly strin
   }
 ];
 
-/** Every Apple signing message repeats this — doctor never fails a build over signing. */
+/** Every signing message repeats this — doctor never fails a build over signing. */
 const LEGAL_NOTE = "unsigned and simulator builds are legal";
 
 /**
@@ -163,9 +163,41 @@ function checkAndroidSigning(input: CheckInput): CheckResult {
 }
 
 /**
- * Dispatches to the Apple or Android signing presence check by target.
+ * Checks the windows signing identifier: Tauri signs with the certificate whose thumbprint
+ * is in `signing.windows.certificateThumbprint`, and reads the password from the
+ * environment itself. Warn-only — an unsigned Windows installer still builds and installs.
  *
- * @param input - The check input, scoped to "ios", "macos", or "android".
+ * @param input - The check input, scoped to "windows".
+ * @returns The check result — "pass" or "warn", never "fail".
+ * @example
+ * ```ts
+ * checkWindowsSigning({ target: "windows", global, ... });
+ * ```
+ */
+function checkWindowsSigning(input: CheckInput): CheckResult {
+  const thumbprint = input.global.signing.windows?.certificateThumbprint;
+
+  if (!thumbprint) {
+    return {
+      id: "signing-windows",
+      target: "windows",
+      status: "warn",
+      message: `[native] no windows signing configured — ${LEGAL_NOTE}.`,
+      fixIt: "set signing.windows.certificateThumbprint to sign release installers"
+    };
+  }
+  return {
+    id: "signing-windows",
+    target: "windows",
+    status: "pass",
+    message: "[native] windows signing certificate thumbprint is configured."
+  };
+}
+
+/**
+ * Dispatches to the Apple, Android or Windows signing presence check by target.
+ *
+ * @param input - The check input, scoped to "ios", "macos", "android" or "windows".
  * @returns The check result.
  * @example
  * ```ts
@@ -174,15 +206,19 @@ function checkAndroidSigning(input: CheckInput): CheckResult {
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   if (input.target === "android") return checkAndroidSigning(input);
+  if (input.target === "windows") return checkWindowsSigning(input);
   if (input.target === "ios" || input.target === "macos") return checkAppleSigning(input);
   throw new Error(`[native] signing check does not apply to target "${input.target}".`);
 }
 
-/** Signing readiness (presence and counts, never values) — ios/macos/android, warn-only. */
+/**
+ * Signing readiness (presence and counts, never values) — ios/macos/android/windows,
+ * warn-only.
+ */
 export const signingCheck: Check = {
   id: "signing",
   /**
-   * Whether this check applies — ios, macos, and android carry signing env var refs.
+   * Whether this check applies — every target that carries a signing identifier or env ref.
    *
    * @param target - The candidate scope.
    * @returns Whether `signing` applies to `target`.
@@ -191,6 +227,7 @@ export const signingCheck: Check = {
    * signingCheck.appliesTo("android", global); // true
    * ```
    */
-  appliesTo: target => target === "ios" || target === "macos" || target === "android",
+  appliesTo: target =>
+    target === "ios" || target === "macos" || target === "android" || target === "windows",
   run
 };

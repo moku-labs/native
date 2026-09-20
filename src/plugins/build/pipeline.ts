@@ -1,8 +1,8 @@
 /**
  * @file build plugin — per-target phase pipeline: scaffold → codegen → icons → compile →
  * bundle → collect, with timing, native:phase/native:complete emission, the mobile
- * init/completeness gate inside codegen (B6), the icons freshness rule (B5/A8) and the
- * live compile→bundle transition split (N1/A15).
+ * init/completeness gate inside codegen, the icons freshness rule and the
+ * live compile→bundle transition split.
  */
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -30,7 +30,7 @@ function isMobileTarget(target: Target): target is "ios" | "android" {
 /**
  * Builds the `[native]`-formatted fix-it error for a partial mobile `gen/` tree — the
  * gate never re-initializes a partial tree, so this points at diagnosis/reset instead
- * (S4 refinement: `tauri#13902` can leave a partial init).
+ * (`tauri#13902` can leave a partial init).
  *
  * @param target - The mobile target whose tree is incomplete.
  * @param missing - The required files/directories that are absent.
@@ -49,7 +49,7 @@ function incompleteMobileTreeError(target: Target, missing: readonly string[]): 
 /**
  * Runs the `scaffold` phase: ensures `projectDir` exists. Nothing else — the mobile
  * `gen/` tree is initialized in `codegen`, because `tauri ios|android init --ci` refuses
- * to run before `tauri.conf.json` exists on disk (B6).
+ * to run before `tauri.conf.json` exists on disk.
  *
  * @param ctx - The build pipeline's domain context.
  * @returns Nothing.
@@ -70,8 +70,8 @@ export type CodegenResult = { mobileInitRan: boolean };
  * `tauri.conf.json`), then for a mobile target: `tauri.mobileInit()` when the `gen/` tree
  * is absent, the completeness gate (a partial tree fails fast, never silently
  * re-initialized), and the idempotent `project.patchMobile()` pass carrying
- * `tauri.runner()` — Tauri's own generated build phase calls a `node tauri` command that
- * does not exist (B10).
+ * `tauri.getRunner()` — Tauri's own generated build phase calls a `node tauri` command
+ * does not exist.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
@@ -91,18 +91,18 @@ export async function runCodegen(
   await deps.project.generate({ target });
   if (!isMobileTarget(target)) return { mobileInitRan: false };
 
-  let status = deps.project.completeness({ target });
+  let status = deps.project.getCompleteness({ target });
   let mobileInitRan = false;
   if (status.status === "not-initialized") {
     await deps.tauri.mobileInit({ target });
     mobileInitRan = true;
-    status = deps.project.completeness({ target });
+    status = deps.project.getCompleteness({ target });
   }
   if (status.status === "incomplete") {
     throw incompleteMobileTreeError(target, status.missing);
   }
 
-  await deps.project.patchMobile({ target, runner: deps.tauri.runner() });
+  await deps.project.patchMobile({ target, runner: deps.tauri.getRunner() });
   ctx.log.debug("build:codegen", { target, mobileInitRan });
   return { mobileInitRan };
 }
@@ -133,7 +133,7 @@ async function modifiedAt(target: string): Promise<number | undefined> {
  * set with `tauri.icon()`. The set is left alone ONLY when the generated
  * `src-tauri/icons/icon.png` is newer than the source AND this pass did not run
  * `mobileInit` — a fresh `gen/` tree ships Tauri's own default icons, which must be
- * overwritten (B5/A8).
+ * overwritten.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
@@ -227,9 +227,9 @@ function emitPhase(
  * Runs the shared `tauri build` subprocess that covers BOTH the `compile` and `bundle`
  * phases (one process — D-013). The transition is LIVE: the first scrubbed output line
  * matching the bundling pattern closes `compile` and opens `bundle` right then, so a
- * progress UI never sits on "compiling" through the whole bundling step (N1). When no
+ * progress UI never sits on "compiling" through the whole bundling step. When no
  * transition line ever appears, `compile` closes at exit and `bundle` is reported as a
- * zero-duration pass. A failure is attributed to whichever phase is open (A15).
+ * zero-duration pass. A failure is attributed to whichever phase is open.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
@@ -360,7 +360,7 @@ async function runPhase<T>(
 
 /**
  * Runs the three preparation phases — `scaffold → codegen → icons` — that bring the
- * generated project to a buildable state. `dev` needs exactly these (M1): a `tauri dev`
+ * generated project to a buildable state. `dev` needs exactly these: a `tauri dev`
  * run compiles from the same tree, so it must never see a stale or missing one.
  *
  * @param ctx - The build pipeline's domain context.
@@ -428,7 +428,8 @@ export async function runPipeline(
 
   const collect = await runPhase(ctx, target, "collect", () =>
     collectArtifacts(ctx.global.projectDir, target, ctx.global.outDir, {
-      simulator: opts.simulator
+      simulator: opts.simulator,
+      aab: opts.aab
     })
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });

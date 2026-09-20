@@ -36,10 +36,10 @@ monorepo consumer's web build runs in its own package.
 app.project.generate({ target: "macos" });
 // => { written: string[], unchanged: string[], skipped: string[] }
 
-app.project.completeness({ target: "android" });
+app.project.getCompleteness({ target: "android" });
 // => { status: "not-applicable" | "not-initialized" | "incomplete" | "complete", missing?: string[] }
 
-await app.project.patchMobile({ target: "ios", runner: app.tauri.runner() });
+await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
 // => { patched: string[], unchanged: string[] }
 
 await app.project.ensureIconSource();
@@ -52,8 +52,8 @@ app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" });
 // => ResolvedCapability (registry row + conf/sidecarPlist/manifest)
 
 app.project.isKnownCapability("store"); // => true
-app.project.registryRows(); // => copies of the 5 registry rows (consumed by doctor)
-app.project.requiredFiles("android"); // => required gen/android file set (consumed by doctor)
+app.project.getRegistryRows(); // => copies of the 5 registry rows (consumed by doctor)
+app.project.getRequiredFiles({ target: "android" }); // => required gen/android file set (consumed by doctor)
 ```
 
 - `generate({ target })` — writes/refreshes every pure artifact for a target into
@@ -178,7 +178,7 @@ matching non-empty `capabilities["deep-link"].scheme`.
 
 `tray` is the reason every plugin-shaped field on `RegistryRow` is optional while
 `cargoFeatures` is required: it is a core Tauri feature flag, not a plugin. Consumers of
-`registryRows()` (doctor) null-check `npmPackage`/`crate` before use. `registryRows()`
+`getRegistryRows()` (doctor) null-check `npmPackage`/`crate` before use. `getRegistryRows()`
 returns fresh copies, so a caller can never mutate the registry.
 
 `deep-link` resolves to the plugin's real two-sided conf shape:

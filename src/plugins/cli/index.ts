@@ -31,17 +31,23 @@ export const cliPlugin = createPlugin("cli", {
   config: defaultConfig,
   createState: createCliState,
   /**
-   * Wires the real plugin context into `createCliApi` (wrapper form — see the plugin
-   * JSDoc above).
+   * Wires the real plugin context into `createCliApi`, resolving cli's four dependency APIs
+   * here, where core's own `ctx.require` types them.
    *
    * @param ctx - The real plugin context (global/config/state/require).
    * @returns The `cli` plugin's public API.
    * @example
    * ```ts
-   * api: ctx => createCliApi(ctx)
+   * api: ctx => createCliApi(ctx, { build: ctx.require(buildPlugin), ... })
    * ```
    */
-  api: ctx => createCliApi(ctx),
+  api: ctx =>
+    createCliApi(ctx, {
+      project: ctx.require(projectPlugin),
+      tauri: ctx.require(tauriPlugin),
+      build: ctx.require(buildPlugin),
+      doctor: ctx.require(doctorPlugin)
+    }),
   /**
    * Wires the real plugin context into `createCliHandlers` (wrapper form — see the plugin
    * JSDoc above).

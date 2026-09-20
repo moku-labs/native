@@ -2,34 +2,28 @@
  * @file build plugin — API factory: prepare (scaffold→codegen→icons), run (one target),
  * runAll (sequential multi-target).
  */
-import { projectPlugin } from "../project";
-import { tauriPlugin } from "../tauri";
 import { runPipeline, runPrepare } from "./pipeline";
 import type { Api, BuildContext, BuildDeps, BuildResult } from "./types";
 
 /**
  * Creates the build pipeline API — `prepare` runs the three phases that make the
- * generated project buildable (what `dev` needs, M1); `run` executes the full
+ * generated project buildable (what `dev` needs); `run` executes the full
  * scaffold→codegen→icons→compile→bundle→collect pipeline for one target; `runAll` repeats
  * it sequentially across targets (never `Promise.all` — all five share one Cargo
  * `target/` lock, so parallelism would only contend) and stops at the first failing
- * target (no partial-continue in v1). Both dependencies are resolved ONCE here (N3) and
- * threaded through the pipeline as `deps`.
+ * target (no partial-continue in v1). The two dependency APIs are resolved ONCE at the
+ * wiring point and threaded through every phase as `deps`.
  *
- * @param ctx - Plugin context (`require`s project/tauri, emits native:phase/native:complete).
+ * @param ctx - Plugin context (global config, log, emits native:phase/native:complete).
+ * @param deps - The project/tauri API slices the pipeline calls.
  * @returns The `build` plugin's public API.
  * @example
  * ```ts
- * const api = createBuildApi(ctx);
+ * const api = createBuildApi(ctx, { project, tauri });
  * const result = await api.run({ target: "macos" });
  * ```
  */
-export function createBuildApi(ctx: BuildContext): Api {
-  const deps: BuildDeps = {
-    project: ctx.require(projectPlugin),
-    tauri: ctx.require(tauriPlugin)
-  };
-
+export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
   return {
     /**
      * Brings the generated project to a buildable state — scaffold, codegen, icons — and

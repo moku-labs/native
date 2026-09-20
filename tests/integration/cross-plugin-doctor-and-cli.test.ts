@@ -220,7 +220,7 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     expect(completeness.message).toContain("not initialized");
 
     // The same spawn fake answers tauri.version() directly.
-    await expect(testApp.app.tauri.version()).resolves.toEqual({ cliVersion: "built" });
+    await expect(testApp.app.tauri.getVersion()).resolves.toEqual({ cliVersion: "built" });
   });
 });
 
@@ -264,7 +264,7 @@ describe("S09 — doctor warn-only semantics + registry/env consumption", () => 
     expect(crossRepo.message).toContain("tauri://localhost");
 
     // The registry the versions check consumed — 5 pinned rows.
-    expect(testApp.app.project.registryRows()).toHaveLength(5);
+    expect(testApp.app.project.getRegistryRows()).toHaveLength(5);
   });
 
   it("reports signing env-var PRESENCE by name only — never a value", async () => {

@@ -217,7 +217,7 @@ describe("S18 — cross-plugin error propagation", () => {
     const testApp = await makeApp();
 
     // Fabricate a PARTIAL tree: only the FIRST required file, read from the API at runtime.
-    const required = testApp.app.project.requiredFiles("android");
+    const required = testApp.app.project.getRequiredFiles({ target: "android" });
     const firstRequired = required[0];
     expect(firstRequired).toBeDefined();
     if (firstRequired === undefined) throw new Error("requiredFiles(android) is empty");
@@ -353,12 +353,12 @@ describe("S19 — lifecycle edges", () => {
     );
 
     // The composed surface stays functional after stop — no held resources.
-    expect(firstApp.app.project.registryRows()).toHaveLength(5);
+    expect(firstApp.app.project.getRegistryRows()).toHaveLength(5);
 
     // A SECOND fresh app cycles just as cleanly — nothing leaked across app lifecycles.
     const secondApp = await makeApp();
     await expect(secondApp.app.start()).resolves.toBeUndefined();
     await expect(secondApp.app.stop()).resolves.toBeUndefined();
-    expect(secondApp.app.project.registryRows()).toHaveLength(5);
+    expect(secondApp.app.project.getRegistryRows()).toHaveLength(5);
   });
 });

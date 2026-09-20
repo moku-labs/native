@@ -170,7 +170,7 @@ describe("build plugin integration", () => {
   });
 
   describe("prepare", () => {
-    it("runs scaffold/codegen/icons and stops — the build verb never spawns (M1)", async () => {
+    it("runs scaffold/codegen/icons and stops — the build verb never spawns", async () => {
       const recordedEvents: RecordedEvent[] = [];
       const app = createTestApp(spawnBuildSucceeds, recordedEvents);
 
@@ -201,7 +201,7 @@ describe("build plugin integration", () => {
         const verb = opts.cmd.slice(2);
 
         if (verb[0] === "ios" && verb[1] === "init") {
-          // `tauri ios init --ci` only runs once tauri.conf.json exists (B6).
+          // `tauri ios init --ci` only runs once tauri.conf.json exists.
           if (!existsSync(path.join(projectDir, "src-tauri", "tauri.conf.json"))) {
             throw new Error("ios init ran before codegen");
           }
@@ -239,7 +239,7 @@ describe("build plugin integration", () => {
         "ios build"
       ]);
 
-      // The build verb targets the host simulator arch (B7).
+      // The build verb targets the host simulator arch.
       const buildVerb = spawnVerbs().at(-1) ?? [];
       expect(buildVerb.includes("--target")).toBe(true);
       expect(buildVerb.at(-1)).toMatch(/-sim$/);

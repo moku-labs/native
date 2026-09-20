@@ -12,7 +12,7 @@ export type GenerateResult = {
   readonly skipped: readonly string[];
 };
 
-/** Mobile gen/-tree gate — completeness (required-file set), not existence (S4 refinement). */
+/** Mobile gen/-tree gate — completeness (required-file set), not existence. */
 export type CompletenessResult =
   | { status: "not-applicable" }
   | { status: "not-initialized" }
@@ -89,7 +89,7 @@ export type ProjectContext = PluginCtx<Record<string, never>, Record<string, nev
 /** Public API of the project plugin. */
 export type Api = {
   generate(opts: { target: Target }): Promise<GenerateResult>;
-  completeness(opts: { target: Target }): CompletenessResult;
+  getCompleteness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;
   ensureIconSource(): Promise<string>;
@@ -98,6 +98,6 @@ export type Api = {
     config?: CapabilityConfigMap[K]
   ): ResolvedCapability;
   isKnownCapability(name: string): name is keyof CapabilityConfigMap;
-  registryRows(): ReadonlyArray<RegistryRow>;
-  requiredFiles(platform: MobileTarget): readonly string[];
+  getRegistryRows(): ReadonlyArray<RegistryRow>;
+  getRequiredFiles(opts: { target: MobileTarget }): readonly string[];
 };

@@ -1,6 +1,6 @@
 /**
  * @file doctor plugin check — the iOS build tools `tauri ios` shells out to: `xcodegen`,
- * `pod`, and both rust target triples (device + simulator). A17; ios on a macOS host only.
+ * `pod`, and both rust target triples (device + simulator). ios on a macOS host only.
  */
 import process from "node:process";
 import type { CheckResult } from "../types";

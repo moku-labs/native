@@ -4,10 +4,10 @@
 import type { BrandConsole } from "@moku-labs/common/cli";
 import type { PluginCtx } from "@moku-labs/core";
 import type { BuildFlavor, Config as GlobalConfig, Target } from "../../config";
-import type { buildPlugin } from "../build";
-import type { doctorPlugin } from "../doctor";
-import type { projectPlugin } from "../project";
-import type { tauriPlugin } from "../tauri";
+import type { Api as BuildApi } from "../build/types";
+import type { Api as DoctorApi } from "../doctor/types";
+import type { Api as ProjectApi } from "../project/types";
+import type { Api as TauriApi } from "../tauri/types";
 
 /** Structural render sink — injectable for tests (default: branded `@moku-labs/common/cli` console). */
 export type RenderFn = (line: string) => void;
@@ -54,20 +54,21 @@ export type CliStateContext = {
 /**
  * Domain context shared by the cli plugin's `api` and `hooks` factories: core's `PluginCtx`
  * over this plugin's config (the render/confirm seams) and state (the shared branded
- * console), plus `global` and one `require` overload per real dependency — cli depends on
- * exactly project/tauri/build/doctor (D-007). cli emits nothing of its own.
+ * console), plus `global`. cli emits nothing of its own, and it holds no `require`: the four
+ * dependency APIs are resolved once at the wiring point and travel as {@link CliDeps}.
  */
 export type CliContext = PluginCtx<Config, State> & {
   readonly global: Readonly<GlobalConfig>;
-  /**
-   * Resolves a dependency plugin's API. The constraint IS cli's dependency list, and the
-   * API type is read off the resolved instance's own phantom slot — no mirror of core's
-   * registry types.
-   *
-   * @param plugin - `projectPlugin`, `tauriPlugin`, `buildPlugin` or `doctorPlugin`.
-   * @returns That plugin's public API.
-   */
-  require<
-    P extends typeof projectPlugin | typeof tauriPlugin | typeof buildPlugin | typeof doctorPlugin
-  >(plugin: P): P["_phantom"]["api"];
+};
+
+/**
+ * The dependency API slices the verbs delegate to — cli depends on exactly
+ * project/tauri/build/doctor (D-007), and every verb is a thin delegate, so the surface it
+ * actually calls is this narrow.
+ */
+export type CliDeps = {
+  readonly project: Pick<ProjectApi, "clean">;
+  readonly tauri: Pick<TauriApi, "dev">;
+  readonly build: BuildApi;
+  readonly doctor: DoctorApi;
 };

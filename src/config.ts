@@ -78,7 +78,7 @@ export type NativePhase = (typeof PHASE_ORDER)[number];
 
 /**
  * Per-capability packaging parameters — ONE map drives both `Config["capabilities"]`
- * and project's `resolve<K extends keyof CapabilityConfigMap>` (S2-refined; spec/09 §3/§5 technique).
+ * and project's `resolve<K extends keyof CapabilityConfigMap>` (refined; spec/09 §3/§5 technique).
  * deep-link is custom-scheme-only in v1 (D-011); the `mode` discriminant keeps `"universal"` additive later.
  */
 export type CapabilityConfigMap = {
@@ -149,7 +149,7 @@ export type Config = {
     category?: string;
     buildNumber?: string;
   };
-  /** Web build/dev wiring codegenned into tauri.conf.json (S3). cwd for monorepo layouts (S3-refined). */
+  /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
   /** Composed `@moku-labs/system` plugins — the kernel-guaranteed name-only contract (spec/03 §1). */
   system: ReadonlyArray<{ name: string }>;
@@ -214,9 +214,10 @@ export const coreConfig = createCoreConfig<Config, Events, [typeof logPlugin, ty
     pluginConfigs: {
       // Core-plugin default (levels 1–2 of the 4-level core cascade, spec/03 §5).
       // The `env` core plugin ships with ZERO providers, which left `ctx.env.get("PATH")`
-      // undefined — and with it the tauri plugin's PATH-walk node resolution. Seeded here
-      // (core-plugin config is sealed from createApp — spec/05 §1b), exactly as
-      // `@moku-labs/worker` seeds it. Overriding `providers` REPLACES this list.
+      // undefined — and with it the tauri plugin's PATH-walk node resolution. Seeded here,
+      // exactly as `@moku-labs/worker` seeds it. A consumer CAN still override it from
+      // `createApp({ pluginConfigs: { env } })` — the key is just untyped there — and an
+      // override REPLACES this list rather than extending it.
       env: { providers: [workerSafeProcessEnv()] }
     }
   }

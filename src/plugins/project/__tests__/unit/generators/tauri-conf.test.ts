@@ -10,6 +10,18 @@ const confFor = (...args: Parameters<typeof generatorInputFor>) => {
 };
 
 describe("generateTauriConf", () => {
+  it("emits bundle.windows.certificateThumbprint only when it is configured", () => {
+    const signed = JSON.parse(
+      generateTauriConf(
+        generatorInputWith("windows", { signing: { windows: { certificateThumbprint: "A1B2C3" } } })
+      )[0]?.content ?? "{}"
+    );
+    const unsigned = confFor("windows");
+
+    expect(signed.bundle.windows.certificateThumbprint).toBe("A1B2C3");
+    expect(unsigned.bundle.windows).toBeUndefined();
+  });
+
   it("writes a single src-tauri/tauri.conf.json artifact", () => {
     const artifacts = generateTauriConf(generatorInputFor("macos"));
     expect(artifacts).toHaveLength(1);

@@ -141,7 +141,7 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
 /**
  * Renders the final doctor summary once the full report has resolved: a heading, the
  * pass/warn/fail counts, and the overall verdict. It repeats NO row — every check already
- * printed exactly once, live from the `doctor:check` hook (M7).
+ * printed exactly once, live from the `doctor:check` hook.
  *
  * @param ui - The branded console to render through.
  * @param report - The aggregated diagnosis report.
@@ -161,7 +161,7 @@ export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): voi
 
 /**
  * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
- * in a branded box, then the `[native]` error line (B9). Cause first, verdict second —
+ * in a branded box, then the `[native]` error line. Cause first, verdict second —
  * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
  * failure (or an empty tail) prints the error line alone.
  *

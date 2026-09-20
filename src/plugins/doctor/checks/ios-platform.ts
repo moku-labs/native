@@ -1,6 +1,6 @@
 /**
  * @file doctor plugin check — the installed iOS platform: simulator SDKs (`xcodebuild
- * -showsdks`) and simulator runtimes (`xcrun simctl list runtimes`). A17; ios on a macOS
+ * -showsdks`) and simulator runtimes (`xcrun simctl list runtimes`). ios on a macOS
  * host only. Warn-only, and only when NO simulator runtime is installed — a runtime newer
  * than the SDK is a normal, working setup.
  */

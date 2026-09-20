@@ -19,14 +19,14 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
 | `clean` | `clean(opts?: { target?: Target }): Promise<void>` | Deletes derived state (confirm-gated without a `target`). |
 
 - **`build`** — the host-target default comes from the framework's own `hostTargets`
-  (darwin→macos, win32→windows, linux→linux; mobile targets are never inferred — A9, cli
+  (darwin→macos, win32→windows, linux→linux; mobile targets are never inferred; cli
   keeps no second table). `simulator` (iOS: build for the host's simulator arch) and `aab`
   (Android: emit a store bundle instead of an apk) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
   hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` is framed in a
-  branded `box` above the `[native]` error line (B9), then the error rethrows unchanged.
+  branded `box` above the `[native]` error line, then the error rethrows unchanged.
 - **`dev`** — awaits `build.prepare({ target })` first, so `tauri dev` never meets a
-  half-generated tree (M1); the target defaults to the host target and a host with no
+  half-generated tree; the target defaults to the host target and a host with no
   desktop target throws the `[native]` fix-it error. Then it runs the dev loop
   (`tauri dev` / `tauri ios|android dev`) and awaits the handle's `ready` (dev output streams
   through the scrubbed `onOutput` render seam, D-014) then `exited`. It **never stores the
@@ -36,7 +36,7 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
   stops and resolves cleanly.
 - **`doctor`** — delegates to `doctor.run`. Each check's row (with its fix-it) prints
   exactly ONCE, live from the `doctor:check` hook as the check settles; the summary adds only
-  the `pass N · warn N · fail N` counts and the overall verdict (M7). Returns `report.ok` —
+  the `pass N · warn N · fail N` counts and the overall verdict. Returns `report.ok` —
   the consumer script sets `process.exitCode`.
 - **`clean`** — thin delegate to `project.clean` (D-006: project owns the destructive
   filesystem knowledge). Without a `target`, the full-`projectDir` wipe is gated behind a
@@ -75,7 +75,7 @@ consumed: `targets` (verb default fallback), `app.name` (complete-box panel head
 ## Design notes
 
 - **`state.ts`** builds the ONE branded console (`ctx.state.ui`) from the configured render
-  seam (N5). `api.ts` and `handlers.ts` both render through it, so a verb and its live
+  seam. `api.ts` and `handlers.ts` both render through it, so a verb and its live
   progress hooks always write to the same sink.
 - **`render.ts`** composes the branded kit behind the seams: `createRenderConsole` binds
   `renderImpl` into `createBrandConsole`; pure formatters build the phase spinner lines

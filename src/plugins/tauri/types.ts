@@ -112,8 +112,8 @@ export type Api = {
     target?: Target | undefined;
     onOutput?: ((line: string) => void) | undefined;
   }): Promise<DevHandle>;
-  version(): Promise<{ cliVersion: string } | null>;
-  runner(): TauriRunner;
+  getVersion(): Promise<{ cliVersion: string } | undefined>;
+  getRunner(): TauriRunner;
 };
 
 /**

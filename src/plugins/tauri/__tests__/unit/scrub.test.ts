@@ -54,7 +54,7 @@ describe("scrub", () => {
 
   it("preserves an xcodebuild simulator destination line (canonical UUIDs are ids, not secrets)", () => {
     const line =
-      "{ platform:iOS Simulator, arch:arm64, id:41E558D0-66F5-4CA4-90E5-075F9BC510DC, OS:26.3.1, name:iPad Air 13-inch (M3) }";
+      "{ platform:iOS Simulator, arch:arm64, id:41E558D0-66F5-4CA4-90E5-075F9BC510DC, OS:26.3.1, name:iPad Air 13-inch }";
     expect(scrub(line)).toBe(line);
   });
 

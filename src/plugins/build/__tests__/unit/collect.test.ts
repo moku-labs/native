@@ -121,7 +121,53 @@ describe("collectArtifacts", () => {
   });
 });
 
-describe("collectArtifacts — iOS simulator vs device (A7)", () => {
+describe("collectArtifacts — android artifact flavour", () => {
+  let projectDir: string;
+  let outDir: string;
+
+  /** Seeds both an apk and an aab where `tauri android build` writes them. */
+  const seedBoth = async (): Promise<void> => {
+    const outputs = path.join(projectDir, "src-tauri", "gen", "android", "app", "build", "outputs");
+    await mkdir(path.join(outputs, "apk", "universal", "release"), { recursive: true });
+    await mkdir(path.join(outputs, "bundle", "universalRelease"), { recursive: true });
+    await writeFile(path.join(outputs, "apk", "universal", "release", "app-release.apk"), "apk");
+    await writeFile(path.join(outputs, "bundle", "universalRelease", "app-release.aab"), "aab");
+  };
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-collect-android-project-"));
+    outDir = await mkdtemp(path.join(tmpdir(), "moku-native-collect-android-out-"));
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it("aab: collects the store bundle and never the apk", async () => {
+    await seedBoth();
+
+    const result = await collectArtifacts(projectDir, "android", outDir, { aab: true });
+
+    expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.aab")]);
+  });
+
+  it("default: collects the apk and never the store bundle", async () => {
+    await seedBoth();
+
+    const result = await collectArtifacts(projectDir, "android", outDir);
+
+    expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
+  });
+
+  it("aab with nothing built: names the aab pattern in the [native] error", async () => {
+    await expect(collectArtifacts(projectDir, "android", outDir, { aab: true })).rejects.toThrow(
+      /Checked .*outputs\/\*\*\/\*\.aab/
+    );
+  });
+});
+
+describe("collectArtifacts — iOS simulator vs device", () => {
   let projectDir: string;
   let outDir: string;
 

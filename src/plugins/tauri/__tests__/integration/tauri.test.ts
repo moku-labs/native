@@ -98,7 +98,7 @@ describe("tauri plugin integration", () => {
     await app.start();
 
     await app.tauri.mobileInit({ target: "ios" });
-    const runner = app.tauri.runner();
+    const runner = app.tauri.getRunner();
 
     expect([runner.nodePath, runner.tauriJsPath]).toEqual(calls[0]?.slice(0, 2));
 

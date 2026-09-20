@@ -259,7 +259,7 @@ describe("createTauriApi", () => {
   });
 
   it("run() uses projectDir once it exists", async () => {
-    // Fresh temp dir — never the repo, never cwd (SAFETY S2); nothing here deletes it.
+    // Fresh temp dir — never the repo, never cwd; nothing here deletes it.
     const projectDir = mkdtempSync(path.join(tmpdir(), "moku-native-tauri-cwd-"));
     const { spawn, calls } = createSpawnRecorder();
     const ctx = createMockCtx({
@@ -281,7 +281,7 @@ describe("createTauriApi", () => {
     const ctx = createMockCtx();
     const api = createTauriApi(ctx);
 
-    const runner = api.runner();
+    const runner = api.getRunner();
 
     expect(runner.nodePath).toBe("/usr/bin/node");
     expect(runner.tauriJsPath).toMatch(/@tauri-apps[/\\]cli[/\\]tauri\.js$/);
@@ -325,10 +325,10 @@ describe("createTauriApi", () => {
     });
     const api = createTauriApi(ctx);
 
-    await expect(api.version()).resolves.toEqual({ cliVersion: "2.11.4" });
+    await expect(api.getVersion()).resolves.toEqual({ cliVersion: "2.11.4" });
   });
 
-  it("version() returns null when the CLI can't be invoked", async () => {
+  it("getVersion() returns undefined when the CLI can't be invoked", async () => {
     const ctx = createMockCtx({
       config: {
         spawnImpl: spawnUnavailable,
@@ -338,7 +338,7 @@ describe("createTauriApi", () => {
     });
     const api = createTauriApi(ctx);
 
-    await expect(api.version()).resolves.toBeNull();
+    await expect(api.getVersion()).resolves.toBeUndefined();
   });
 
   it("dev() scrubs every output line before it reaches onOutput or the log", async () => {

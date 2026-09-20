@@ -28,7 +28,7 @@ type BuildResult = {
 ```
 
 - **`prepare`** — runs `scaffold → codegen → icons` and stops: everything that makes the
-  generated project buildable, without invoking the build verb. `cli.dev` calls it first (M1), so
+  generated project buildable, without invoking the build verb. `cli.dev` calls it first, so
   a dev session never compiles a stale or half-generated tree.
 - **`run`** — runs the full pipeline for ONE target. Emits `native:phase` (start/progress/done/
   error) per phase and `native:complete` on success. Rejects with whatever the first failing
@@ -44,12 +44,12 @@ type BuildResult = {
 
 | Phase | Delegate | Behavior |
 |---|---|---|
-| `scaffold` | own | Ensures `projectDir` exists. Nothing else: the mobile `gen/` tree is initialized in `codegen`, because `tauri ios\|android init --ci` refuses to run before `tauri.conf.json` exists (B6). |
-| `codegen` | `project` + `tauri` | `project.generate()` first. Mobile then: `tauri.mobileInit()` when `project.completeness()` is `"not-initialized"`, the completeness gate (an `"incomplete"` tree **fails fast** with a `[native]` fix-it pointing at `native doctor` / `native clean --target <t>` — a partial tree is never silently re-initialized), then the idempotent `project.patchMobile({ target, runner: tauri.runner() })` pass — Tauri's generated build phase calls a bare `node tauri` command that does not exist (B10). |
+| `scaffold` | own | Ensures `projectDir` exists. Nothing else: the mobile `gen/` tree is initialized in `codegen`, because `tauri ios\|android init --ci` refuses to run before `tauri.conf.json` exists. |
+| `codegen` | `project` + `tauri` | `project.generate()` first. Mobile then: `tauri.mobileInit()` when `project.getCompleteness()` is `"not-initialized"`, the completeness gate (an `"incomplete"` tree **fails fast** with a `[native]` fix-it pointing at `native doctor` / `native clean --target <t>` — a partial tree is never silently re-initialized), then the idempotent `project.patchMobile({ target, runner: tauri.getRunner() })` pass — Tauri's generated build phase calls a bare `node tauri` command that does not exist. |
 | `icons` | `project` + `tauri` | Source from `project.ensureIconSource()` (`config.app.icon`, or a generated 1024×1024 placeholder), then `tauri.icon({ source })`. Regeneration is skipped **only** when `src-tauri/icons/icon.png` is newer than the source AND this pass did not run `mobileInit` (a fresh `gen/` tree ships Tauri's default icons). Detail: `"up to date"`, `"generated"` or `"placeholder"`. |
 | `compile` | `tauri.build()` | One subprocess covers compile+bundle (D-013); `compile` carries the live `onTick` progress stream (`status: "progress"`, real crate counts, never a fake percentage). |
-| `bundle` | (same subprocess) | The transition is **live**: the first output line matching the bundling pattern closes `compile` and opens `bundle` while the subprocess is still running (N1). No transition line: `compile` closes at exit and `bundle` is reported with a zero duration. A failure is attributed to whichever phase is open (A15), so a bundling/signing error reads as `bundle`, not `compile`. |
-| `collect` | own (`collect.ts`) | Locates artifacts via the bundle-location table, copies them to `outDir/<target>/`. **Zero matches is an error** — never a silent empty success. |
+| `bundle` | (same subprocess) | The transition is **live**: the first output line matching the bundling pattern closes `compile` and opens `bundle` while the subprocess is still running. No transition line: `compile` closes at exit and `bundle` is reported with a zero duration. A failure is attributed to whichever phase is open, so a bundling/signing error reads as `bundle`, not `compile`. |
+| `collect` | own (`collect.ts`) | Locates artifacts via the bundle-location table, copies them to `outDir/<target>/`. The artifact flavour picks ONE pattern set, never two: iOS collects the `*-sim/*.app` with `simulator` and the `.ipa` otherwise; Android collects `**/*.aab` with `aab` and `**/*.apk` otherwise — a stale artifact from the other flavour can never ship. **Zero matches is an error** — never a silent empty success. |
 
 ## Events
 
@@ -74,12 +74,12 @@ artifact context).
   `src-tauri/target/release/` (Cargo's release output); mobile patterns are relative to
   `src-tauri/` (the `gen/<platform>/` tree). Copies use `fs.cp(..., { recursive: true })` so a
   macOS `.app` bundle (a directory) and single-file installers copy through the same call.
-- **Simulator vs device (A7)** — `collectArtifacts(..., { simulator: true })` matches
+- **Simulator vs device** — `collectArtifacts(..., { simulator: true })` matches
   `gen/apple/build/*-sim/*.app` and **never** a device `.ipa`; a plain iOS pass matches
   `gen/apple/build/**/*.ipa` and never the simulator bundle. A simulator build is unsigned and
   produces a `.app` DIRECTORY whose name carries the product's display name, spaces included —
   hence the recursive copy.
-- **Dependencies resolved once (N3)** — `createBuildApi` resolves `project` and `tauri` at
+- **Dependencies resolved once** — `createBuildApi` resolves `project` and `tauri` at
   composition time and threads them through every phase as `deps`; the pipeline never calls
   `ctx.require` per phase.
 - **State: none.** Each `run()` is a self-contained pass — results are returned, not stored.

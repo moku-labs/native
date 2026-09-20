@@ -7,7 +7,7 @@ import type { CliStateContext, State } from "./types";
 /**
  * Creates the cli plugin's state: ONE branded console bound to the configured render seam
  * — shared by `api.ts` and `handlers.ts` so a verb and its live progress hooks write
- * through the same sink (N5) — plus empty progress bookkeeping.
+ * through the same sink — plus empty progress bookkeeping.
  *
  * @param ctx - Minimal context (global config + this plugin's resolved config).
  * @returns The state: the shared branded console and a stopped progress clock.

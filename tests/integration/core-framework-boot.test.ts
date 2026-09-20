@@ -76,20 +76,20 @@ describe("S01 — framework boots via package-entry createApp with all five plug
 
     // project — capability registry + generators + writer + clean.
     expect(app.project.generate).toBeTypeOf("function");
-    expect(app.project.completeness).toBeTypeOf("function");
+    expect(app.project.getCompleteness).toBeTypeOf("function");
     expect(app.project.patchMobile).toBeTypeOf("function");
     expect(app.project.clean).toBeTypeOf("function");
     expect(app.project.resolve).toBeTypeOf("function");
     expect(app.project.isKnownCapability).toBeTypeOf("function");
-    expect(app.project.registryRows).toBeTypeOf("function");
-    expect(app.project.requiredFiles).toBeTypeOf("function");
+    expect(app.project.getRegistryRows).toBeTypeOf("function");
+    expect(app.project.getRequiredFiles).toBeTypeOf("function");
 
     // tauri — the @tauri-apps/cli subprocess surface.
     expect(app.tauri.icon).toBeTypeOf("function");
     expect(app.tauri.build).toBeTypeOf("function");
     expect(app.tauri.mobileInit).toBeTypeOf("function");
     expect(app.tauri.dev).toBeTypeOf("function");
-    expect(app.tauri.version).toBeTypeOf("function");
+    expect(app.tauri.getVersion).toBeTypeOf("function");
 
     // build + doctor + cli — orchestrator, diagnosis, and verb surface.
     expect(app.build.run).toBeTypeOf("function");

@@ -16,7 +16,7 @@ const storeRow = {
   confidence: "high" as const
 };
 
-/** The tray row (A1): a cargo-feature-only capability — no npm package, no crate. */
+/** The tray row: a cargo-feature-only capability — no npm package, no crate. */
 const trayRow = {
   name: "tray" as const,
   cargoFeatures: ["tray-icon"],
@@ -40,9 +40,9 @@ describe("versionsCheck.run", () => {
       )
     };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));
@@ -58,9 +58,9 @@ describe("versionsCheck.run", () => {
       )
     };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));
@@ -95,9 +95,9 @@ describe("versionsCheck.run", () => {
       )
     };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [trayRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [trayRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));
@@ -126,9 +126,9 @@ describe("versionsCheck.run", () => {
   it("passes when no composed capability is declared in package.json", async () => {
     const fs = { readFile: vi.fn(async () => JSON.stringify({ dependencies: {} })) };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));

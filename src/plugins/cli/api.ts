@@ -4,16 +4,12 @@
 import process from "node:process";
 import type { Target } from "../../config";
 import { hostTargets } from "../../config";
-import { buildPlugin } from "../build";
-import { doctorPlugin } from "../doctor";
-import { projectPlugin } from "../project";
-import { tauriPlugin } from "../tauri";
 import { renderBuildFailure, renderDoctorSummary, resolveConfirm } from "./render";
-import type { Api, CliContext } from "./types";
+import type { Api, CliContext, CliDeps } from "./types";
 
 /**
  * Resolves the default packaging target from the host platform via the framework's own
- * {@link hostTargets} table (darwin→macos, win32→windows, linux→linux — A9: cli keeps no
+ * {@link hostTargets} table (darwin→macos, win32→windows, linux→linux — cli keeps no
  * second copy). Mobile targets are never inferred: callers pass `{ target: "ios" }`.
  *
  * @param platform - `process.platform`-shaped value (injectable for cross-platform tests).
@@ -40,19 +36,17 @@ export function hostTarget(platform: NodeJS.Platform = process.platform): Target
  * branded kit (MC1); build/doctor progress additionally renders live via this plugin's
  * `native:phase`/`native:complete`/`doctor:check` hooks (see `handlers.ts`).
  *
- * @param ctx - Plugin context (require project/tauri/build/doctor — D-007; render/confirm seams).
+ * @param ctx - Plugin context (global config, state, render/confirm seams).
+ * @param deps - The project/tauri/build/doctor API slices the verbs delegate to (D-007).
  * @returns The `cli` plugin's public API.
  * @example
  * ```ts
- * const api = createCliApi(ctx);
+ * const api = createCliApi(ctx, { project, tauri, build, doctor });
  * await api.build({ target: "macos" });
  * ```
  */
-export function createCliApi(ctx: CliContext): Api {
-  const project = ctx.require(projectPlugin);
-  const tauri = ctx.require(tauriPlugin);
-  const build = ctx.require(buildPlugin);
-  const doctor = ctx.require(doctorPlugin);
+export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
+  const { build, doctor, project, tauri } = deps;
   const ui = ctx.state.ui;
   const confirm = resolveConfirm(ctx.config.confirmImpl);
 
@@ -75,7 +69,7 @@ export function createCliApi(ctx: CliContext): Api {
      * Builds one target (default: the host target) or every configured target with
      * `{ all: true }` (which ignores any given `target`). Progress renders live through
      * the plugin's `native:phase`/`native:complete` hooks; a failure renders the scrubbed
-     * stderr tail in a box before the error line (B9) and then rethrows unchanged.
+     * stderr tail in a box before the error line and then rethrows unchanged.
      *
      * @param opts - Build options.
      * @param opts.target - The packaging target (default: the resolved host target).
@@ -108,7 +102,8 @@ export function createCliApi(ctx: CliContext): Api {
     /**
      * Runs the dev loop. Brings the generated project to a buildable state first —
      * `build.prepare` runs scaffold → codegen → icons, so `tauri dev` never meets a
-     * half-generated tree (M1) — then awaits the dev handle's `ready` and `exited`. It
+     * half-generated tree, and a failure there renders exactly like a failed build — then
+     * awaits the dev handle's `ready` and `exited`. It
      * NEVER stores the handle and NEVER calls `stop()` itself (D-002); teardown is owned
      * entirely by the tauri seam's own control flow (signal handlers, process-group kill).
      *
@@ -125,7 +120,14 @@ export function createCliApi(ctx: CliContext): Api {
     async dev(opts = {}) {
       const target = opts.target ?? hostTarget();
 
-      await build.prepare({ target });
+      try {
+        await build.prepare({ target });
+      } catch (error) {
+        // Same posture as `build`: the scrubbed tail is the only place the real toolchain
+        // diagnostic survives, and a failed prepare is a failed build of the same tree.
+        renderBuildFailure(ui, error);
+        throw error;
+      }
 
       const handle = await tauri.dev({ target, onOutput: forwardDevOutput });
       await handle.ready;
@@ -144,7 +146,7 @@ export function createCliApi(ctx: CliContext): Api {
     /**
      * Runs diagnosis, renders the summary, and returns whether every check passed. The
      * per-check rows (with their fix-its) print exactly once, live from this plugin's
-     * `doctor:check` hook; this method adds only the counts and the verdict (M7).
+     * `doctor:check` hook; this method adds only the counts and the verdict.
      *
      * @param opts - Optional scoping.
      * @param opts.target - A single target to diagnose (default: every configured target + host).

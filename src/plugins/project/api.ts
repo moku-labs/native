@@ -3,7 +3,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Config, Target } from "../../config";
+import type { Config, MobileTarget, Target } from "../../config";
 import { clean } from "./clean";
 import { completeness, requiredFiles } from "./completeness";
 import { generateBuildScript } from "./generators/build-script";
@@ -119,6 +119,22 @@ function resolveConfiguredCapabilities(
     }
   }
   return resolved;
+}
+
+/**
+ * Returns the required-file set a mobile `gen/<platform>` tree must carry — the options
+ * object keeps every target-scoped API method reading the same way.
+ *
+ * @param opts - The lookup options.
+ * @param opts.target - The mobile platform to list required files for.
+ * @returns The required paths, relative to `src-tauri/gen/<platform>`.
+ * @example
+ * ```ts
+ * getRequiredFiles({ target: "android" });
+ * ```
+ */
+function getRequiredFiles(opts: { target: MobileTarget }): readonly string[] {
+  return requiredFiles(opts.target);
 }
 
 /**
@@ -263,13 +279,13 @@ export function createProjectApi(ctx: ProjectContext): Api {
 
   return {
     generate: generateArtifacts,
-    completeness: checkCompleteness,
+    getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
     clean: runClean,
     ensureIconSource,
     resolve,
     isKnownCapability,
-    registryRows,
-    requiredFiles
+    getRegistryRows: registryRows,
+    getRequiredFiles
   };
 }

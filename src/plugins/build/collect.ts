@@ -3,7 +3,7 @@
  */
 import { cp, glob, mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Target } from "../../config";
+import type { BuildFlavor, Target } from "../../config";
 
 /**
  * Per-target glob patterns locating Tauri's finished installer(s), relative to each
@@ -16,8 +16,17 @@ export const BUNDLE_LOCATIONS: Readonly<Record<Target, readonly string[]>> = {
   windows: ["bundle/nsis/*-setup.exe", "bundle/msi/*.msi"],
   linux: ["bundle/appimage/*.AppImage", "bundle/deb/*.deb", "bundle/rpm/*.rpm"],
   ios: ["gen/apple/build/**/*.ipa"],
-  android: ["gen/android/app/build/outputs/**/*.{aab,apk}"]
+  android: ["gen/android/app/build/outputs/**/*.apk"]
 };
+
+/**
+ * The Android STORE bundle pattern. `tauri android build --aab` writes an `.aab` next to
+ * nothing else useful, and a stale `.apk` from an earlier run must never ship as the store
+ * artifact — so a flavour picks one pattern set, never both.
+ */
+export const ANDROID_BUNDLE_LOCATIONS: readonly string[] = [
+  "gen/android/app/build/outputs/**/*.aab"
+];
 
 /**
  * Resolves Tauri's per-target output root that {@link BUNDLE_LOCATIONS} globs are
@@ -42,31 +51,37 @@ export function bundleRoot(projectDirectory: string, target: Target): string {
  * The iOS SIMULATOR build's output pattern, relative to {@link bundleRoot}. A simulator
  * build is unsigned and never produces an `.ipa`: `tauri ios build --target <arch>-sim`
  * writes `gen/apple/build/<arch>-sim/<Product Name>.app`, a DIRECTORY whose name carries
- * the app's display name (spaces included) — hence the recursive copy (A7).
+ * the app's display name (spaces included) — hence the recursive copy.
  */
 export const IOS_SIMULATOR_LOCATIONS: readonly string[] = ["gen/apple/build/*-sim/*.app"];
 
 /** Result of a successful collect pass — where the shippable artifacts landed. */
 export type CollectResult = { outPath: string; artifacts: readonly string[] };
 
-/** Collect options — a simulator pass looks for the `.app`, never the device `.ipa`. */
-export type CollectOptions = { simulator?: boolean | undefined };
+/**
+ * Collect options — the same {@link BuildFlavor} the build ran with, so the collect phase
+ * looks for exactly the artifact that build produced.
+ */
+export type CollectOptions = BuildFlavor;
 
 /**
- * Picks the glob patterns for one collect pass: an iOS simulator build delivers the
- * unsigned `.app` bundle, every other pass the target's installer(s). Never both —
- * a stale device `.ipa` must not be shipped as a simulator build's artifact (A7).
+ * Picks the glob patterns for one collect pass: an iOS simulator build delivers the unsigned
+ * `.app` bundle, an Android store build the `.aab`, every other pass the target's
+ * installer(s). Never two flavours at once — a stale device `.ipa` must not ship as a
+ * simulator build's artifact, and a stale `.apk` must not ship as a store bundle.
  *
  * @param target - The packaging target being collected.
- * @param opts - Collect options (`simulator` switches the iOS pattern set).
+ * @param opts - Collect options (`simulator` and `aab` each switch a pattern set).
  * @returns The glob patterns to match against {@link bundleRoot}.
  * @example
  * ```ts
  * bundlePatterns("ios", { simulator: true }); // ["gen/apple/build/*-sim/*.app"]
+ * bundlePatterns("android", { aab: true });   // ["gen/android/app/build/outputs/**\/*.aab"]
  * ```
  */
 export function bundlePatterns(target: Target, opts?: CollectOptions): readonly string[] {
   if (target === "ios" && opts?.simulator === true) return IOS_SIMULATOR_LOCATIONS;
+  if (target === "android" && opts?.aab === true) return ANDROID_BUNDLE_LOCATIONS;
   return BUNDLE_LOCATIONS[target];
 }
 
@@ -81,7 +96,8 @@ export function bundlePatterns(target: Target, opts?: CollectOptions): readonly 
  * @param projectDirectory - The generated Tauri project root (contains `src-tauri/`).
  * @param target - The packaging target being collected.
  * @param outputDirectory - The installer delivery root (`config.outDir`).
- * @param opts - Collect options (`simulator` collects the iOS `.app` instead of an `.ipa`).
+ * @param opts - Collect options (`simulator` collects the iOS `.app` instead of an `.ipa`;
+ *   `aab` collects the Android store bundle instead of the `.apk`).
  * @returns The delivery directory and the copied artifact paths.
  * @throws {Error} When no glob pattern for `target` matches any file.
  * @example

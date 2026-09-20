@@ -51,7 +51,7 @@ export function createTauriApi(ctx: TauriContext): Api {
    * Resolves the cwd a one-shot verb runs in: the generated project root once it
    * exists, else the consumer's own cwd — `icon`/`version` legitimately run before
    * `scaffold` has created `projectDir`, and spawning into a missing directory
-   * fails with a bare ENOENT instead of a `[native]` message (M11). The long-lived
+   * fails with a bare ENOENT instead of a `[native]` message. The long-lived
    * `dev` verb is NOT covered: it always needs the generated project.
    *
    * @returns The directory the subprocess is spawned in.
@@ -274,21 +274,22 @@ export function createTauriApi(ctx: TauriContext): Api {
     /**
      * Probes CLI presence/version via `tauri info` — used by `doctor`.
      *
-     * @returns The parsed CLI version, or `null` when the CLI can't be invoked.
+     * @returns The parsed CLI version, or `undefined` when the CLI can't be invoked.
      * @example
      * ```ts
-     * const version = await app.tauri.version();
+     * const version = await app.tauri.getVersion();
      * ```
      */
-    async version() {
+    async getVersion() {
       try {
         const { nodePath, tauriJsPath } = resolvePaths();
         const result = await run(infoArgv(nodePath, tauriJsPath));
         const match = CLI_VERSION_PATTERN.exec(result.stdout);
         return { cliVersion: match?.[1] ?? result.stdout.trim() };
       } catch {
-        // eslint-disable-next-line unicorn/no-null -- version() contract is `{ cliVersion } | null` (spec/02); `null` is the "CLI unavailable" signal, not a lazy fallback.
-        return null;
+        // Absence is `undefined` (D-014): an uninvokable CLI has no version to report,
+        // and a bare `return` is exactly that value.
+        return;
       }
     },
 
@@ -296,16 +297,16 @@ export function createTauriApi(ctx: TauriContext): Api {
      * Returns the resolved `node` + `tauri.js` pair every verb spawns with, so
      * `project.patchMobile` can write the same invocation into the generated
      * Xcode/Gradle build scripts (tauri emits a bare `node tauri`, which does
-     * not exist — B10).
+     * not exist).
      *
      * @returns The resolved invocation prefix.
      * @throws {Error} `[native]` when `node` or the tauri CLI cannot be resolved.
      * @example
      * ```ts
-     * await app.project.patchMobile({ target: "ios", runner: app.tauri.runner() });
+     * await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
      * ```
      */
-    runner() {
+    getRunner() {
       return resolvePaths();
     }
   };

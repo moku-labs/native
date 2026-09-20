@@ -15,5 +15,20 @@ import { createBuildApi } from "./api";
  */
 export const buildPlugin = createPlugin("build", {
   depends: [projectPlugin, tauriPlugin],
-  api: createBuildApi
+  /**
+   * Resolves build's two dependency APIs once, here, where core's own `ctx.require` types
+   * them, and hands them to the pipeline as `deps`.
+   *
+   * @param ctx - The real plugin context.
+   * @returns The `build` plugin's public API.
+   * @example
+   * ```ts
+   * api: ctx => createBuildApi(ctx, { project: ctx.require(projectPlugin), ... })
+   * ```
+   */
+  api: ctx =>
+    createBuildApi(ctx, {
+      project: ctx.require(projectPlugin),
+      tauri: ctx.require(tauriPlugin)
+    })
 });

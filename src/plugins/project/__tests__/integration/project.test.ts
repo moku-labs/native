@@ -146,7 +146,7 @@ describe("complex tier: project plugin (integration)", () => {
   describe("runtime: completeness and clean", () => {
     it("completeness reports not-initialized before any mobile init", async () => {
       const app = createTestApp();
-      expect(app.project.completeness({ target: "android" })).toEqual({
+      expect(app.project.getCompleteness({ target: "android" })).toEqual({
         status: "not-initialized"
       });
     });
@@ -231,8 +231,8 @@ describe("complex tier: project plugin (integration)", () => {
 
     it("exposes registryRows and requiredFiles for doctor", () => {
       const app = createTestApp();
-      expect(app.project.registryRows()).toHaveLength(5);
-      expect(app.project.requiredFiles("android").length).toBeGreaterThan(0);
+      expect(app.project.getRegistryRows()).toHaveLength(5);
+      expect(app.project.getRequiredFiles({ target: "android" }).length).toBeGreaterThan(0);
     });
   });
 });

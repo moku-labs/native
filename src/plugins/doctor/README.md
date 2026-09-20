@@ -58,11 +58,11 @@ raw subprocess/fs call of its own:
 | `ios-tools.ts` | `xcodegen` + `pod` on PATH and both rust triples (`aarch64-apple-ios`, `aarch64-apple-ios-sim`) installed (ios, macOS host only); fix-it lists the exact install commands | fail |
 | `ios-platform.ts` | the installed iOS platform: `xcodebuild -showsdks` + `xcrun simctl list runtimes` (ios, macOS host only). Warns only when NO simulator runtime is installed — a runtime newer than the SDK is fine | **warn only** |
 | `android.ts` | `ANDROID_HOME`/SDK, NDK, JDK presence (android) | fail |
-| `signing.ts` | signing readiness, presence and counts only (never values): one complete Apple credential set (`APPLE_ID`+`APPLE_PASSWORD`+`APPLE_TEAM_ID`, **or** `APPLE_API_KEY`+`APPLE_API_ISSUER`+`APPLE_API_KEY_PATH`), `signing.apple.teamId` for ios, a count-only keychain probe, and `signing.android.keystorePasswordEnv` for android | **warn only** |
-| `completeness.ts` | mobile `gen/` required-file-set via `project.completeness()`; fix-it is always `native clean --target <t>` | fail (not-initialized = pass) |
+| `signing.ts` | signing readiness, presence and counts only (never values): one complete Apple credential set (`APPLE_ID`+`APPLE_PASSWORD`+`APPLE_TEAM_ID`, **or** `APPLE_API_KEY`+`APPLE_API_ISSUER`+`APPLE_API_KEY_PATH`), `signing.apple.teamId` for ios, a count-only keychain probe, `signing.android.keystorePasswordEnv` for android, and `signing.windows.certificateThumbprint` for windows | **warn only** |
+| `completeness.ts` | mobile `gen/` required-file-set via `project.getCompleteness()`; fix-it is always `native clean --target <t>` | fail (not-initialized = pass) |
 | `versions.ts` | `@tauri-apps/*` npm major version vs. the registry-pinned crate range, read from the same root as `web-script.ts`; rows without an npm package (`tray`) are skipped | **warn only** |
 | `web-script.ts` | `web.build`/`web.devCommand` scripts exist in the SAME root Tauri will use (`web.cwd` when set, else the consumer root); necessary-not-sufficient, never executes the script | fail |
-| `tauri-cli.ts` | CLI invokable via `tauri.version()` — the one probe routed through `tauri`, not this plugin's own `probeImpl` | fail |
+| `tauri-cli.ts` | CLI invokable via `tauri.getVersion()` — the one probe routed through `tauri`, not this plugin's own `probeImpl` | fail |
 | `cross-repo.ts` | worker CORS must allow `tauri://localhost`/`http://tauri.localhost` (always fires); deep-link `.well-known` pointer (fires only when `deep-link` is composed) | **warn only, always** |
 
 A check's `appliesTo(target, global)` decides whether it participates in a given scope — a real
@@ -82,7 +82,7 @@ pluginConfigs: {
 
 `probeImpl` is doctor's own subprocess seam for every **non-tauri** binary probe (`rustup`,
 `xcodebuild`, `java`, `node`, …). The one tauri-CLI probe (`tauri-cli.ts`) goes through
-`app.tauri.version()` instead — the subprocess-seam ownership boundary (`tauri` owns the
+`app.tauri.getVersion()` instead — the subprocess-seam ownership boundary (`tauri` owns the
 `@tauri-apps/cli` seam) stays intact.
 
 `probeTimeoutMs` bounds every check twice over: the real probe hands it to `spawn` as its
@@ -92,8 +92,9 @@ toolchain, so it never flips `report.ok`.
 
 ## Design notes
 
-- **Depends:** `[project, tauri]` (D-007) — `project` supplies `requiredFiles`/`completeness`/
-  `registryRows`; `tauri` supplies the one CLI-invokability probe.
+- **Depends:** `[project, tauri]` (D-007) — `project` supplies `getRequiredFiles`/
+  `getCompleteness`/`getRegistryRows`; `tauri` supplies the one CLI-invokability probe.
+  Both APIs are resolved at the wiring point and handed to the api factory as `deps`.
 - **No `onInit`/`onStart`/`onStop`** — project owns config validation; the check registry is
   static; checks run only on `run()` calls, nothing outlives one.
 - **Signing values never logged** — every signing check reads presence only (`ctx.env.has`), never

@@ -21,22 +21,17 @@ import {
 } from "../../pipeline";
 import type { BuildContext, BuildDeps } from "../../types";
 
-/** The resolved runner pair the tauri mock hands to `project.patchMobile` (B10). */
+/** The resolved runner pair the tauri mock hands to `project.patchMobile`. */
 const RUNNER: TauriRunner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/tauri.js" };
 
 /** A successful one-shot verb result. */
 const okResult = (): RunResult => ({ code: 0, stdout: "", stderr: "", durationMs: 1 });
 
-/** The pipeline never calls `require` — both deps are resolved once in `createBuildApi`. */
-const requireNever: BuildContext["require"] = plugin => {
-  throw new Error(`ctx.require(${plugin.name}) is not used by the pipeline`);
-};
-
 /** Minimal project-api mock — the four methods the prepare phases call. */
 function createProjectMock(iconSource: string) {
   return {
     generate: vi.fn(async () => ({ written: [], unchanged: [], skipped: [] })),
-    completeness: vi.fn((): CompletenessResult => ({ status: "complete" })),
+    getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
     ensureIconSource: vi.fn(async () => iconSource)
   };
@@ -47,7 +42,7 @@ function createTauriMock() {
   return {
     mobileInit: vi.fn(async (): Promise<RunResult> => okResult()),
     icon: vi.fn(async (): Promise<RunResult> => okResult()),
-    runner: vi.fn((): TauriRunner => RUNNER),
+    getRunner: vi.fn((): TauriRunner => RUNNER),
     build: vi.fn(async (opts: BuildOptions): Promise<RunResult> => {
       opts.onTick?.({ crate: "demo" });
       opts.onOutput?.("Bundling app.dmg");
@@ -114,8 +109,7 @@ function createMocks(overrides?: {
     // build declares neither config nor state — core hands every plugin the empty objects.
     config: {},
     state: {},
-    emit,
-    require: requireNever
+    emit
   };
 
   return { ctx, deps: { project, tauri }, emit, project, tauri };
@@ -140,14 +134,14 @@ describe("runScaffold", () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it("only ensures projectDir exists — the mobile gate moved into codegen (B6)", async () => {
+  it("only ensures projectDir exists — the mobile gate moved into codegen", async () => {
     const nestedDir = path.join(projectDir, "nested");
     const { ctx, project, tauri } = createMocks({ projectDir: nestedDir });
 
     await runScaffold(ctx);
 
     expect(existsSync(nestedDir)).toBe(true);
-    expect(project.completeness).not.toHaveBeenCalled();
+    expect(project.getCompleteness).not.toHaveBeenCalled();
     expect(tauri.mobileInit).not.toHaveBeenCalled();
   });
 });
@@ -166,14 +160,14 @@ describe("runCodegen", () => {
 
   it("mobile not-initialized: generate runs BEFORE mobileInit, then patchMobile gets the runner", async () => {
     const { ctx, deps, project, tauri } = createMocks();
-    project.completeness
+    project.getCompleteness
       .mockReturnValueOnce({ status: "not-initialized" })
       .mockReturnValueOnce({ status: "complete" });
 
     const result = await runCodegen(ctx, deps, "ios");
 
     expect(result).toEqual({ mobileInitRan: true });
-    // `tauri ios init --ci` needs tauri.conf.json on disk first (B6): generate strictly first.
+    // `tauri ios init --ci` needs tauri.conf.json on disk first: generate strictly first.
     const generateOrder = project.generate.mock.invocationCallOrder[0] ?? 0;
     const initOrder = tauri.mobileInit.mock.invocationCallOrder[0] ?? 0;
     const patchOrder = project.patchMobile.mock.invocationCallOrder[0] ?? 0;
@@ -201,7 +195,10 @@ describe("runCodegen", () => {
 
   it("mobile incomplete: fails with a [native] fix-it, never patching", async () => {
     const { ctx, deps, project, tauri } = createMocks();
-    project.completeness.mockReturnValue({ status: "incomplete", missing: ["build.gradle.kts"] });
+    project.getCompleteness.mockReturnValue({
+      status: "incomplete",
+      missing: ["build.gradle.kts"]
+    });
 
     await expect(runCodegen(ctx, deps, "android")).rejects.toThrow(
       /^\[native\] android project tree is incomplete\.\n {2}Missing build\.gradle\.kts — run `native doctor`/
@@ -279,7 +276,7 @@ describe("runIcons", () => {
 });
 
 describe("runCompileAndBundle", () => {
-  it("emits compile done + bundle start LIVE, at the transition line (N1)", async () => {
+  it("emits compile done + bundle start LIVE, at the transition line", async () => {
     const tauri = createTauriMock();
     let keysAtTransition: string[] = [];
     const { ctx, deps, emit } = createMocks({ tauri });
@@ -347,7 +344,7 @@ describe("runCompileAndBundle", () => {
     expect(phaseKeys(emit)).toEqual(["compile:start", "compile:error"]);
   });
 
-  it("a failure after the transition is reported on the open bundle phase (A15)", async () => {
+  it("a failure after the transition is reported on the open bundle phase", async () => {
     const tauri = createTauriMock();
     tauri.build.mockImplementation(async opts => {
       opts.onOutput?.("Bundling application (App.dmg)");
@@ -452,7 +449,7 @@ describe("runPipeline", () => {
     );
   });
 
-  it("a simulator run collects the simulator .app instead of a device .ipa (A7)", async () => {
+  it("a simulator run collects the simulator .app instead of a device .ipa", async () => {
     const simulatorApp = path.join(
       bundleRoot(projectDir, "ios"),
       "gen",
@@ -489,7 +486,10 @@ describe("runPipeline", () => {
 
   it("propagates the mobile completeness fix-it from codegen, before any compile work", async () => {
     const { ctx, deps, project, tauri, emit } = createMocks({ projectDir, outDir });
-    project.completeness.mockReturnValue({ status: "incomplete", missing: ["build.gradle.kts"] });
+    project.getCompleteness.mockReturnValue({
+      status: "incomplete",
+      missing: ["build.gradle.kts"]
+    });
 
     await expect(runPipeline(ctx, deps, { target: "android" })).rejects.toThrow(
       /project tree is incomplete/
@@ -507,7 +507,7 @@ describe("runPipeline", () => {
 });
 
 describe("projectPlugin/tauriPlugin identity", () => {
-  it("both plugin instances carry the names createBuildApi resolves them by", () => {
+  it("both plugin instances carry the names the build plugin wires them in by", () => {
     expect(projectPlugin.name).toBe("project");
     expect(tauriPlugin.name).toBe("tauri");
   });

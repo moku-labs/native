@@ -41,9 +41,10 @@
  * | `tauri` | `nodePath` | `undefined` | explicit `node` path; real = PATH walk (never `process.execPath`, which is bun here) |
  * | `tauri` | `readiness` | `{ intervalMs: 250, timeoutMs: 60_000 }` | `dev()`'s devUrl poll cadence (no stdout ready marker exists — tauri#4740) |
  * | `doctor` | `probeImpl` | `undefined` | injectable probe runner; real = `which`/`--version` subprocesses |
+ * | `doctor` | `probeTimeoutMs` | `10_000` | per-check budget; a check that outruns it yields a `warn` |
  * | `cli` | `renderImpl` | `undefined` | injectable render sink; real = branded console (MC1) |
  * | `cli` | `confirmImpl` | `undefined` | injectable confirm; real = styled branded confirm (gates a full `clean()`) |
- * | `env` (core) | `providers` | `[workerSafeProcessEnv()]` | seeded in `src/config.ts`; overriding REPLACES the list, so re-add it |
+ * | `env` (core) | `providers` | `[workerSafeProcessEnv()]` | seeded in `src/config.ts`; untyped on `createApp`, so pass a pre-built options object — and overriding REPLACES the list, so re-add it |
  * @example
  * ```ts
  * import { createApp } from "@moku-labs/native";
@@ -96,13 +97,14 @@ export const createApp = framework.createApp;
 export const createPlugin = framework.createPlugin;
 
 // ─── Plugins + Plugin Types ──────────────────────────────────
-export * from "./plugins";
+export { buildPlugin, cliPlugin, doctorPlugin, projectPlugin, tauriPlugin } from "./plugins";
+export type { Build, Cli, Doctor, Project, Tauri } from "./plugins";
 
 // ─── Helpers + Constants ─────────────────────────────────────
 export { hostTargets, PHASE_ORDER, TARGETS } from "./config";
 // The one runtime value a plugin namespace cannot carry: the plugin type namespaces are
-// type-only (`export type * as Tauri`), so the error class is exported by name here.
-export { TauriError } from "./plugins/tauri/errors";
+// type-only (`export type * as Tauri`), so the error class travels through the barrel by name.
+export { TauriError } from "./plugins";
 
 // ─── Types ───────────────────────────────────────────────────
 export type {

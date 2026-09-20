@@ -261,7 +261,7 @@ export const realSpawn: SpawnFn = opts =>
     }
 
     child.on("error", reject);
-    // Two distinct events on purpose (M5): `exit` is when the process is gone — the
+    // Two distinct events on purpose: `exit` is when the process is gone — the
     // group-kill ladder must see that immediately — while `close` is when its stdio
     // pipes are drained. tauri's own children (xcodebuild, gradle, cargo) inherit
     // those pipes, so output still arrives AFTER `exit`; resolving there would drop

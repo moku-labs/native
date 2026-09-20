@@ -1,12 +1,12 @@
 /**
- * @file doctor plugin check — tauri CLI invokability via tauri.version() (D-013 subprocess
+ * @file doctor plugin check — tauri CLI invokability via tauri.getVersion() (D-013 subprocess
  * seam boundary: this is the ONE probe routed through tauri, not doctor's own probeImpl).
  */
 import type { CheckResult } from "../types";
 import type { Check, CheckInput } from "./types";
 
 /**
- * Confirms the tauri CLI is invokable via the tauri plugin's own `version()` probe.
+ * Confirms the tauri CLI is invokable via the tauri plugin's own `getVersion()` probe.
  *
  * @param input - The check input (host-scoped).
  * @returns The check result.
@@ -16,7 +16,7 @@ import type { Check, CheckInput } from "./types";
  * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
-  const version = await input.tauri.version();
+  const version = await input.tauri.getVersion();
   if (!version) {
     return {
       id: "tauri-cli",

@@ -4,7 +4,6 @@ import type { CheckResult } from "../../../doctor/types";
 import { createCliHandlers } from "../../handlers";
 import { createCliState } from "../../state";
 import type { CliContext, Config } from "../../types";
-import { createMockRequire } from "./mock-require";
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -30,11 +29,10 @@ function createMockCtx(renderImpl: (line: string) => void = () => {}): CliContex
   return {
     global: validGlobalConfig,
     config,
-    // The real state factory — the branded console is created ONCE there (N5).
+    // The real state factory — the branded console is created ONCE there.
     state: createCliState({ global: validGlobalConfig, config }),
     // handlers render only — they never emit and never resolve a dependency.
-    emit: vi.fn(),
-    require: createMockRequire({})
+    emit: vi.fn()
   };
 }
 
@@ -98,7 +96,7 @@ describe("createCliHandlers — native:phase state transitions", () => {
 });
 
 describe("createCliHandlers — rendering", () => {
-  it("renders through the one state-owned console for phase/complete/check events (N5)", () => {
+  it("renders through the one state-owned console for phase/complete/check events", () => {
     const lines: string[] = [];
     const ctx = createMockCtx(line => lines.push(line));
     const handlers = createCliHandlers(ctx);
@@ -123,7 +121,7 @@ describe("createCliHandlers — rendering", () => {
     expect(text).toContain("node-binary");
   });
 
-  it("renders doctor rows only from the hook — one row per doctor:check event (M7)", () => {
+  it("renders doctor rows only from the hook — one row per doctor:check event", () => {
     const lines: string[] = [];
     const ctx = createMockCtx(line => lines.push(line));
     const handlers = createCliHandlers(ctx);

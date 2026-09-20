@@ -17,8 +17,8 @@ app.tauri.icon({ source: "assets/icon.png" }): Promise<RunResult>
 app.tauri.build({ target, simulator?, exportMethod?, aab?, onTick?, onOutput? }): Promise<RunResult>
 app.tauri.mobileInit({ target: "ios" | "android" }): Promise<RunResult>
 app.tauri.dev({ target?, onOutput? }): Promise<DevHandle>
-app.tauri.version(): Promise<{ cliVersion: string } | null>
-app.tauri.runner(): { nodePath: string; tauriJsPath: string }
+app.tauri.getVersion(): Promise<{ cliVersion: string } | null>
+app.tauri.getRunner(): { nodePath: string; tauriJsPath: string }
 ```
 
 - **`icon`** — regenerates the icon set from a source image (`tauri icon`), always with an
@@ -41,7 +41,7 @@ app.tauri.runner(): { nodePath: string; tauriJsPath: string }
   app's whole signing/artifact configuration for every target.
 - **`mobileInit`** — runs `tauri ios|android init`, the ONLY init verbs this plugin exposes
   (plain `tauri init` is never used — the desktop tree is project-generated). Callers must check
-  `project.completeness()` is `"not-initialized"` first; this call is not idempotent
+  `project.getCompleteness()` is `"not-initialized"` first; this call is not idempotent
   (tauri#13902).
 - **`runner`** — the resolved `{ nodePath, tauriJsPath }` pair every verb spawns with.
   `tauri ios init` bakes whichever runner it *detected* (`node tauri`, `bun tauri`,

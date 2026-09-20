@@ -140,7 +140,7 @@ Your project runs **two `createApp`s side by side**: the web/node app you alread
 | [`doctor`](./src/plugins/doctor/README.md) | Complex | `run` | Per-target toolchain/completeness/version-skew diagnosis via a `checks/` registry, run in parallel — one broken check never sinks the report. |
 | [`cli`](./src/plugins/cli/README.md) | Standard | `build` · `dev` · `doctor` · `clean` | Typed verb surface — no argv parsing. Branded rendering (`@moku-labs/common/cli`), live progress via event hooks. |
 
-Every lower-level surface stays reachable on the composed app: `native.project.generate(…)`, `native.tauri.version()`, `native.build.runAll()`, `native.doctor.run()` — `cli` is convenience, not a gate.
+Every lower-level surface stays reachable on the composed app: `native.project.generate(…)`, `native.tauri.getVersion()`, `native.build.runAll()`, `native.doctor.run()` — `cli` is convenience, not a gate.
 
 ## Configuration
 
@@ -181,7 +181,7 @@ Per-plugin knobs, overridable via `createApp({ pluginConfigs })`:
 Three behaviours worth knowing before the first build:
 
 - **Placeholder icon.** `project.ensureIconSource()` returns `path.resolve(app.icon)` and throws a `[native]` fix-it when that file is missing. With `app.icon` unset it writes an embedded 1024×1024 PNG to `<projectDir>/placeholder-icon.png` and returns that. The icons phase reports `generated`, `placeholder`, or `up to date`.
-- **`tray` is a cargo feature, not a plugin.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. Every other registry row is a real plugin, so `RegistryRow.npmPackage`/`crate` are optional and consumers of `registryRows()` null-check them.
+- **`tray` is a cargo feature, not a plugin.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. Every other registry row is a real plugin, so `RegistryRow.npmPackage`/`crate` are optional and consumers of `getRegistryRows()` null-check them.
 - **`clean()` refuses an unsafe root.** `assertCleanableRoot` throws before any path is computed when `projectDir` is the cwd, the home directory, a filesystem root, or an ancestor of the cwd:
 
   ```
@@ -253,7 +253,7 @@ await native.cli.build({ target: "ios", simulator: true });
 | `pod` (CocoaPods) | `brew install cocoapods` | `ios-tools` (fail) |
 | An installed iOS platform + simulator runtime | `xcodebuild -downloadPlatform iOS` | `ios-platform` (warn) |
 
-The first iOS build also runs `tauri ios init` once, then rewrites the build phase Tauri baked into the generated Xcode project: it calls whichever runner Tauri *detected* (`node tauri`, `bun tauri`, …), and none of those resolve inside Xcode. `project.patchMobile({ target, runner: tauri.runner() })` replaces it with the absolute `<node> <tauri.js>` pair this framework spawns with. The pass is idempotent.
+The first iOS build also runs `tauri ios init` once, then rewrites the build phase Tauri baked into the generated Xcode project: it calls whichever runner Tauri *detected* (`node tauri`, `bun tauri`, …), and none of those resolve inside Xcode. `project.patchMobile({ target, runner: tauri.getRunner() })` replaces it with the absolute `<node> <tauri.js>` pair this framework spawns with. The pass is idempotent.
 
 ## When a build fails
 

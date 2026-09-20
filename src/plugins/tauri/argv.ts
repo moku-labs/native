@@ -88,7 +88,7 @@ export function devArgv(nodePath: string, tauriJsPath: string, target?: Target):
  * Builds the argv for `tauri icon` (regenerates the icon set from a source image).
  *
  * `--output` is always explicit: without it the CLI writes relative to its own
- * cwd, which is not the generated project's `src-tauri/icons` (B5/A8).
+ * cwd, which is not the generated project's `src-tauri/icons`.
  *
  * @param nodePath - Resolved `node` binary path.
  * @param tauriJsPath - Resolved `@tauri-apps/cli/tauri.js` entry path.

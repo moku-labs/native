@@ -5,8 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TauriError } from "../../../tauri/errors";
 import { createCliApi, hostTarget } from "../../api";
 import { createCliState } from "../../state";
-import type { CliContext, Config } from "../../types";
-import { createMockRequire } from "./mock-require";
+import type { CliContext, CliDeps, Config } from "../../types";
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -54,12 +53,12 @@ function createMocks() {
 
 type Mocks = ReturnType<typeof createMocks>;
 
-/** Builds a mock `CliContext` whose `require` resolves to the given (or fresh) mocks. */
+/** Builds a mock `CliContext` plus the `CliDeps` the verbs delegate to. */
 function createMockCtx(overrides?: {
   mocks?: Mocks;
   renderImpl?: (line: string) => void;
   confirmImpl?: (question: string) => Promise<boolean>;
-}): { ctx: CliContext; mocks: Mocks } {
+}): { ctx: CliContext; deps: CliDeps; mocks: Mocks } {
   const mocks = overrides?.mocks ?? createMocks();
 
   const config: Config = {
@@ -73,11 +72,10 @@ function createMockCtx(overrides?: {
     // The real state factory — the branded console is created ONCE there.
     state: createCliState({ global: validGlobalConfig, config }),
     // cli emits nothing of its own; the seam exists on every plugin ctx.
-    emit: vi.fn(),
-    require: createMockRequire(mocks)
+    emit: vi.fn()
   };
 
-  return { ctx, mocks };
+  return { ctx, deps: mocks, mocks };
 }
 
 describe("hostTarget", () => {
@@ -97,8 +95,8 @@ describe("hostTarget", () => {
 
 describe("createCliApi — build", () => {
   it("{ all: true } calls runAll and ignores an explicit target", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build({ all: true, target: "android" });
 
@@ -107,8 +105,8 @@ describe("createCliApi — build", () => {
   });
 
   it("uses the explicit target when given", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build({ target: "android" });
 
@@ -120,8 +118,8 @@ describe("createCliApi — build", () => {
   });
 
   it("falls back to the resolved host target when omitted", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build();
 
@@ -133,8 +131,8 @@ describe("createCliApi — build", () => {
   });
 
   it("passes simulator through to build.run", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build({ target: "ios", simulator: true });
 
@@ -146,8 +144,8 @@ describe("createCliApi — build", () => {
   });
 
   it("passes aab through to build.run", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build({ target: "android", aab: true });
 
@@ -159,15 +157,15 @@ describe("createCliApi — build", () => {
   });
 
   it("passes simulator/aab through to build.runAll", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.build({ all: true, simulator: true, aab: true });
 
     expect(mocks.build.runAll).toHaveBeenCalledWith({ simulator: true, aab: true });
   });
 
-  it("boxes the TauriError stderr tail before rethrowing (B9)", async () => {
+  it("boxes the TauriError stderr tail before rethrowing", async () => {
     const lines: string[] = [];
     const mocks = createMocks();
     mocks.build.run = vi.fn().mockRejectedValue(
@@ -176,13 +174,13 @@ describe("createCliApi — build", () => {
         stderrTail: "error[E0432]: unresolved import `foo`"
       })
     );
-    const { ctx } = createMockCtx({
+    const { ctx, deps } = createMockCtx({
       mocks,
       renderImpl: line => {
         lines.push(line);
       }
     });
-    const api = createCliApi(ctx);
+    const api = createCliApi(ctx, deps);
 
     await expect(api.build({ target: "macos" })).rejects.toThrow(/tauri compile failed/);
 
@@ -195,13 +193,13 @@ describe("createCliApi — build", () => {
     const lines: string[] = [];
     const mocks = createMocks();
     mocks.build.runAll = vi.fn().mockRejectedValue(new Error("[native] boom.\n  Retry."));
-    const { ctx } = createMockCtx({
+    const { ctx, deps } = createMockCtx({
       mocks,
       renderImpl: line => {
         lines.push(line);
       }
     });
-    const api = createCliApi(ctx);
+    const api = createCliApi(ctx, deps);
 
     await expect(api.build({ all: true })).rejects.toThrow(/boom/);
     expect(lines.length).toBeLessThanOrEqual(2);
@@ -209,7 +207,7 @@ describe("createCliApi — build", () => {
 });
 
 describe("createCliApi — dev", () => {
-  it("prepares the project before handing the tree to tauri dev (M1)", async () => {
+  it("prepares the project before handing the tree to tauri dev", async () => {
     const order: string[] = [];
     const mocks = createMocks();
     mocks.build.prepare = vi.fn(async () => {
@@ -224,8 +222,8 @@ describe("createCliApi — dev", () => {
         stop: vi.fn()
       };
     });
-    const { ctx } = createMockCtx({ mocks });
-    const api = createCliApi(ctx);
+    const { ctx, deps } = createMockCtx({ mocks });
+    const api = createCliApi(ctx, deps);
 
     await api.dev();
 
@@ -234,8 +232,8 @@ describe("createCliApi — dev", () => {
   });
 
   it("forwards an explicit target to both prepare and tauri dev", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.dev({ target: "ios" });
 
@@ -248,11 +246,35 @@ describe("createCliApi — dev", () => {
   it("never starts the dev process when prepare fails", async () => {
     const mocks = createMocks();
     mocks.build.prepare = vi.fn().mockRejectedValue(new Error("[native] codegen failed.\n  Fix."));
-    const { ctx } = createMockCtx({ mocks });
-    const api = createCliApi(ctx);
+    const { ctx, deps } = createMockCtx({ mocks });
+    const api = createCliApi(ctx, deps);
 
     await expect(api.dev()).rejects.toThrow(/codegen failed/);
     expect(mocks.tauri.dev).not.toHaveBeenCalled();
+  });
+
+  it("renders a failed prepare exactly like a failed build: tail boxed, then the error line", async () => {
+    const lines: string[] = [];
+    const mocks = createMocks();
+    mocks.build.prepare = vi.fn().mockRejectedValue(
+      new TauriError("xcode-script-failed", "[native] tauri ios init failed.\n  Run doctor.", {
+        exitCode: 65,
+        stderrTail: "xcodebuild: error: Unable to find a destination"
+      })
+    );
+    const { ctx, deps } = createMockCtx({
+      mocks,
+      renderImpl: line => {
+        lines.push(line);
+      }
+    });
+    const api = createCliApi(ctx, deps);
+
+    await expect(api.dev({ target: "ios" })).rejects.toThrow(/tauri ios init failed/);
+
+    const text = lines.join("\n");
+    expect(text).toContain("Unable to find a destination");
+    expect(text.indexOf("Unable to find")).toBeLessThan(text.indexOf("[native] tauri ios init"));
   });
 
   it("forwards scrubbed dev output through the render seam and never calls stop", async () => {
@@ -268,13 +290,13 @@ describe("createCliApi — dev", () => {
         stop
       };
     });
-    const { ctx } = createMockCtx({
+    const { ctx, deps } = createMockCtx({
       mocks,
       renderImpl: line => {
         lines.push(line);
       }
     });
-    const api = createCliApi(ctx);
+    const api = createCliApi(ctx, deps);
 
     await api.dev();
 
@@ -290,8 +312,8 @@ describe("createCliApi — dev", () => {
       exited: Promise.resolve({ code: 1, signal: null }),
       stop: vi.fn()
     });
-    const { ctx } = createMockCtx({ mocks });
-    const api = createCliApi(ctx);
+    const { ctx, deps } = createMockCtx({ mocks });
+    const api = createCliApi(ctx, deps);
 
     await expect(api.dev()).rejects.toThrow(/tauri dev exited with code 1/);
   });
@@ -304,15 +326,15 @@ describe("createCliApi — dev", () => {
       exited: Promise.resolve({ code: null, signal: "SIGTERM" }),
       stop: vi.fn()
     });
-    const { ctx } = createMockCtx({ mocks });
-    const api = createCliApi(ctx);
+    const { ctx, deps } = createMockCtx({ mocks });
+    const api = createCliApi(ctx, deps);
 
     await expect(api.dev()).resolves.toBeUndefined();
   });
 });
 
 describe("createCliApi — doctor", () => {
-  it("returns report.ok and renders counts only — never a second row per check (M7)", async () => {
+  it("returns report.ok and renders counts only — never a second row per check", async () => {
     const mocks = createMocks();
     mocks.doctor.run = vi.fn().mockResolvedValue({
       ok: false,
@@ -322,13 +344,13 @@ describe("createCliApi — doctor", () => {
       ]
     });
     const lines: string[] = [];
-    const { ctx } = createMockCtx({
+    const { ctx, deps } = createMockCtx({
       mocks,
       renderImpl: line => {
         lines.push(line);
       }
     });
-    const api = createCliApi(ctx);
+    const api = createCliApi(ctx, deps);
 
     const ok = await api.doctor();
 
@@ -344,8 +366,8 @@ describe("createCliApi — doctor", () => {
   });
 
   it("forwards an explicit target", async () => {
-    const { ctx, mocks } = createMockCtx();
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
 
     await api.doctor({ target: "ios" });
 
@@ -356,8 +378,8 @@ describe("createCliApi — doctor", () => {
 describe("createCliApi — clean", () => {
   it("without a target: aborts without cleaning when confirm resolves false", async () => {
     const confirmImpl = vi.fn().mockResolvedValue(false);
-    const { ctx, mocks } = createMockCtx({ confirmImpl });
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx({ confirmImpl });
+    const api = createCliApi(ctx, deps);
 
     await api.clean();
 
@@ -367,8 +389,8 @@ describe("createCliApi — clean", () => {
 
   it("without a target: delegates to project.clean when confirm resolves true", async () => {
     const confirmImpl = vi.fn().mockResolvedValue(true);
-    const { ctx, mocks } = createMockCtx({ confirmImpl });
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx({ confirmImpl });
+    const api = createCliApi(ctx, deps);
 
     await api.clean();
 
@@ -377,8 +399,8 @@ describe("createCliApi — clean", () => {
 
   it("with a target: skips confirm and delegates directly", async () => {
     const confirmImpl = vi.fn();
-    const { ctx, mocks } = createMockCtx({ confirmImpl });
-    const api = createCliApi(ctx);
+    const { ctx, deps, mocks } = createMockCtx({ confirmImpl });
+    const api = createCliApi(ctx, deps);
 
     await api.clean({ target: "android" });
 

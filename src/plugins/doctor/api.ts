@@ -1,24 +1,22 @@
 /**
  * @file doctor plugin — API factory: builds fresh CheckInput per (check, scope), runs every
  * applicable check in parallel, races each against `probeTimeoutMs`, and emits doctor:check
- * per check AS IT SETTLES (A4/M7) while the returned results keep the registry order.
+ * per check AS IT SETTLES while the returned results keep the registry order.
  */
 import { spawn } from "node:child_process";
 import { readFile as readFileText } from "node:fs/promises";
 import type { Target } from "../../config";
-import { projectPlugin } from "../project";
-import { tauriPlugin } from "../tauri";
 import { CHECKS } from "./checks";
 import type { Check, CheckInput, FsFacade } from "./checks/types";
 import { assembleReport, toCheckResult } from "./report";
-import type { Api, CheckResult, DoctorContext, ProbeFn } from "./types";
+import type { Api, CheckResult, DoctorContext, DoctorDeps, ProbeFn } from "./types";
 
 /** One (check, scope) pair scheduled for this run — the registry order is the result order. */
 type ScheduledCheck = { check: Check; scope: Target | "host" };
 
 /**
  * Builds the real (non-injected) probe seam, bound to the configured timeout budget so a
- * hung binary is killed by the child process itself (A4) instead of leaking. Merges
+ * hung binary is killed by the child process itself instead of leaking. Merges
  * stdout+stderr into one buffer (presence/version parsing never needs them separated).
  *
  * @param timeoutMs - Budget handed to `spawn` as its `timeout` option.
@@ -103,17 +101,16 @@ const realFs: FsFacade = {
 /**
  * Creates the doctor API — parallel check registry, per-check `doctor:check` emission.
  *
- * @param ctx - Plugin context (require project/tauri — D-007; emit doctor:check; probe seam config).
+ * @param ctx - Plugin context (emit doctor:check; probe seam config; global config).
+ * @param deps - The project/tauri API slices the checks read (D-007).
  * @returns The `doctor` plugin's public API.
  * @example
  * ```ts
- * const api = createDoctorApi(ctx);
+ * const api = createDoctorApi(ctx, { project, tauri });
  * const report = await api.run({ target: "ios" });
  * ```
  */
-export function createDoctorApi(ctx: DoctorContext): Api {
-  const project = ctx.require(projectPlugin);
-  const tauri = ctx.require(tauriPlugin);
+export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
   const probe = ctx.config.probeImpl ?? createRealProbe(ctx.config.probeTimeoutMs);
 
   /**
@@ -135,14 +132,8 @@ export function createDoctorApi(ctx: DoctorContext): Api {
       probe,
       fs: realFs,
       env: ctx.env,
-      project: {
-        requiredFiles: project.requiredFiles,
-        completeness: project.completeness,
-        registryRows: project.registryRows
-      },
-      tauri: {
-        version: tauri.version
-      }
+      project: deps.project,
+      tauri: deps.tauri
     };
     return check.run(input);
   };

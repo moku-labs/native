@@ -11,9 +11,7 @@ import type {
   NativePhase,
   Target
 } from "../../config";
-import type { projectPlugin } from "../project";
 import type { Api as ProjectApi } from "../project/types";
-import type { tauriPlugin } from "../tauri";
 import type { Api as TauriApi } from "../tauri/types";
 
 /** One pipeline phase's measured duration, in execution order. */
@@ -42,9 +40,9 @@ export type RunAllOptions = BuildFlavor & { targets?: readonly Target[] | undefi
 export type BuildDeps = {
   readonly project: Pick<
     ProjectApi,
-    "generate" | "completeness" | "patchMobile" | "ensureIconSource"
+    "generate" | "getCompleteness" | "patchMobile" | "ensureIconSource"
   >;
-  readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "runner">;
+  readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "getRunner">;
 };
 
 /** Public API of the build plugin — the per-target pipeline orchestrator. */
@@ -56,20 +54,11 @@ export type Api = {
 
 /**
  * Domain context for the build plugin's pipeline: core's `PluginCtx` (build declares no
- * config and no state, and emits the framework's own `Events`) plus `global`, the `log`
- * core API (MC2), and a `require` constrained to build's real dependencies — `project` and
- * `tauri` (D-007).
+ * config and no state, and emits the framework's own `Events`) plus `global` and the `log`
+ * core API (MC2). No `require`: the two dependency APIs are resolved once at the wiring
+ * point by the real `ctx.require` and travel as {@link BuildDeps}.
  */
 export type BuildContext = PluginCtx<Record<string, never>, Record<string, never>, Events> & {
   readonly global: Readonly<GlobalConfig>;
   readonly log: LogApi;
-  /**
-   * Resolves a dependency plugin's API. The constraint IS build's dependency list, and the
-   * API type is read off the resolved instance's own phantom slot — no mirror of core's
-   * registry types, and no plugin outside `depends` can be required by accident.
-   *
-   * @param plugin - `projectPlugin` or `tauriPlugin`.
-   * @returns That plugin's public API.
-   */
-  require<P extends typeof projectPlugin | typeof tauriPlugin>(plugin: P): P["_phantom"]["api"];
 };

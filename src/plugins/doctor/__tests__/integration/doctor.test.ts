@@ -41,7 +41,7 @@ const ALL_TRIPLES = [
 
 /**
  * Asserts the report carries exactly the emitted results. Order is compared id-wise after
- * sorting: `doctor:check` fires per check AS IT SETTLES (A4/M7), so emission order is
+ * sorting: `doctor:check` fires per check AS IT SETTLES, so emission order is
  * settle order, while `report.checks` keeps the registry order.
  *
  * @param checks - The report's results, in registry order.
