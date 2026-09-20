@@ -11,6 +11,7 @@ import {
   renderDoctorSummary,
   renderPhaseEvent,
   resolveConfirm,
+  tailLineBound,
   terminalWidth
 } from "../../render";
 
@@ -266,14 +267,14 @@ describe("renderBuildFailure", () => {
   });
 
   it("truncates an over-long tail line to the branded console's own width", () => {
-    const { lines, ui } = createSink();
+    const { lines, ui } = createSink(80);
     const longLine = `error: ${"x".repeat(400)}`;
     const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
       exitCode: 101,
       stderrTail: longLine
     });
 
-    renderBuildFailure(ui, error);
+    renderBuildFailure(ui, error, 80);
 
     const text = lines.join("\n");
     expect(text).toContain("…");
@@ -285,24 +286,26 @@ describe("renderBuildFailure", () => {
   it("truncates the tail to the terminal width on a wide terminal (120 → 114)", () => {
     const { lines, ui } = createSink(120);
 
-    renderBuildFailure(ui, longTailError());
+    renderBuildFailure(ui, longTailError(), 120);
 
     expect(truncatedTail(lines)).toHaveLength(114);
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(120);
   });
 
-  it("truncates to the 66-column fallback when the stream reports no columns (→ 60)", () => {
-    const { lines, ui } = createSink(terminalWidth(undefined));
+  it("keeps the full tail line when the stream reports no columns (CI, a piped log)", () => {
+    const { lines, ui } = createSink();
 
-    renderBuildFailure(ui, longTailError());
+    renderBuildFailure(ui, longTailError(), undefined);
 
-    expect(truncatedTail(lines)).toHaveLength(60);
+    // The whole diagnostic survives: a piped log is read afterwards, never wrapped live.
+    expect(lines.join("\n")).toContain(`error: ${"x".repeat(200)}`);
+    expect(lines.join("\n")).not.toContain("…");
   });
 
   it("truncates to the clamped minimum on a very narrow terminal (40 → 60 → 54)", () => {
     const { lines, ui } = createSink(40);
 
-    renderBuildFailure(ui, longTailError());
+    renderBuildFailure(ui, longTailError(), 40);
 
     expect(truncatedTail(lines)).toHaveLength(54);
   });
@@ -329,6 +332,20 @@ describe("renderBuildFailure", () => {
     const text = lines.join("\n");
     expect(text).toContain("collect phase found no artifacts");
     expect(lines.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("tailLineBound", () => {
+  it("bounds a wide terminal to its width minus the box chrome (120 → 114)", () => {
+    expect(tailLineBound(120)).toBe(114);
+  });
+
+  it("bounds a very narrow terminal to the clamped minimum (40 → 60 → 54)", () => {
+    expect(tailLineBound(40)).toBe(54);
+  });
+
+  it("bounds nothing when the stream reports no columns (CI, pipes)", () => {
+    expect(tailLineBound(undefined)).toBeUndefined();
   });
 });
 
