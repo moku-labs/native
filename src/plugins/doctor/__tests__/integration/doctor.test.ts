@@ -1,5 +1,5 @@
 /* eslint-disable unicorn/no-null -- fixture mirrors tauri.version()'s real `{ cliVersion } | null`
-   contract (D-014), exercised here through a fake tauri CLI spawn instead of a fake probe. */
+   contract, exercised here through a fake tauri CLI spawn instead of a fake probe. */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,7 +12,7 @@ import type { SpawnFn } from "../../../tauri/types";
 import { doctorPlugin } from "../../index";
 import type { CheckResult, ProbeFn } from "../../types";
 
-// Complex tier: doctor depends on [project, tauri] (D-007) — the harness composes all three
+// Complex tier: doctor depends on [project, tauri] — the harness composes all three
 // so this test never has to reach past the real wiring to exercise doctor's own orchestration.
 const framework = createCore(coreConfig, { plugins: [projectPlugin, tauriPlugin, doctorPlugin] });
 

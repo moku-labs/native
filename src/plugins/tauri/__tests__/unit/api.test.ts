@@ -86,6 +86,14 @@ const spawnBuildForwardsOutput: SpawnFn = async opts => {
   return { code: 0, signal: null, stdout: "done", stderr: "" };
 };
 
+/** Long-lived dev spawn: exits only when the handle's group-kill aborts it. */
+const spawnDevUntilAborted: SpawnFn = opts =>
+  new Promise(resolve => {
+    opts.signal?.addEventListener("abort", () => {
+      resolve({ code: null, signal: "SIGTERM", stdout: "", stderr: "" });
+    });
+  });
+
 const spawnCompileFailure: SpawnFn = async () => ({
   code: 101,
   signal: null,
@@ -375,6 +383,22 @@ describe("createTauriApi", () => {
     });
 
     await handle.stop();
+  });
+
+  it("dev() parks the ready rejection — a caller that only awaits exited sees no crash", async () => {
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawnDevUntilAborted,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 5 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    // No `.catch` on `handle.ready` here on purpose: the readiness poll times out against a
+    // URL nothing serves, and an unparked rejection would fail this file.
+    const handle = await api.dev({});
+    await expect(handle.exited).resolves.toEqual({ code: null, signal: "SIGTERM" });
   });
 
   it("dev() throws when a dev session is already running", async () => {

@@ -318,7 +318,7 @@ describe("createCliApi — dev", () => {
     await expect(api.dev()).rejects.toThrow(/tauri dev exited with code 1/);
   });
 
-  it("resolves cleanly on a signal-terminated exit (Ctrl-C → code null, D-002)", async () => {
+  it("resolves cleanly on a signal-terminated exit (Ctrl-C → code null)", async () => {
     const mocks = createMocks();
     mocks.tauri.dev = vi.fn().mockResolvedValue({
       url: "http://localhost:1420",

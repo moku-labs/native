@@ -51,6 +51,40 @@ describe("applySigningBlock", () => {
   it("leaves unpatched content alone when no keystorePath is configured", () => {
     expect(applySigningBlock("plugins {}\n", {})).toBe("plugins {}\n");
   });
+
+  it("escapes quotes, backslashes and Kotlin interpolation in the keystore path", () => {
+    const patched = applySigningBlock("plugins {}\n", {
+      ...SIGNING,
+      keystorePath: String.raw`C:\keys\re"lease$HOME.jks`
+    });
+
+    expect(patched).toContain(String.raw`storeFile = file("C:\\keys\\re\"lease\$HOME.jks")`);
+  });
+
+  it("escapes a key alias that would otherwise close the Kotlin literal", () => {
+    const patched = applySigningBlock("plugins {}\n", {
+      ...SIGNING,
+      keyAlias: 'release") ; evil("'
+    });
+
+    expect(patched).toContain(String.raw`keyAlias = "release\") ; evil(\""`);
+  });
+
+  it("escapes a newline instead of breaking the Kotlin literal across lines", () => {
+    const patched = applySigningBlock("plugins {}\n", { ...SIGNING, keyAlias: "a\nb" });
+
+    expect(patched).toContain(String.raw`keyAlias = "a\nb"`);
+  });
+
+  it("escapes an env-var name interpolated into System.getenv", () => {
+    const patched = applySigningBlock("plugins {}\n", {
+      ...SIGNING,
+      // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a hostile env-var *name*, never a secret
+      keystorePasswordEnv: 'KS") ?: evil("'
+    });
+
+    expect(patched).toContain(String.raw`storePassword = System.getenv("KS\") ?: evil(\"")`);
+  });
 });
 
 describe("removeSigningBlock", () => {

@@ -46,18 +46,25 @@ const tauriApi = { getVersion: vi.fn(async () => ({ cliVersion: "2.0.0" })) };
  * @param opts - Per-test seam overrides.
  * @param opts.probeImpl - The injected probe seam.
  * @param opts.probeTimeoutMs - The per-check timeout budget (default 10_000).
+ * @param opts.global - Global config override (default: the shared fixture).
+ * @param opts.env - Env accessor override (default: an empty environment).
  * @returns The mock context and the ordered emission sink.
  */
-function createContext(opts: { probeImpl: ProbeFn; probeTimeoutMs?: number }): {
+function createContext(opts: {
+  probeImpl: ProbeFn;
+  probeTimeoutMs?: number;
+  global?: DoctorContext["global"];
+  env?: DoctorContext["env"];
+}): {
   ctx: DoctorContext;
   emitted: CheckResult[];
 } {
   const emitted: CheckResult[] = [];
   const ctx: DoctorContext = {
-    global: baseGlobalConfig,
+    global: opts.global ?? baseGlobalConfig,
     config: { probeImpl: opts.probeImpl, probeTimeoutMs: opts.probeTimeoutMs ?? 10_000 },
     log: createLog(),
-    env: createEnv(),
+    env: opts.env ?? createEnv(),
     // doctor has no state of its own — core hands a stateless plugin the empty object.
     state: {},
     emit: (_name, payload) => {
@@ -119,6 +126,28 @@ describe("createDoctorApi — probeTimeoutMs", () => {
 
     expect(report.ok).toBe(true);
     expect(emitted).toHaveLength(report.checks.length);
+  });
+
+  it("gives a timed-out check the id its own result would have carried", async () => {
+    const { ctx } = createContext({
+      probeImpl: probeNeverSettles,
+      probeTimeoutMs: 5,
+      global: {
+        ...baseGlobalConfig,
+        signing: { apple: { signingIdentity: "Developer ID Application: Test" } }
+      },
+      // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a presence-only env fixture
+      env: createEnv({ APPLE_ID: "a", APPLE_PASSWORD: "b", APPLE_TEAM_ID: "c" })
+    });
+
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run({
+      target: "macos"
+    });
+
+    // Not the module-level "signing": a row the cli cannot line up with its live counterpart.
+    const signing = report.checks.find(result => result.id.startsWith("signing"));
+    expect(signing?.id).toBe("signing-macos");
+    expect(signing?.status).toBe("warn");
   });
 
   it("leaves a check that settles inside the budget untouched", async () => {

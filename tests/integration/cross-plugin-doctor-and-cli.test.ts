@@ -93,7 +93,7 @@ function findCheck(report: Doctor.DoctorReport, id: string): Doctor.CheckResult 
 }
 
 /**
- * Sorts check results by id+target — `doctor:check` fires per check AS IT SETTLES (A4/M7),
+ * Sorts check results by id+target — `doctor:check` fires per check AS IT SETTLES,
  * so event order is settle order while `report.checks` keeps registry order.
  *
  * @param checks - The check results to sort.
@@ -172,7 +172,7 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     // ios (not android) as the mobile target: the android-toolchain check needs env vars,
     // and the composed env table is frozen EMPTY (envPlugin has no providers configured),
     // so an android scope could never reach ok: true through the shipped composition.
-    // The host-scoped web-script/versions checks resolve <web.cwd>/package.json (M6), so the
+    // The host-scoped web-script/versions checks resolve <web.cwd>/package.json, so the
     // fixture root is pinned there instead of leaking to the repo's own package.json.
     const fixtureDir = await newFixtureDir();
     await writePackageJsonFixture(fixtureDir);
@@ -199,7 +199,7 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     expect(report.checks.length).toBeGreaterThan(0);
 
     // Exactly one doctor:check event per report entry. Emission is per check AS IT SETTLES
-    // (A4/M7), so the event order is settle order while report.checks keeps registry order —
+    //, so the event order is settle order while report.checks keeps registry order —
     // the two are compared as sets of the same size.
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents).toHaveLength(report.checks.length);
@@ -338,7 +338,7 @@ describe("S11 — cli.doctor renders per-check rows + summary", () => {
     expect(ok).toBe(true);
 
     // Exactly ONE row per doctor:check — live from the hook; the summary repeats no row
-    // and prints the counts plus the overall verdict (M7).
+    // and prints the counts plus the overall verdict.
     const text = testApp.rendered.join("\n");
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents.length).toBeGreaterThan(0);
@@ -378,13 +378,13 @@ describe("S12 — cli.dev drives tauri.dev without owning teardown", () => {
 
     await expect(testApp.app.cli.dev()).resolves.toBeUndefined();
 
-    // The dev process's output line was forwarded through the render seam (D-014),
+    // The dev process's output line was forwarded through the render seam,
     // and the dev verb actually reached the spawn seam.
     expect(testApp.rendered.join("\n")).toContain("Local:");
     expect(testApp.spawnCalls.some(call => call.argv.includes("dev"))).toBe(true);
   });
 
-  it("tauri.dev's handle resolves ready then exited without anything calling stop (D-002)", async () => {
+  it("tauri.dev's handle resolves ready then exited without anything calling stop", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok")));
     const testApp = await newTestApp({ spawnImpl: spawnDevExitsZero });
 

@@ -67,9 +67,11 @@ const IGNORED_LINE_PATTERN = /^\s*Warn\b/;
 /**
  * Lines that carry a real cause. The only way to surface the actual error out of an
  * xcodebuild log, where the last lines are a destination list and the cause sits
- * hundreds of lines earlier.
+ * hundreds of lines earlier — and the only lines the taxonomy is allowed to classify
+ * over, so that an ordinary `CodeSign <path>` progress line cannot outrank them.
  */
-const SIGNAL_LINE_PATTERN = /\berror\b[: ]|^\s*Error\b|panicked|Cannot find|not found|failed/i;
+const SIGNAL_LINE_PATTERN =
+  /\berror\b[: ]|^\s*Error\b|panicked|cannot find|not found|no \S+ found|not installed|PhaseScriptExecution|failed/i;
 
 /**
  * Lines that read like a cause but never are: Xcode dumps the whole build environment
@@ -138,6 +140,10 @@ const ADVICE: Record<TauriErrorKind, string> = {
 /**
  * Classifies a non-zero tauri CLI exit into a {@link TauriError}.
  *
+ * Only CAUSE lines are classified (the same filter the tail builder uses): a 50k-line
+ * xcodebuild log narrates `CodeSign <path>` and exports the whole keychain environment, and
+ * one such incidental mention would otherwise decide the taxonomy for the entire build.
+ *
  * @param code - Process exit code (`null` when signal-terminated).
  * @param scrubbedOutput - Already-scrubbed stdout + stderr (see scrub.ts) — never raw
  *   output, and never stderr alone: xcodebuild puts the cause on stdout.
@@ -149,7 +155,7 @@ const ADVICE: Record<TauriErrorKind, string> = {
  */
 export function classify(code: number | null, scrubbedOutput: string): TauriError {
   const lines = scrubbedOutput.split(/\r?\n/).filter(line => line.length > 0);
-  const classifiable = lines.filter(line => !IGNORED_LINE_PATTERN.test(line));
+  const classifiable = signalLines(lines);
 
   const match = TAXONOMY_PATTERNS.find(({ test }) => classifiable.some(line => test.test(line)));
   const kind: TauriErrorKind = match?.kind ?? (code === null ? "cancelled" : "unknown");
@@ -158,10 +164,28 @@ export function classify(code: number | null, scrubbedOutput: string): TauriErro
 }
 
 /**
+ * Extracts the deduplicated cause lines of one run's output, in order — the input both the
+ * taxonomy match and the tail are built from.
+ *
+ * @param lines - Every non-empty line of the scrubbed output, in order.
+ * @returns The cause lines, without duplicates.
+ * @example
+ * ```ts
+ * signalLines(["Building app", "error: Cannot find module 'x'"]);
+ * ```
+ */
+function signalLines(lines: readonly string[]): readonly string[] {
+  const causes = lines.filter(line => !IGNORED_LINE_PATTERN.test(line) && isSignalLine(line));
+  return [...new Set(causes)];
+}
+
+/**
  * Builds the tail carried on a classified error: the extracted cause lines first, then a
  * separator, then the raw trailing lines. A plain "last N lines" tail is useless for
  * xcodebuild — those lines are a simulator destination list, while the cause
  * (`Cannot find module …`, `Command PhaseScriptExecution failed`) is hundreds of lines up.
+ * The LAST cause lines are kept, not the first: a long build restates its early warnings
+ * while the failure that stopped it is at the end.
  *
  * @param lines - Every non-empty line of the scrubbed output, in order.
  * @returns The tail, joined with `\n`.
@@ -171,7 +195,7 @@ export function classify(code: number | null, scrubbedOutput: string): TauriErro
  * ```
  */
 function buildTail(lines: readonly string[]): string {
-  const signal = [...new Set(lines.filter(line => isSignalLine(line)))].slice(0, SIGNAL_LINES);
+  const signal = signalLines(lines).slice(-SIGNAL_LINES);
   const trailing = lines.slice(-STDERR_TAIL_LINES);
   if (signal.length === 0) return trailing.join("\n");
   return [...signal, TAIL_SEPARATOR, ...trailing].join("\n");

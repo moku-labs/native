@@ -268,6 +268,10 @@ export function createTauriApi(ctx: TauriContext): Api {
         .catch(() => {
           // Swallow here — callers observe `handle.exited`/`handle.ready` directly.
         });
+      handle.ready.catch(() => {
+        // Parked like `exited`: a readiness timeout (or a dev process that died first) must
+        // not surface as an unhandled rejection for a caller that only awaits `exited`.
+      });
       return Promise.resolve(handle);
     },
 

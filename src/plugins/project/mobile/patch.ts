@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SigningConfig } from "../../../config";
-import { bundleLayout } from "../layout";
+import { genDirectoryPath } from "../layout";
 import type { PatchMobileOptions, PatchResult } from "../types";
 import { patchRunner } from "./runner";
 import { patchAndroidSigning } from "./signing";
@@ -33,8 +33,7 @@ export async function patchMobile(
   opts: PatchMobileOptions,
   signing: SigningConfig
 ): Promise<PatchResult> {
-  const layout = bundleLayout(opts.target);
-  const genDirectory = path.join(projectDirectory, layout.root, layout.genDirectory ?? "");
+  const genDirectory = genDirectoryPath(projectDirectory, opts.target);
 
   if (opts.target === "ios") {
     if (!opts.runner || !existsSync(genDirectory)) return { patched: [], unchanged: [] };

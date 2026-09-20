@@ -218,6 +218,17 @@ async function run(input: CheckInput): Promise<CheckResult> {
 export const signingCheck: Check = {
   id: "signing",
   /**
+   * The per-target id every signing result carries (`signing-ios`, `signing-android`, …).
+   *
+   * @param scope - The scope the check ran against.
+   * @returns The per-scope result id.
+   * @example
+   * ```ts
+   * signingCheck.resultId?.("macos"); // "signing-macos"
+   * ```
+   */
+  resultId: scope => `signing-${scope}`,
+  /**
    * Whether this check applies — every target that carries a signing identifier or env ref.
    *
    * @param target - The candidate scope.

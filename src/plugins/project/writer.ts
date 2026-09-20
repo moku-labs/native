@@ -9,18 +9,22 @@ import path from "node:path";
 const FORBIDDEN_SEGMENTS = new Set(["target", ".gradle", "DerivedData", "Pods"]);
 
 /**
- * Guards codegen writes against derived/build-output directories that generators must
- * never touch — Cargo's `target/`, Gradle's `.gradle/`, Xcode's `DerivedData`, and
- * CocoaPods' `Pods` are all managed by `tauri build` (the `tauri` plugin), not by this
- * write-if-changed writer.
+ * Guards codegen writes twice over.
  *
- * Only the path BELOW `projectDir` is scanned: a repository that happens to live under a
- * directory called `target` (or `Pods`) is a perfectly normal checkout, and refusing to
- * write there would break the whole plugin for that consumer.
+ * First, containment: a generator only ever writes INSIDE `projectDir`, so a path whose
+ * relative form is empty, escapes with `..`, or is absolute (a different Windows drive)
+ * is refused outright — that is the shape a traversal in a generated filename would take.
+ *
+ * Second, derived output: Cargo's `target/`, Gradle's `.gradle/`, Xcode's `DerivedData`
+ * and CocoaPods' `Pods` are managed by `tauri build` (the `tauri` plugin), never by this
+ * write-if-changed writer. Only the path BELOW `projectDir` is scanned for them: a
+ * repository that happens to live under a directory called `target` (or `Pods`) is a
+ * perfectly normal checkout, and refusing to write there would break that consumer.
  *
  * @param filePath - The path a generator wants to write.
  * @param projectDirectory - The Tauri project root the path is scanned relative to.
- * @throws {Error} When the path contains a forbidden derived-output segment below `projectDir`.
+ * @throws {Error} When the path is outside `projectDir`, or contains a forbidden
+ *   derived-output segment below it.
  * @example
  * ```ts
  * assertWritablePath("/repo/.moku/tauri/src-tauri/tauri.conf.json", "/repo/.moku/tauri"); // ok
@@ -28,7 +32,17 @@ const FORBIDDEN_SEGMENTS = new Set(["target", ".gradle", "DerivedData", "Pods"])
  * ```
  */
 export function assertWritablePath(filePath: string, projectDirectory: string): void {
-  const relative = path.relative(path.resolve(projectDirectory), path.resolve(filePath));
+  const resolved = path.resolve(filePath);
+  const relative = path.relative(path.resolve(projectDirectory), resolved);
+
+  const escapesProject =
+    relative.length === 0 || relative === ".." || relative.startsWith(`..${path.sep}`);
+  if (escapesProject || path.isAbsolute(relative)) {
+    throw new Error(
+      `[native] Refusing to write outside projectDir: ${resolved}.\n  Generators only write files below config.projectDir — check the path this generator built.`
+    );
+  }
+
   const segments = new Set(relative.split(path.sep));
   const hit = [...FORBIDDEN_SEGMENTS].find(segment => segments.has(segment));
   if (hit) {
@@ -85,7 +99,8 @@ async function readExisting(filePath: string): Promise<Uint8Array | undefined> {
  * @param projectDirectory - The Tauri project root, for the derived-directory guard.
  * @returns `"written"` when the file was created/updated, `"unchanged"` when identical
  *   content was already on disk.
- * @throws {Error} When `filePath` targets a derived/build-output directory below `projectDir`.
+ * @throws {Error} When `filePath` is outside `projectDir` or targets a derived/build-output
+ *   directory below it.
  * @example
  * ```ts
  * const action = await writeIfChanged(confPath, json, "/repo/.moku/tauri");

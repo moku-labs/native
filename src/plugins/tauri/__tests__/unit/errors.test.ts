@@ -110,6 +110,26 @@ describe("classify", () => {
     expect(error.kind).toBe("unknown");
   });
 
+  it("ignores an incidental signing mention on an ordinary build-step line", () => {
+    // A real xcodebuild log narrates every step; `CodeSign <path>` and the keychain lines it
+    // exports are progress output, not the cause, and must never outrank the real error.
+    const log = [
+      "CodeSign /Users/x/Library/Developer/Xcode/DerivedData/app.app (in target 'app_iOS')",
+      "    cd /repo/src-tauri/gen/apple",
+      "export CODESIGN_ALLOCATE=/usr/bin/codesign_allocate",
+      "Signing Identity: - (keychain: login.keychain-db)",
+      "error[E0432]: unresolved import `foo`"
+    ].join("\n");
+
+    expect(classify(101, log).kind).toBe("compile-failed");
+  });
+
+  it("classifies over cause lines only — a log with none of them is unknown", () => {
+    const log = ["CodeSign /Users/x/app.app", "Signing Identity: -"].join("\n");
+
+    expect(classify(1, log).kind).toBe("unknown");
+  });
+
   it("carries the exit code and a scrubbed stderr tail", () => {
     const error = classify(101, "line one\nline two\nerror[E0432]: unresolved import `foo`");
     expect(error.exitCode).toBe(101);
@@ -152,13 +172,19 @@ describe("classify — stderrTail", () => {
     expect(tail).not.toContain("WARNINGS_AS_ERRORS");
   });
 
-  it("keeps at most 15 signal lines", () => {
+  it("keeps the LAST 15 signal lines — the cause is at the end of a build log", () => {
     const failures = Array.from({ length: 20 }, (_, index) => `error: failure ${index}`);
     const lines = classify(1, failures.join("\n")).stderrTail.split("\n");
 
-    expect(lines.slice(0, 15)).toEqual(failures.slice(0, 15));
+    expect(lines.slice(0, 15)).toEqual(failures.slice(-15));
     expect(lines[15]).toBe("…");
     expect(lines.slice(16)).toEqual(failures.slice(-10));
+  });
+
+  it("lifts the failing build-phase line xcodebuild lists under its failure summary", () => {
+    const tail = classify(65, UNSIGNED_SIMULATOR_TAIL).stderrTail;
+
+    expect(tail.split("…")[0]).toContain(String.raw`PhaseScriptExecution Build\ Rust\ Code`);
   });
 
   it("omits the separator when nothing in the output looks like a cause", () => {

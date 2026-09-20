@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { bundleRoot } from "../../collect";
 import {
+  ICON_SOURCE_STAMP_FILE,
   runCodegen,
   runCompileAndBundle,
   runIcons,
@@ -214,6 +215,10 @@ describe("runIcons", () => {
   let projectDir: string;
   let iconSource: string;
 
+  /** The stamp `runIcons` writes next to the generated set to record what it generated from. */
+  const stampPath = (): string =>
+    path.join(projectDir, "src-tauri", "icons", ICON_SOURCE_STAMP_FILE);
+
   /** Writes the generated `src-tauri/icons/icon.png`, newer than the source by an hour. */
   async function seedGeneratedIconNewerThanSource(): Promise<void> {
     const iconsDir = path.join(projectDir, "src-tauri", "icons");
@@ -221,6 +226,16 @@ describe("runIcons", () => {
     await writeFile(path.join(iconsDir, "icon.png"), "generated", "utf8");
     const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     await utimes(iconSource, anHourAgo, anHourAgo);
+  }
+
+  /** Records `source` as the icon set's origin — what a previous generating pass would leave. */
+  async function seedStampFor(source: string): Promise<void> {
+    const stats = await stat(source);
+    await writeFile(
+      stampPath(),
+      [path.resolve(source), stats.size, stats.mtimeMs].join("\n"),
+      "utf8"
+    );
   }
 
   beforeEach(async () => {
@@ -233,14 +248,61 @@ describe("runIcons", () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it("up to date: generated icon newer than the source and no mobileInit → never spawns", async () => {
+  it("up to date: the stamp matches the source and no mobileInit → never spawns", async () => {
     await seedGeneratedIconNewerThanSource();
+    await seedStampFor(iconSource);
     const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
 
     await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
       detail: "up to date"
     });
     expect(tauri.icon).not.toHaveBeenCalled();
+  });
+
+  it("regenerates when the generated set carries no stamp, however new it is", async () => {
+    await seedGeneratedIconNewerThanSource();
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: iconSource });
+  });
+
+  it("regenerates when app.icon switched to an OLDER file than the generated set", async () => {
+    await seedGeneratedIconNewerThanSource();
+    const olderIcon = path.join(projectDir, "older-icon.png");
+    await writeFile(olderIcon, "older", "utf8");
+    const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    await utimes(olderIcon, lastYear, lastYear);
+    await seedStampFor(iconSource);
+    const { ctx, deps, tauri } = createMocks({
+      projectDir,
+      iconSource: olderIcon,
+      appIcon: olderIcon
+    });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: olderIcon });
+  });
+
+  it("writes the stamp after generating, so the next pass is a no-op", async () => {
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await runIcons(ctx, deps, { mobileInitRan: false });
+    // The real `tauri icon` writes the set; the mock does not, so seed it here.
+    await mkdir(path.join(projectDir, "src-tauri", "icons"), { recursive: true });
+    await writeFile(path.join(projectDir, "src-tauri", "icons", "icon.png"), "generated", "utf8");
+
+    const stamp = await readFile(stampPath(), "utf8");
+    expect(stamp).toContain(path.resolve(iconSource));
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "up to date"
+    });
+    expect(tauri.icon).toHaveBeenCalledOnce();
   });
 
   it("generated: a configured app.icon with no generated set yet regenerates from the source", async () => {
@@ -307,6 +369,31 @@ describe("runCompileAndBundle", () => {
     ]);
     expect(result.compileDurationMs).toBeGreaterThanOrEqual(0);
     expect(result.bundleDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("stops emitting compile progress once the bundle phase is open", async () => {
+    const tauri = createTauriMock();
+    tauri.build.mockImplementation(async opts => {
+      opts.onTick?.({ crate: "before" });
+      opts.onOutput?.("Bundling application (App.dmg)");
+      opts.onTick?.({ crate: "after" });
+      return okResult();
+    });
+    const { ctx, deps, emit } = createMocks({ tauri });
+
+    await runCompileAndBundle(ctx, deps, { target: "macos" });
+
+    expect(phaseKeys(emit)).toEqual([
+      "compile:start",
+      "compile:progress",
+      "compile:done",
+      "bundle:start",
+      "bundle:done"
+    ]);
+    expect(emit).not.toHaveBeenCalledWith(
+      "native:phase",
+      expect.objectContaining({ detail: "Compiling after" })
+    );
   });
 
   it("no transition line: compile done, bundle start and a zero-duration bundle done after exit", async () => {

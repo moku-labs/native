@@ -93,7 +93,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       expect(progressEvent?.payload.detail).toBe("Compiling demo 1/1");
 
       // The icons phase sees a generated set newer than the configured source, so it
-      // reports "up to date" and never spawns the icon verb (B5/A8).
+      // reports "up to date" and never spawns the icon verb (the icons freshness rule).
       const iconsDone = phaseEvents(events).find(
         event => event.payload.phase === "icons" && event.payload.status === "done"
       );
@@ -124,7 +124,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
         true
       );
 
-      // Exactly ONE subprocess — the desktop build verb (compile+bundle share it, D-013).
+      // Exactly ONE subprocess — the desktop build verb (compile+bundle share it).
       expect(spawnCalls).toHaveLength(1);
       expect(spawnCalls[0]?.argv[0]).toBe("/usr/bin/node");
       expect(spawnCalls[0]?.argv[1]).toMatch(/@tauri-apps\/cli\/tauri\.js$/);
@@ -278,7 +278,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       const result = await app.build.run({ target: "android" });
 
       // Spawn call order: mobileInit (inside codegen) → icon regeneration (the fresh gen/
-      // tree ships Tauri's own defaults, B5/A8) → the build verb. Nothing else ran.
+      // tree ships Tauri's own defaults) → the build verb. Nothing else ran.
       expect(spawnCalls).toHaveLength(3);
       expect(spawnCalls[0]?.argv[0]).toBe("/usr/bin/node");
       expect(spawnCalls[0]?.argv.slice(2)).toEqual(["android", "init", "--ci"]);
@@ -289,7 +289,7 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
       expect(completenessAtBuildVerb).toEqual({ status: "complete" });
       expect(app.project.getCompleteness({ target: "android" })).toEqual({ status: "complete" });
 
-      // codegen ran patchMobile: signing lives in Gradle only — no keystore.properties (A11).
+      // codegen ran patchMobile: signing lives in Gradle only — no keystore.properties.
       expect(
         existsSync(path.join(projectDir, "src-tauri", "gen", "android", "keystore.properties"))
       ).toBe(false);

@@ -248,7 +248,7 @@ describe("S18 — cross-plugin error propagation", () => {
     // ...and no subprocess EVER ran (no mobileInit re-init of a partial tree — tauri#13902 posture).
     expect(testApp.spawnCalls).toHaveLength(0);
 
-    // The failure surfaced as a codegen-phase error (the gate moved there in B6, since
+    // The failure surfaced as a codegen-phase error (the gate lives in codegen, since
     // `tauri android init --ci` needs the generated tauri.conf.json); icons never started.
     const phaseEvents = testApp.events.filter(event => event.name === "native:phase");
     expect(

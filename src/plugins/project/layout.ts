@@ -4,6 +4,7 @@
  * to find build output (clean, the completeness gate, the mobile patch pass, and build's
  * collect phase through `project.getBundleLayout`) reads it from here.
  */
+import path from "node:path";
 import type { MobileTarget, Target } from "../../config";
 
 /** A desktop packaging target — the three that bundle through Cargo's release profile. */
@@ -82,4 +83,22 @@ export function bundleLayout(target: Target): BundleLayout {
     formats: DESKTOP_BUNDLE_FORMATS[target],
     genDirectory: undefined
   };
+}
+
+/**
+ * Resolves the absolute `gen/<platform>` directory of a mobile target inside a generated
+ * project. Mobile-only by type, so callers never fall back to an empty path segment for a
+ * desktop layout that has no `gen/` tree at all.
+ *
+ * @param projectDirectory - The Tauri project root (contains `src-tauri/`).
+ * @param target - The mobile packaging target.
+ * @returns The absolute `src-tauri/gen/<platform>` path.
+ * @example
+ * ```ts
+ * genDirectoryPath("/repo/.moku/tauri", "ios"); // "/repo/.moku/tauri/src-tauri/gen/apple"
+ * ```
+ */
+export function genDirectoryPath(projectDirectory: string, target: MobileTarget): string {
+  const layout = bundleLayout(target);
+  return path.join(projectDirectory, layout.root, `gen/${genDirectoryName(target)}`);
 }

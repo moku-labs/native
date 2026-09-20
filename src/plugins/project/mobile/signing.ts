@@ -14,10 +14,45 @@ const SIGNING_START = "// MOKU-SIGNING-START";
 const SIGNING_END = "// MOKU-SIGNING-END";
 
 /**
+ * Characters that change the meaning of a Kotlin string literal: a backslash starts an
+ * escape, a double quote closes the literal, a dollar sign starts a template expression,
+ * and a raw newline ends the line outright.
+ */
+const KOTLIN_ESCAPES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\\/g, String.raw`\\`],
+  [/"/g, String.raw`\"`],
+  [/\$/g, String.raw`\$`],
+  [/\r/g, String.raw`\r`],
+  [/\n/g, String.raw`\n`]
+];
+
+/**
+ * Escapes a value for use inside a double-quoted Kotlin string literal. Config values land
+ * verbatim in `build.gradle.kts` — an unescaped `"` would close the literal and an
+ * unescaped `$` would interpolate a Gradle expression, so every one of them is escaped
+ * here rather than trusted.
+ *
+ * @param value - The raw config value (keystore path, key alias, env-var name).
+ * @returns The value, safe to place between double quotes in Kotlin source.
+ * @example
+ * ```ts
+ * kotlinString('re"lease$HOME'); // 're\\"lease\\$HOME'
+ * ```
+ */
+export function kotlinString(value: string): string {
+  let escaped = value;
+  for (const [pattern, replacement] of KOTLIN_ESCAPES) {
+    escaped = escaped.replace(pattern, replacement);
+  }
+  return escaped;
+}
+
+/**
  * Renders the moku-managed Gradle signing block. Passwords are read by Gradle itself from
  * the environment at build time — only env-var NAMES are ever written to disk, per the
  * `SigningConfig` invariant. `keyPasswordEnv` falls back to `keystorePasswordEnv`, which
- * is the common single-password keystore.
+ * is the common single-password keystore. Every interpolated value goes through
+ * {@link kotlinString}, so a path or alias can never close the literal it sits in.
  *
  * @param signing - The Android signing config slice, with a keystore path already present.
  * @param keystorePath - The configured keystore path.
@@ -39,10 +74,10 @@ function renderSigningBlock(
     "android {",
     "  signingConfigs {",
     '    maybeCreate("release").apply {',
-    `      storeFile = file("${keystorePath}")`,
-    `      keyAlias = "${signing.keyAlias ?? ""}"`,
-    `      storePassword = System.getenv("${storePasswordEnvironment}")`,
-    `      keyPassword = System.getenv("${keyPasswordEnvironment}")`,
+    `      storeFile = file("${kotlinString(keystorePath)}")`,
+    `      keyAlias = "${kotlinString(signing.keyAlias ?? "")}"`,
+    `      storePassword = System.getenv("${kotlinString(storePasswordEnvironment)}")`,
+    `      keyPassword = System.getenv("${kotlinString(keyPasswordEnvironment)}")`,
     "    }",
     "  }",
     "  buildTypes {",

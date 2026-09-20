@@ -28,35 +28,87 @@ const ESCAPED_QUOTE = String.raw`\"`;
 const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
 
 /**
- * The prefixes that introduce a baked-in runner command, most specific first: a YAML
- * `script:` scalar (with the optional sequence dash and indentation), a pbxproj
- * `shellScript = "` assignment, and finally the opening quote of any other source string
- * literal (Kotlin/Gradle). Horizontal whitespace only — `\s` would let a match start on
- * the previous line under the `m` flag.
+ * One quoted shell word, with or without the backslash a source string literal escapes its
+ * quotes with — how an already-patched absolute runner path appears in every file we touch.
  */
-const RUNNER_PREFIX_ALTERNATIVES = String.raw`[ \t]*(?:-[ \t]+)?script:[ \t]+|.*?shellScript[ \t]*=[ \t]*"|.*?"`;
+const QUOTED_RUNNER_WORD = String.raw`\\?"[^"\n]*"`;
+
+/** Horizontal whitespace between two shell words — never a line break. */
+const WORD_SEPARATOR = String.raw`[ \t]+`;
+
+/** Anchors the verb lookahead to a whole word, so `ios xcode-scriptX` is not a match. */
+const WORD_BOUNDARY = String.raw`\b`;
+
+/** The already-patched form: the `<node> <tauri.js>` pair, each word quoted. */
+const ABSOLUTE_RUNNER_PAIR = `${QUOTED_RUNNER_WORD}${WORD_SEPARATOR}${QUOTED_RUNNER_WORD}`;
+
+/** Binaries Tauri may have detected the CLI behind, optionally through an absolute path. */
+const RUNNER_BINARIES = "node|bunx|bun|npx|yarn|pnpm|cargo";
 
 /**
- * Builds the per-line matcher for one runner verb: `(prefix)(runner)` up to ` <verb>`.
- * Everything Tauri may have detected — `node tauri`, `bun tauri`, `npm run tauri --`,
- * `yarn|pnpm tauri`, `cargo tauri`, or an already-absolute pair — sits in the second
- * group and is what gets replaced.
+ * Every runner shape `tauri ios|android init` bakes in: `<binary> tauri`, npm's
+ * `npm run tauri --` form, or a bare `tauri` — each optionally path-qualified. Longest
+ * alternative first, so `npm run tauri --` is never truncated to its trailing `tauri`.
+ */
+const PACKAGE_RUNNER = String.raw`(?:\S*/)?npm run tauri --|(?:\S*/)?(?:${RUNNER_BINARIES}) tauri|(?:\S*/)?tauri`;
+
+/** Characters that would break out of the double-quoted shell word a runner path lands in. */
+const SHELL_METACHARACTER_PATTERN = /[\\"$`]/g;
+
+/** A line break inside a runner path would split the generated build phase into two commands. */
+const LINE_BREAK_PATTERN = /[\n\r]/;
+
+/** Regex metacharacters, escaped before a caller-supplied verb is embedded in a pattern. */
+const REGEX_METACHARACTER_PATTERN = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * Builds the matcher for the runner-shaped token run that sits directly before ` <verb>`.
+ * It matches ONLY that run, never the line's prefix: a build phase may carry a preamble
+ * (`set -e`, `cd "$SRCROOT" &&`) that has to survive the rewrite untouched.
  *
- * @param verb - The Tauri verb the build phase invokes (a literal, regex-safe string).
- * @returns A global, multiline matcher whose first group is the line's prefix.
+ * @param verb - The Tauri verb the build phase invokes.
+ * @returns A global matcher whose every match is exactly one baked-in runner command.
  * @example
  * ```ts
- * runnerLinePattern("ios xcode-script");
+ * runnerCommandPattern("ios xcode-script");
  * ```
  */
-function runnerLinePattern(verb: string): RegExp {
-  return new RegExp(`^(${RUNNER_PREFIX_ALTERNATIVES})(.*?)(?= ${verb})`, "gm");
+function runnerCommandPattern(verb: string): RegExp {
+  const escapedVerb = verb.replaceAll(REGEX_METACHARACTER_PATTERN, String.raw`\$&`);
+  const runner = `(?:${ABSOLUTE_RUNNER_PAIR}|${PACKAGE_RUNNER})`;
+  const verbAhead = `(?=${WORD_SEPARATOR}${escapedVerb}${WORD_BOUNDARY})`;
+  return new RegExp(`${runner}${verbAhead}`, "g");
+}
+
+/**
+ * Escapes one runner path for the double-quoted shell word it is written into. The path is
+ * consumer-influenced (an fnm/nvm prefix, a project checkout), so `"`, `$`, a backtick and a
+ * backslash are neutralized rather than trusted.
+ *
+ * @param value - The absolute path to escape.
+ * @returns The escaped path.
+ * @throws {Error} `[native]` when the path contains a line break.
+ * @example
+ * ```ts
+ * escapeRunnerPath("/opt/node $HOME/bin/node"); // "/opt/node \\$HOME/bin/node"
+ * ```
+ */
+function escapeRunnerPath(value: string): string {
+  if (LINE_BREAK_PATTERN.test(value)) {
+    throw new Error(
+      `[native] Refusing to write a runner path containing a line break: ${JSON.stringify(value)}.\n  Install Node and the Tauri CLI under a path without line breaks, or set pluginConfigs.tauri.nodePath.`
+    );
+  }
+  return value.replaceAll(SHELL_METACHARACTER_PATTERN, match => `\\${match}`);
 }
 
 /**
  * Rewrites the runner Tauri baked into a generated build phase into an absolute
- * `<node> <tauri.js> <verb>` invocation. The match is runner-agnostic: on every line
- * carrying ` <verb>`, whatever sits between the line's prefix and the verb is replaced.
+ * `<node> <tauri.js> <verb>` invocation. Only the runner-shaped token run directly before
+ * the verb is replaced — anything else on the line (indentation, a `script:` key, a
+ * `shellScript = "` assignment, a shell preamble, the verb's own arguments) is preserved
+ * byte for byte, and an already-absolute pair is rewritten onto the current one, so a
+ * changed Node path (an fnm/nvm switch) re-patches instead of going stale.
  *
  * @param existing - The file content to rewrite.
  * @param options - How to rewrite the command.
@@ -64,6 +116,7 @@ function runnerLinePattern(verb: string): RegExp {
  * @param options.verb - The Tauri verb the build phase invokes.
  * @param options.quote - The quote form for this file type.
  * @returns The content with every occurrence rewritten (a no-op once already rewritten).
+ * @throws {Error} `[native]` when a runner path contains a line break.
  * @example
  * ```ts
  * applyRunnerCommand(yaml, { runner, verb: "ios xcode-script", quote: '"' });
@@ -74,11 +127,11 @@ export function applyRunnerCommand(
   options: { runner: TauriRunner; verb: string; quote: string }
 ): string {
   const { runner, verb, quote } = options;
-  const replacement = `${quote}${runner.nodePath}${quote} ${quote}${runner.tauriJsPath}${quote}`;
-  return existing.replaceAll(
-    runnerLinePattern(verb),
-    (_match, prefix: string) => `${prefix}${replacement}`
-  );
+  const nodePath = escapeRunnerPath(runner.nodePath);
+  const tauriJsPath = escapeRunnerPath(runner.tauriJsPath);
+  const replacement = `${quote}${nodePath}${quote} ${quote}${tauriJsPath}${quote}`;
+  // A function replacement: a `$` in a path must never be read as a `$&`-style back-reference.
+  return existing.replaceAll(runnerCommandPattern(verb), () => replacement);
 }
 
 /**

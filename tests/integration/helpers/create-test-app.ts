@@ -6,7 +6,7 @@
  * project/out dirs per call. No vitest imports — scenarios own their spies; all defaults
  * here are plain closures (fixtures.ts).
  */
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
@@ -17,8 +17,9 @@ import type {
   NativePhaseEvent,
   Tauri
 } from "../../../src/index";
-// PACKAGE ENTRY — the real framework instance, never createCore re-composition:
 import { createApp, createPlugin, doctorPlugin } from "../../../src/index";
+// PACKAGE ENTRY — the real framework instance, never createCore re-composition:
+import { ICON_SOURCE_STAMP_FILE } from "../../../src/plugins/build/pipeline";
 import { probeAlwaysOk, spawnBuildSucceeds } from "./fixtures";
 
 /**
@@ -128,9 +129,10 @@ function composeApp(
 }
 
 /**
- * Seeds an icon source (backdated an hour) plus an already-generated
- * `src-tauri/icons/icon.png`, so the pipeline's icons phase reports "up to date" and
- * never spawns the `icon` verb (B5/A8 freshness rule).
+ * Seeds an icon source (backdated an hour), an already-generated
+ * `src-tauri/icons/icon.png`, and the `.source` stamp recording that the set was generated
+ * from exactly this source — so the pipeline's icons phase reports "up to date" and never
+ * spawns the `icon` verb (the icons freshness rule).
  *
  * @param projectDir - The app's generated-project root.
  * @param iconDir - A temp dir OUTSIDE projectDir, so a full `clean()` cannot remove the source.
@@ -145,6 +147,13 @@ async function seedUpToDateIcons(projectDir: string, iconDir: string): Promise<s
   const generatedIcons = path.join(projectDir, "src-tauri", "icons");
   await mkdir(generatedIcons, { recursive: true });
   await writeFile(path.join(generatedIcons, "icon.png"), "generated-icon-bytes", "utf8");
+
+  const stats = await stat(iconSource);
+  await writeFile(
+    path.join(generatedIcons, ICON_SOURCE_STAMP_FILE),
+    [path.resolve(iconSource), stats.size, stats.mtimeMs].join("\n"),
+    "utf8"
+  );
 
   return iconSource;
 }
@@ -193,7 +202,7 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
   const outDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-out-"));
   const iconDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-icon-"));
 
-  // The icons phase is pinned to its "up to date" outcome by default (B5/A8): a
+  // The icons phase is pinned to its "up to date" outcome by default: a
   // backdated `app.icon` source plus an already-generated icon set, so a scenario's
   // spawn assertions only ever see the verbs it is actually about. A scenario that
   // wants real icon generation overrides `config.app` without `icon`.

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FakeableProcess } from "../../spawn";
-import { killProcessGroup, MAX_BUFFERED_STREAM_CHARS, realSpawn } from "../../spawn";
+import {
+  killProcessGroup,
+  MAX_BUFFERED_STREAM_CHARS,
+  realSpawn,
+  SIGKILL_SETTLE_MS
+} from "../../spawn";
 
 describe("killProcessGroup", () => {
   beforeEach(() => {
@@ -16,11 +21,63 @@ describe("killProcessGroup", () => {
     const proc: FakeableProcess = { pid: 4242, exited: false, onExit: () => {} };
 
     const promise = killProcessGroup(proc, { graceMs: 2000, platform: "darwin", sendSignal });
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(2000 + SIGKILL_SETTLE_MS);
     await promise;
 
     expect(sendSignal).toHaveBeenNthCalledWith(1, -4242, "SIGTERM");
     expect(sendSignal).toHaveBeenNthCalledWith(2, -4242, "SIGKILL");
+  });
+
+  it("signals the pid itself when this spawn did not create the process group", async () => {
+    const sendSignal = vi.fn();
+    const proc: FakeableProcess = { pid: 4242, exited: false, onExit: () => {} };
+
+    const promise = killProcessGroup(proc, {
+      graceMs: 2000,
+      platform: "darwin",
+      sendSignal,
+      group: false
+    });
+    await vi.advanceTimersByTimeAsync(2000 + SIGKILL_SETTLE_MS);
+    await promise;
+
+    expect(sendSignal).toHaveBeenNthCalledWith(1, 4242, "SIGTERM");
+    expect(sendSignal).toHaveBeenNthCalledWith(2, 4242, "SIGKILL");
+  });
+
+  it("waits a settle window after SIGKILL instead of resolving straight away", async () => {
+    const sendSignal = vi.fn();
+    const proc: FakeableProcess = { pid: 4242, exited: false, onExit: () => {} };
+    let resolved = false;
+
+    const promise = killProcessGroup(proc, {
+      graceMs: 2000,
+      platform: "darwin",
+      sendSignal
+    }).then(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sendSignal).toHaveBeenNthCalledWith(2, -4242, "SIGKILL");
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(SIGKILL_SETTLE_MS);
+    await promise;
+    expect(resolved).toBe(true);
+  });
+
+  it("resolves instead of rejecting when the signal sender throws ESRCH", async () => {
+    const sendSignal = vi.fn(() => {
+      throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    });
+    const proc: FakeableProcess = { pid: 4242, exited: false, onExit: () => {} };
+
+    const promise = killProcessGroup(proc, { graceMs: 2000, platform: "darwin", sendSignal });
+    await vi.advanceTimersByTimeAsync(2000 + SIGKILL_SETTLE_MS);
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(sendSignal).toHaveBeenCalledTimes(2);
   });
 
   it("resolves without escalating when the process exits inside the grace period", async () => {
@@ -130,6 +187,20 @@ describe("realSpawn", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("LATE");
+  }, 10_000);
+
+  it("terminates a NON-detached child on abort without an unhandled rejection", async () => {
+    // A one-shot verb spawns without `detached`, so the child is not a group leader and
+    // signalling `-pid` would hit an unrelated group or throw ESRCH inside the executor.
+    const controller = new AbortController();
+    const promise = realSpawn({
+      cmd: [process.execPath, "-e", "setTimeout(() => {}, 5000);"],
+      cwd: process.cwd(),
+      signal: controller.signal
+    });
+    controller.abort();
+    const result = await promise;
+    expect(result.code === null || result.signal !== null).toBe(true);
   }, 10_000);
 
   it("group-kills a detached child when the abort signal fires", async () => {

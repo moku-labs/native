@@ -4,7 +4,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { MobileTarget, Target } from "../../../config";
-import { bundleLayout } from "../layout";
+import { genDirectoryPath } from "../layout";
 import type { CompletenessResult } from "../types";
 
 /**
@@ -57,8 +57,7 @@ export function completeness(projectDirectory: string, target: Target): Complete
     return { status: "not-applicable" };
   }
 
-  const layout = bundleLayout(target);
-  const genDirectory = path.join(projectDirectory, layout.root, layout.genDirectory ?? "");
+  const genDirectory = genDirectoryPath(projectDirectory, target);
   if (!existsSync(genDirectory)) {
     return { status: "not-initialized" };
   }

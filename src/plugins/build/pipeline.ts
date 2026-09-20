@@ -4,7 +4,7 @@
  * init/completeness gate inside codegen, the icons freshness rule and the
  * live compile→bundle transition split.
  */
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { NativePhase, Target } from "../../config";
 import { collectArtifacts } from "./collect";
@@ -108,6 +108,13 @@ export async function runCodegen(
 }
 
 /**
+ * Name of the stamp file the icons phase writes beside the generated set. An mtime
+ * comparison cannot answer the question that matters — pointing `app.icon` at an OLDER file
+ * is a change too — so the stamp records WHICH source the set was generated from.
+ */
+export const ICON_SOURCE_STAMP_FILE = ".source";
+
+/**
  * Reads a path's modification time, treating an absent path as "no mtime" rather than
  * an error — a missing generated icon simply means the set has to be regenerated.
  *
@@ -128,12 +135,51 @@ async function modifiedAt(target: string): Promise<number | undefined> {
 }
 
 /**
+ * Builds the stamp for one icon source: its absolute path, size and modification time. Any
+ * of the three changing means the generated set no longer matches the configured icon.
+ *
+ * @param source - The icon source path.
+ * @returns The stamp text, or undefined when the source is absent.
+ * @example
+ * ```ts
+ * await iconSourceStamp("/app/assets/icon.png"); // "/app/assets/icon.png\n20480\n1758…"
+ * ```
+ */
+async function iconSourceStamp(source: string): Promise<string | undefined> {
+  try {
+    const stats = await stat(source);
+    return [path.resolve(source), stats.size, stats.mtimeMs].join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reads the stamp a previous icons pass left, treating an absent/unreadable stamp as "never
+ * generated" — the set is regenerated rather than trusted.
+ *
+ * @param stampPath - Path of the stamp file.
+ * @returns The recorded stamp text, or undefined when there is none.
+ * @example
+ * ```ts
+ * await readIconSourceStamp("/app/.moku/tauri/src-tauri/icons/.source");
+ * ```
+ */
+async function readIconSourceStamp(stampPath: string): Promise<string | undefined> {
+  try {
+    return await readFile(stampPath, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Runs the `icons` phase: resolves the icon source through `project.ensureIconSource()`
  * (the configured `app.icon`, or a generated placeholder) and regenerates the full icon
  * set with `tauri.icon()`. The set is left alone ONLY when the generated
- * `src-tauri/icons/icon.png` is newer than the source AND this pass did not run
- * `mobileInit` — a fresh `gen/` tree ships Tauri's own default icons, which must be
- * overwritten.
+ * `src-tauri/icons/icon.png` exists, the stamp beside it still describes the current source,
+ * AND this pass did not run `mobileInit` — a fresh `gen/` tree ships Tauri's own default
+ * icons, which must be overwritten.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
@@ -151,19 +197,26 @@ export async function runIcons(
   opts: { mobileInitRan: boolean }
 ): Promise<{ detail: string }> {
   const source = await deps.project.ensureIconSource();
-  const generatedIcon = path.join(ctx.global.projectDir, "src-tauri", "icons", "icon.png");
-  const [generatedAt, sourceAt] = await Promise.all([
-    modifiedAt(generatedIcon),
-    modifiedAt(source)
+  const iconsDirectory = path.join(ctx.global.projectDir, "src-tauri", "icons");
+  const stampPath = path.join(iconsDirectory, ICON_SOURCE_STAMP_FILE);
+
+  const [generatedAt, stamp, recordedStamp] = await Promise.all([
+    modifiedAt(path.join(iconsDirectory, "icon.png")),
+    iconSourceStamp(source),
+    readIconSourceStamp(stampPath)
   ]);
 
-  const isFresh = generatedAt !== undefined && sourceAt !== undefined && generatedAt > sourceAt;
+  const isFresh = generatedAt !== undefined && stamp !== undefined && recordedStamp === stamp;
   if (isFresh && !opts.mobileInitRan) {
     ctx.log.debug("build:icons", { action: "skipped", source });
     return { detail: "up to date" };
   }
 
   await deps.tauri.icon({ source });
+  if (stamp !== undefined) {
+    await mkdir(iconsDirectory, { recursive: true });
+    await writeFile(stampPath, stamp, "utf8");
+  }
   ctx.log.debug("build:icons", { action: "generated", source });
   return { detail: ctx.global.app.icon ? "generated" : "placeholder" };
 }
@@ -258,7 +311,8 @@ export async function runCompileAndBundle(
       aab: opts.aab,
       exportMethod: ctx.global.signing.apple?.exportMethod,
       /**
-       * Forwards one parsed compile tick as a `native:phase` "progress" event.
+       * Forwards one parsed compile tick as a `native:phase` "progress" event — until the
+       * bundle phase opens, after which a "compiling" line would contradict the open phase.
        *
        * @param tick - The parsed compile tick.
        * @example
@@ -267,6 +321,7 @@ export async function runCompileAndBundle(
        * ```
        */
       onTick: tick => {
+        if (transitionAt !== undefined) return;
         emitPhase(ctx, target, "compile", "progress", { detail: formatCompileTickDetail(tick) });
       },
       /**

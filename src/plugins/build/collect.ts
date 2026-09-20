@@ -3,10 +3,27 @@
  * the project plugin (`project.getBundleLayout`) and arrives here as a {@link BundleLayout};
  * this file only turns it into globs and copies what they match.
  */
-import { cp, glob, mkdir } from "node:fs/promises";
+import { cp, glob, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { BuildFlavor, Target } from "../../config";
 import type { BundleLayout } from "../project/layout";
+
+/**
+ * Release-flavour Android outputs. Gradle writes every build type side by side
+ * (`outputs/apk/<flavour>/<buildType>/`), so an unpinned `outputs/**` glob ships a debug
+ * installer. The `**` covers the optional product-flavour directory, `*elease*` both
+ * `release` and `universalRelease`.
+ */
+const ANDROID_APK_PATTERN = "app/build/outputs/apk/**/*elease*/*.apk";
+
+/** The store-bundle equivalent of {@link ANDROID_APK_PATTERN}. */
+const ANDROID_AAB_PATTERN = "app/build/outputs/bundle/**/*elease*/*.aab";
+
+/** The unsigned simulator `.app` DIRECTORY `tauri ios build --target <arch>-sim` writes. */
+const IOS_SIMULATOR_PATTERN = "build/*-sim/*.app";
+
+/** The signed device archive — one per arch directory, stale ones included (deduplicated). */
+const IOS_DEVICE_PATTERN = "build/**/*.ipa";
 
 /**
  * Resolves Tauri's per-target output root the layout's globs are relative to — desktop
@@ -58,12 +75,82 @@ export function bundlePatterns(
 ): readonly string[] {
   const gen = layout.genDirectory;
   if (target === "ios" && gen) {
-    return opts?.simulator === true ? [`${gen}/build/*-sim/*.app`] : [`${gen}/build/**/*.ipa`];
+    return [`${gen}/${opts?.simulator === true ? IOS_SIMULATOR_PATTERN : IOS_DEVICE_PATTERN}`];
   }
   if (target === "android" && gen) {
-    return [`${gen}/app/build/outputs/**/*.${opts?.aab === true ? "aab" : "apk"}`];
+    return [`${gen}/${opts?.aab === true ? ANDROID_AAB_PATTERN : ANDROID_APK_PATTERN}`];
   }
   return layout.formats.map(format => `bundle/${format.directory}/${format.pattern}`);
+}
+
+/**
+ * Tests whether `child` resolves strictly below `parent` — equality is NOT containment, so a
+ * guard built on this can never accept the delivery root itself.
+ *
+ * @param child - The candidate path (already resolved).
+ * @param parent - The directory it must sit below (already resolved).
+ * @returns Whether `child` is strictly inside `parent`.
+ * @example
+ * ```ts
+ * isStrictlyInside("/out/macos/App.dmg", "/out/macos"); // true
+ * ```
+ */
+function isStrictlyInside(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+/**
+ * Resolves where one matched artifact is delivered, and refuses anything that would land
+ * outside the target's delivery directory. The collect pass REMOVES this path before copying
+ * (a merged copy leaves stale files inside a `.app` bundle and breaks its signature), so both
+ * containment facts — delivery directory strictly inside the output directory, destination
+ * strictly inside the delivery directory — are established here, before any removal.
+ *
+ * @param opts - The three paths involved.
+ * @param opts.outputDirectory - The installer delivery root (`config.outDir`).
+ * @param opts.outPath - The target's delivery directory (`<outDir>/<target>`).
+ * @param opts.artifactName - The matched artifact's base name.
+ * @returns The absolute-or-relative destination path, in the same form as `outPath`.
+ * @throws {Error} `[native]` when either path escapes the directory that must contain it.
+ * @example
+ * ```ts
+ * artifactDestination({ outputDirectory: "dist-native", outPath: "dist-native/macos", artifactName: "App.dmg" });
+ * ```
+ */
+export function artifactDestination(opts: {
+  outputDirectory: string;
+  outPath: string;
+  artifactName: string;
+}): string {
+  const deliveryRoot = path.resolve(opts.outputDirectory);
+  const deliveryDirectory = path.resolve(opts.outPath);
+  const destination = path.join(opts.outPath, opts.artifactName);
+
+  if (!isStrictlyInside(deliveryDirectory, deliveryRoot)) {
+    throw refuseOutside(opts.outPath, deliveryRoot);
+  }
+  if (!isStrictlyInside(path.resolve(destination), deliveryDirectory)) {
+    throw refuseOutside(destination, deliveryDirectory);
+  }
+  return destination;
+}
+
+/**
+ * Builds the `[native]`-formatted refusal for a path that escapes its containing directory.
+ *
+ * @param offending - The path that escaped.
+ * @param root - The directory it had to stay inside.
+ * @returns A formatted `[native] ...` error.
+ * @example
+ * ```ts
+ * throw refuseOutside("/tmp/evil.dmg", "/repo/dist-native/macos");
+ * ```
+ */
+function refuseOutside(offending: string, root: string): Error {
+  return new Error(
+    `[native] Refusing to collect "${offending}" outside ${root}.\n  Collect only ever writes inside <outDir>/<target> — check \`outDir\` and the build output.`
+  );
 }
 
 /**
@@ -71,8 +158,11 @@ export function bundlePatterns(
  * the stable delivery location `native:complete` reports. Copies with `recursive: true` so
  * a macOS `.app` bundle (a directory) and single-file installers
  * (`.dmg`/`.exe`/`.msi`/`.AppImage`/`.deb`/`.rpm`/`.ipa`/`.aab`/`.apk`) both work through
- * the same call. Zero matches is an error, never a silent empty success — a shippable
- * artifact is the whole point of this phase.
+ * the same call, and REPLACES an existing destination first — `cp` merges into a directory,
+ * which would leave stale files inside a `.app` bundle and break its signature. Matches are
+ * deduplicated by destination name (last match wins), so stale arch directories cannot put
+ * the same installer in the artifact list twice. Zero matches is an error, never a silent
+ * empty success — a shippable artifact is the whole point of this phase.
  *
  * @param projectDirectory - The generated Tauri project root (contains `src-tauri/`).
  * @param target - The packaging target being collected.
@@ -97,14 +187,14 @@ export async function collectArtifacts(
   const root = bundleRoot(projectDirectory, layout);
   const patterns = bundlePatterns(layout, target, opts);
 
-  const matches: string[] = [];
+  const matches = new Map<string, string>();
   for (const pattern of patterns) {
     for await (const match of glob(pattern, { cwd: root })) {
-      matches.push(match);
+      matches.set(path.basename(match), match);
     }
   }
 
-  if (matches.length === 0) {
+  if (matches.size === 0) {
     const globbedRoots = patterns.map(pattern => path.join(root, pattern)).join(", ");
     throw new Error(
       `[native] No ${target} installer artifacts found.\n  Checked ${globbedRoots} — run \`native doctor\` to diagnose the build output.`
@@ -115,9 +205,10 @@ export async function collectArtifacts(
   await mkdir(outPath, { recursive: true });
 
   const artifacts: string[] = [];
-  for (const match of matches) {
+  for (const [artifactName, match] of matches) {
     const source = path.join(root, match);
-    const destination = path.join(outPath, path.basename(match));
+    const destination = artifactDestination({ outputDirectory, outPath, artifactName });
+    await rm(destination, { recursive: true, force: true });
     await cp(source, destination, { recursive: true });
     artifacts.push(destination);
   }

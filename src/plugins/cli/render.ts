@@ -160,6 +160,27 @@ export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): voi
 }
 
 /**
+ * Widest tail line the failure box keeps. A single Rust/xcodebuild diagnostic can run
+ * thousands of characters; unbounded, it wraps the branded box into unreadable noise.
+ */
+const MAX_TAIL_LINE_LENGTH = 160;
+
+/**
+ * Truncates one tail line to {@link MAX_TAIL_LINE_LENGTH}, marking the cut with an ellipsis.
+ *
+ * @param line - One line of the scrubbed stderr tail.
+ * @returns The line, at most `MAX_TAIL_LINE_LENGTH` characters long.
+ * @example
+ * ```ts
+ * truncateLine("error: " + "x".repeat(400)); // "error: xxx…"
+ * ```
+ */
+function truncateLine(line: string): string {
+  if (line.length <= MAX_TAIL_LINE_LENGTH) return line;
+  return `${line.slice(0, MAX_TAIL_LINE_LENGTH - 1)}…`;
+}
+
+/**
  * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
  * in a branded box, then the `[native]` error line. Cause first, verdict second —
  * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
@@ -175,6 +196,6 @@ export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): voi
 export function renderBuildFailure(ui: BrandConsole, error: unknown): void {
   const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
 
-  if (stderrTail) ui.box(stderrTail.split(/\r?\n/));
+  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line)));
   ui.error(error instanceof Error ? error.message : String(error));
 }

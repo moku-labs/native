@@ -2,11 +2,11 @@
  * @file Root integration — core framework boot (scenarios S01–S04).
  *
  * S01 — Framework boots via package-entry createApp with all five plugin APIs.
- * S02 — Global-config defaults + partial override composition (incl. MC1 render seam).
+ * S02 — Global-config defaults + partial override composition (incl. the branded render seam).
  * S03 — project.onInit validates app identity at createApp time (not at first verb).
  * S04 — Consumer plugin composes into the chain with ctx.log/ctx.env present.
  * S20 — env core plugin resolves real host variables; targets default to the host's own.
- * S21 — replacing the env providers list breaks node resolution (A19 migration note).
+ * S21 — replacing the env providers list breaks node resolution.
  *
  * All apps compose through the SHIPPED package entry (`src/index.ts`) — never a
  * `createCore` re-composition — with every subprocess/render seam injected.
@@ -114,7 +114,7 @@ describe("S01 — framework boots via package-entry createApp with all five plug
 });
 
 describe("S02 — global-config defaults + partial override composition", () => {
-  it("generates under the overridden projectDir with default web wiring, MC1-clean", async () => {
+  it("generates under the overridden projectDir with default web wiring, rendering through the branded seam", async () => {
     const { projectDir, outDir } = await makeTempDirs();
 
     // Override ONLY dirs/targets/app identity — web wiring must come from defaultConfig.
@@ -155,13 +155,13 @@ describe("S02 — global-config defaults + partial override composition", () => 
     expect(conf.build.beforeBuildCommand.script).toBe("bun run build");
     expect(conf.build.beforeBuildCommand.cwd).toBe(path.resolve("."));
     expect(conf.build.devUrl).toBe("http://localhost:5173");
-    // frontendDist is resolved FROM src-tauri, where Tauri reads it (B4).
+    // frontendDist is resolved FROM src-tauri, where Tauri reads it.
     expect(conf.build.frontendDist).toBe(
       path.relative(path.join(projectDir, "src-tauri"), path.resolve("dist")).replaceAll("\\", "/")
     );
 
     // pluginConfigs seam layering: the framework default `cli.renderImpl: undefined` is
-    // replaced by the injected sink — the CLI renders there, never via raw console (MC1).
+    // replaced by the injected sink — the CLI renders there, never via raw console.
     // ctx.log's structured records (plain objects) are the logging seam, not CLI UI, so
     // the spy asserts no rendered STRING line ever reached raw console.log.
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -310,7 +310,7 @@ describe("S20 — env core plugin providers + host-derived default targets", () 
     const { projectDir, outDir } = await makeTempDirs();
 
     // A consumer plugin captures what the kernel handed it at onInit: the resolved
-    // env accessor (B1 — the framework seeds a process-env provider in coreConfig)
+    // env accessor (the framework seeds a process-env provider in coreConfig)
     // and the global config the framework defaults produced.
     let observed: { path: string | undefined; targets: readonly Target[] } | undefined;
     const observer = createPlugin("env-observer", {
@@ -339,7 +339,7 @@ describe("S20 — env core plugin providers + host-derived default targets", () 
   });
 });
 
-describe("S21 — replacing the env providers list breaks node resolution (A19)", () => {
+describe("S21 — replacing the env providers list breaks node resolution", () => {
   it("fails the build with the [native] node-not-found error and never spawns", async () => {
     const { projectDir, outDir } = await makeTempDirs();
 
@@ -353,7 +353,7 @@ describe("S21 — replacing the env providers list breaks node resolution (A19)"
     // REGULAR plugins only, so this key is reachable at runtime (the kernel merges it as
     // cascade level 4 — spec/03 §5) but not through the typed literal. Passing the options
     // as a pre-built object is what a consumer replacing the provider list actually gets,
-    // and it is exactly the A19 hazard: the merge is shallow, so `providers: []` REPLACES
+    // and it is the documented hazard: the merge is shallow, so `providers: []` REPLACES
     // the framework's `[workerSafeProcessEnv()]` instead of extending it.
     const options = {
       config: {

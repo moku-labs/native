@@ -86,4 +86,54 @@ describe("scrub", () => {
     const result = scrub("TAURI_SIGNING_PRIVATE_KEY=abc123");
     expect(result).toBe("TAURI_SIGNING_PRIVATE_KEY=[native:scrubbed]");
   });
+
+  it("masks a quoted secret value together with the spaces inside it", () => {
+    const result = scrub('APPLE_PASSWORD="correct horse battery" staple');
+    expect(result).not.toContain("horse");
+    expect(result).toBe("APPLE_PASSWORD=[native:scrubbed] staple");
+  });
+
+  it("masks a single-quoted secret value", () => {
+    const result = scrub("ANDROID_KEYSTORE_PASSWORD: 'two words' ok");
+    expect(result).not.toContain("two words");
+    expect(result).toBe("ANDROID_KEYSTORE_PASSWORD: [native:scrubbed] ok");
+  });
+
+  it("masks URL userinfo even though a URL is location-shaped", () => {
+    const result = scrub(
+      "fatal: cannot read https://alex:ghp_A1b2C3d4E5@github.com/moku/native.git"
+    );
+    expect(result).not.toContain("ghp_A1b2C3d4E5");
+    expect(result).toBe("fatal: cannot read https://[native:scrubbed]@github.com/moku/native.git");
+  });
+
+  it("masks a high-entropy path SEGMENT and keeps the rest of the path readable", () => {
+    const secret = "aB3xQ9zP1mK7vR2tY8wL4nC6jF0sH5dG";
+    const result = scrub(`uploading /var/tmp/${secret}/App.dmg`);
+    expect(result).not.toContain(secret);
+    expect(result).toBe("uploading /var/tmp/[native:scrubbed]/App.dmg");
+  });
+
+  it("masks a 40-character hex token (hex entropy alone never clears the bar)", () => {
+    const token = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+    expect(scrub(`token ${token} sent`)).toBe("token [native:scrubbed] sent");
+  });
+
+  it("masks a 64-character hex token", () => {
+    const token = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809";
+    expect(scrub(`digest ${token}`)).toBe("digest [native:scrubbed]");
+  });
+
+  it("preserves a git sha announced by its context", () => {
+    const sha = "9f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+    expect(scrub(`commit ${sha}`)).toBe(`commit ${sha}`);
+    expect(scrub(`rev ${sha}`)).toBe(`rev ${sha}`);
+    expect(scrub(`#${sha}`)).toBe(`#${sha}`);
+  });
+
+  it("preserves the crates.io registry path segment", () => {
+    const line =
+      "Compiling serde (/Users/alex/.cargo/registry/src/index.crates.io-6f17d22bba15001f)";
+    expect(scrub(line)).toBe(line);
+  });
 });

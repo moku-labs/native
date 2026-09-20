@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import type { Target } from "../../config";
 import { bundleLayout } from "./layout";
+import { isDerivedPath, realResolve } from "./paths";
 import type { CleanResult } from "./types";
 
 /**
@@ -39,11 +40,15 @@ export function cleanTargets(projectDirectory: string, target?: Target): string[
 }
 
 /**
- * Refuses to treat a shared, non-derived directory as a cleanable `projectDir`. This is
- * the FIRST gate every clean pass passes through, before a single path is computed:
- * `projectDir` is gitignored build output, so a `projectDir` that is the current working
- * directory, the user's home directory, a filesystem root, or an ancestor of the current
- * working directory is a misconfiguration, not a clean scope.
+ * Refuses to treat anything but derived build output as a cleanable `projectDir`. This is
+ * the FIRST gate every clean pass passes through, before a single path is computed.
+ *
+ * The rule is positive containment, not a blacklist of dangerous paths: `projectDir` must
+ * resolve strictly INSIDE the current working directory (or inside the OS temp root, where
+ * test and smoke workspaces live), and must not be — or contain — the cwd or the home
+ * directory. `~/Documents` is refused for the same reason `/` is: it is not derived state.
+ * Symlinks are followed and, on case-insensitive filesystems, case is ignored, so neither
+ * a link nor a re-typed capitalization walks around the gate.
  *
  * Pure predicate by design — it is tested by calling it directly with unsafe paths, never
  * by letting {@link clean} loose on one.
@@ -51,29 +56,25 @@ export function cleanTargets(projectDirectory: string, target?: Target): string[
  * @param root - The configured `projectDir` a clean pass wants to remove.
  * @param cwd - The current working directory (injectable for tests).
  * @param home - The user's home directory (injectable for tests).
- * @throws {Error} When `root` is the cwd, the home directory, a filesystem root, or contains the cwd.
+ * @param platform - The host platform, deciding case sensitivity (injectable for tests).
+ * @throws {Error} When `root` does not resolve strictly inside the cwd or the temp root, or
+ *   when it is, or contains, the cwd or the home directory.
  * @example
  * ```ts
  * assertCleanableRoot("/repo/.moku/tauri", "/repo", "/Users/alex"); // ok
- * assertCleanableRoot("/repo", "/repo", "/Users/alex"); // throws
+ * assertCleanableRoot("/Users/alex/Documents", "/repo", "/Users/alex"); // throws
  * ```
  */
 export function assertCleanableRoot(
   root: string,
   cwd: string = process.cwd(),
-  home: string = os.homedir()
+  home: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform
 ): void {
-  const resolvedRoot = path.resolve(root);
-  const resolvedCwd = path.resolve(cwd);
-
-  const isFilesystemRoot = path.dirname(resolvedRoot) === resolvedRoot;
-  const isCwd = resolvedRoot === resolvedCwd;
-  const isHome = resolvedRoot === path.resolve(home);
-  const containsCwd = resolvedCwd.startsWith(resolvedRoot + path.sep);
-  if (!isFilesystemRoot && !isCwd && !isHome && !containsCwd) return;
+  if (isDerivedPath(root, { cwd, home, platform })) return;
 
   throw new Error(
-    `[native] Refusing to clean projectDir "${resolvedRoot}".\n  Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".`
+    `[native] Refusing to clean projectDir "${realResolve(root)}".\n  Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".`
   );
 }
 
@@ -109,7 +110,7 @@ export function assertWithinRoot(root: string, candidate: string): void {
  * @param projectDirectory - The Tauri project root.
  * @param target - The optional packaging target to scope the clean to.
  * @returns The list of paths actually removed.
- * @throws {Error} When `projectDir` is the cwd, the home directory, a filesystem root, or contains the cwd.
+ * @throws {Error} When `projectDir` is not derived state inside the cwd or the temp root.
  * @example
  * ```ts
  * await clean("/repo/.moku/tauri", "android");

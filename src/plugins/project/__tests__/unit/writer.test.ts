@@ -24,6 +24,16 @@ describe("assertWritablePath", () => {
     expect(() => assertWritablePath(forbidden, PROJECT_ROOT)).toThrow("[native] Refusing to write");
   });
 
+  it.each([
+    ["a sibling directory reached with ..", path.join(path.sep, "repo", ".moku", "evil.conf")],
+    ["an unrelated absolute path", path.join(path.sep, "etc", "passwd")],
+    ["projectDir itself", PROJECT_ROOT]
+  ])("refuses %s", (_label, filePath) => {
+    expect(() => assertWritablePath(filePath, PROJECT_ROOT)).toThrow(
+      `[native] Refusing to write outside projectDir: ${path.resolve(filePath)}.`
+    );
+  });
+
   it("scans only below projectDir — a repo checked out under a dir named target is fine", () => {
     const root = path.join(path.sep, "Users", "alex", "target", "repo", ".moku", "tauri");
     expect(() =>

@@ -32,7 +32,7 @@ describe("crossRepoDeepLinkCheck", () => {
     expect(crossRepoDeepLinkCheck.appliesTo("macos", global)).toBe(false);
   });
 
-  it("warns and names the .well-known filenames + the D-011 deferral", async () => {
+  it("warns and names the .well-known filenames + the universal-link deferral", async () => {
     const global = { ...baseGlobalConfig, system: [{ name: "deep-link" }] };
 
     const result = await crossRepoDeepLinkCheck.run(createCheckInput({ global }));

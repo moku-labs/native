@@ -15,7 +15,7 @@ import { tauriPlugin } from "../../../tauri";
 import type { SpawnFn } from "../../../tauri/types";
 import { cliPlugin } from "../../index";
 
-// Full dependency graph (D-007): project + tauri + build + doctor + cli, so this test
+// Full dependency graph: project + tauri + build + doctor + cli, so this test
 // exercises cli's real wiring instead of reaching past it with mocks.
 const framework = createCore(coreConfig, {
   plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin]

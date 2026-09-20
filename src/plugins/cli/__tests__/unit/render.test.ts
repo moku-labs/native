@@ -63,7 +63,7 @@ describe("renderPhaseEvent", () => {
     expect(text).toContain("12ms");
   });
 
-  it("handles the v1 icons no-op done event gracefully (D-015)", () => {
+  it("handles the v1 icons no-op done event gracefully", () => {
     const { lines, ui } = createSink();
 
     renderPhaseEvent(
@@ -242,6 +242,22 @@ describe("renderBuildFailure", () => {
     expect(lines.length).toBeGreaterThanOrEqual(5);
   });
 
+  it("truncates an over-long tail line so the box stays readable in a terminal", () => {
+    const { lines, ui } = createSink();
+    const longLine = `error: ${"x".repeat(400)}`;
+    const error = new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
+      exitCode: 101,
+      stderrTail: longLine
+    });
+
+    renderBuildFailure(ui, error);
+
+    const text = lines.join("\n");
+    expect(text).not.toContain("x".repeat(200));
+    expect(text).toContain("…");
+    for (const line of lines) expect(line.length).toBeLessThan(200);
+  });
+
   it("renders the error line without a box when the stderr tail is empty", () => {
     const { lines, ui } = createSink();
     const error = new TauriError("cancelled", "[native] tauri cancelled.\n  Retry.", {
@@ -267,7 +283,7 @@ describe("renderBuildFailure", () => {
   });
 });
 
-describe("MC1 compliance", () => {
+describe("branded-kit compliance", () => {
   it("never calls raw console.* when a render sink is injected", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

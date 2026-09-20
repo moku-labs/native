@@ -14,7 +14,7 @@ import type { SpawnFn } from "../../../tauri/types";
 import { buildPlugin } from "../../index";
 import type { RunOptions } from "../../types";
 
-// Scoped harness: composes project + tauri + build (build's real dependency graph — D-007),
+// Scoped harness: composes project + tauri + build (build's real dependency graph),
 // so this test never depends on sibling plugins (doctor/cli) being implemented.
 
 const validAppConfig = {

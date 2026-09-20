@@ -69,6 +69,15 @@ export type Check = {
   /** Stable check identifier (module-level; individual results may specialize it per target). */
   id: string;
   /**
+   * The id this check's own result carries for one scope. Implemented only by checks that
+   * specialize their id per target, so a synthetic result (a timeout, an internal error) is
+   * reported under the SAME id a real run would have produced.
+   *
+   * @param scope - The scope the check ran against.
+   * @returns The per-scope result id.
+   */
+  resultId?(scope: Target | "host"): string;
+  /**
    * Whether this check applies to a given scope.
    *
    * @param target - The candidate scope (a real packaging target, or "host").

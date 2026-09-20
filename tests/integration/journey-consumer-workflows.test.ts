@@ -174,7 +174,7 @@ describe("journey consumer workflows (S13–S16)", () => {
       expect(events.filter(event => event.name === "native:complete")).toHaveLength(1);
 
       // tauri.conf.json: one plugins.<name> block per composed capability, with the
-      // deep-link scheme riding in its conf fragment (D-011).
+      // deep-link scheme riding in its conf fragment.
       const confRaw = await readFile(path.join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
       const conf = JSON.parse(confRaw) as {
         plugins: Record<string, { desktop?: { schemes?: string[] } }>;
@@ -198,7 +198,7 @@ describe("journey consumer workflows (S13–S16)", () => {
         platforms: string[];
         permissions: string[];
       };
-      // Tauri's own platform id for macos is "macOS" (B3).
+      // Tauri's own platform id for macos is "macOS".
       expect(capabilityDoc.platforms).toEqual(["macOS"]);
       expect(capabilityDoc.permissions).toEqual(
         expect.arrayContaining([
@@ -241,7 +241,7 @@ describe("journey consumer workflows (S13–S16)", () => {
 
       // Type-level: a bogus deep-link mode is rejected at compile time (never invoked).
       const rejectsBogusMode = () =>
-        // @ts-expect-error — "universal" is not a valid v1 deep-link mode (scheme-only, D-011)
+        // @ts-expect-error — "universal" is not a valid v1 deep-link mode (scheme-only in v1)
         app.project.resolve("deep-link", { mode: "universal", scheme: "myapp" });
       expect(rejectsBogusMode).toBeTypeOf("function");
     });

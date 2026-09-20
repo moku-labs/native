@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, rmdir, symlink, unlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -19,7 +19,10 @@ describe("assertCleanableRoot", () => {
     ["the cwd itself", cwd],
     ["the home directory", home],
     ["a filesystem root", path.parse(cwd).root],
-    ["an ancestor of the cwd", path.join(path.sep, "repo")]
+    ["an ancestor of the cwd", path.join(path.sep, "repo")],
+    ["a personal directory that is merely outside the cwd", path.join(home, "Documents")],
+    ["a sibling sharing a path prefix", path.join(path.sep, "repo", "app-other")],
+    ["a directory under the home directory", path.join(home, "work", ".moku", "tauri")]
   ])("refuses %s", (_label, root) => {
     expect(() => assertCleanableRoot(root, cwd, home)).toThrow(
       '[native] Refusing to clean projectDir "'
@@ -34,10 +37,41 @@ describe("assertCleanableRoot", () => {
 
   it.each([
     ["a dedicated subdirectory of the cwd", path.join(cwd, ".moku", "tauri")],
-    ["a sibling sharing a path prefix", path.join(path.sep, "repo", "app-other")],
-    ["a directory under the home directory", path.join(home, "work", ".moku", "tauri")]
+    ["a workspace under the temp root", path.join(tmpdir(), "moku-native-fixture")]
   ])("allows %s", (_label, root) => {
     expect(() => assertCleanableRoot(root, cwd, home)).not.toThrow();
+  });
+
+  it("compares case-insensitively on darwin and case-sensitively on linux", () => {
+    const mixedCase = path.join(path.sep, "repo", "APP", ".moku", "tauri");
+
+    expect(() => assertCleanableRoot(mixedCase, cwd, home, "darwin")).not.toThrow();
+    expect(() => assertCleanableRoot(mixedCase, cwd, home, "linux")).toThrow(
+      '[native] Refusing to clean projectDir "'
+    );
+  });
+
+  it("refuses a case-shifted cwd on darwin", () => {
+    expect(() =>
+      assertCleanableRoot(path.join(path.sep, "REPO", "App"), cwd, home, "darwin")
+    ).toThrow('[native] Refusing to clean projectDir "');
+  });
+
+  it("resolves symlinks instead of trusting the lexical path", async () => {
+    // A real mkdtemp directory is cleanable; a symlink sitting in the SAME directory but
+    // pointing at the home directory is not — only a realpath-based guard can tell them apart.
+    const dir = await mkdtemp(path.join(tmpdir(), "moku-native-guard-"));
+    const link = path.join(dir, "home-link");
+    await symlink(homedir(), link, "dir");
+
+    try {
+      expect(() => assertCleanableRoot(dir)).not.toThrow();
+      expect(() => assertCleanableRoot(link)).toThrow('[native] Refusing to clean projectDir "');
+    } finally {
+      // Explicit unlink + rmdir: the symlink is removed, never followed.
+      await unlink(link);
+      await rmdir(dir);
+    }
   });
 });
 

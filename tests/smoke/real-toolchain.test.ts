@@ -1,5 +1,5 @@
 /**
- * @file Smoke — real-toolchain proof (A13). Drives the SHIPPED framework against the real
+ * @file Smoke — real-toolchain proof  Drives the SHIPPED framework against the real
  * `@tauri-apps/cli`: real `node`, real cargo compile, real Xcode. Opt-in only
  * (`bun run test:smoke`); `bun run test` never includes this project.
  *
@@ -212,7 +212,7 @@ describe("real toolchain — iOS simulator", () => {
     expect(bundleStats.isDirectory()).toBe(true);
 
     // The build only got this far because the baked-in `<runner> tauri ios xcode-script`
-    // build phase was rewritten to the absolute pair this framework spawns with (B10).
+    // build phase was rewritten to the absolute pair this framework spawns with.
     const runner = app.tauri.getRunner();
     const projectYml = await readFile(
       path.join(projectDir, "src-tauri", "gen", "apple", "project.yml"),

@@ -151,7 +151,12 @@ export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
    * ```
    */
   const settleCheck = async (entry: ScheduledCheck): Promise<CheckResult> => {
-    const fallback = { id: entry.check.id, target: entry.scope };
+    // The check's own per-scope id, so a synthetic result lines up with the live rows the cli
+    // already printed — never the bare module id.
+    const fallback = {
+      id: entry.check.resultId?.(entry.scope) ?? entry.check.id,
+      target: entry.scope
+    };
     const result = await raceTimeout(
       runCheck(entry.check, entry.scope),
       ctx.config.probeTimeoutMs,

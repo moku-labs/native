@@ -1,3 +1,7 @@
+/* eslint-disable sonarjs/no-hardcoded-passwords -- every value below is an env-var NAME the
+   validator must accept or reject (the SigningConfig invariant), never a password. */
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../../../../config";
@@ -78,5 +82,116 @@ describe("validateProjectConfig", () => {
         })
       )
     ).not.toThrow();
+  });
+
+  it.each([
+    "my app",
+    "1myapp",
+    'myapp"',
+    "my/app"
+  ])('rejects "%s" as a deep-link scheme', scheme => {
+    expect(() =>
+      validateProjectConfig(
+        config({
+          system: [{ name: "deep-link" }],
+          capabilities: { "deep-link": { mode: "scheme", scheme } }
+        })
+      )
+    ).toThrow("is not a valid URL scheme");
+  });
+});
+
+describe("validateProjectConfig — app version fields", () => {
+  it.each([
+    "1.0.0",
+    "0.0.1",
+    "1.2.3-beta.1",
+    "1.2.3+build.5"
+  ])('accepts "%s" as an app.version', version => {
+    expect(() => validateProjectConfig(config({ app: { ...VALID.app, version } }))).not.toThrow();
+  });
+
+  it.each(["1.0", "v1.0.0", '1.0.0" evil', "latest"])('rejects "%s" as an app.version', version => {
+    expect(() => validateProjectConfig(config({ app: { ...VALID.app, version } }))).toThrow(
+      "is not a valid semantic version"
+    );
+  });
+
+  it("accepts a plain build number", () => {
+    expect(() =>
+      validateProjectConfig(config({ app: { ...VALID.app, buildNumber: "1.0.42" } }))
+    ).not.toThrow();
+  });
+
+  it.each(["42 43", '42"', "42\n43"])('rejects "%s" as an app.buildNumber', buildNumber => {
+    expect(() => validateProjectConfig(config({ app: { ...VALID.app, buildNumber } }))).toThrow(
+      "is not a valid build number"
+    );
+  });
+});
+
+describe("validateProjectConfig — signing env-var names", () => {
+  it("accepts conventional env-var names", () => {
+    expect(() =>
+      validateProjectConfig(
+        config({
+          signing: {
+            android: {
+              keystorePasswordEnv: "ANDROID_KEYSTORE_PASSWORD",
+              keyPasswordEnv: "ANDROID_KEY_PASSWORD"
+            }
+          }
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a keystore password env name that closes the Kotlin literal",
+      { keystorePasswordEnv: 'P") + evil("' }
+    ],
+    ["a key password env name carrying a space", { keyPasswordEnv: "MY PASSWORD" }],
+    ["an env name starting with a digit", { keystorePasswordEnv: "1PASSWORD" }]
+  ])("rejects %s", (_label, android) => {
+    expect(() => validateProjectConfig(config({ signing: { android } }))).toThrow(
+      "is not a valid environment variable name"
+    );
+  });
+});
+
+describe("validateProjectConfig — derived directory containment", () => {
+  it("accepts the default relative directories", () => {
+    expect(() =>
+      validateProjectConfig(config({ projectDir: ".moku/tauri", outDir: "dist-native" }))
+    ).not.toThrow();
+  });
+
+  it("accepts absolute directories under the temp root (mkdtemp workspaces)", () => {
+    expect(() =>
+      validateProjectConfig(
+        config({
+          projectDir: path.join(tmpdir(), "moku-native-fixture", ".moku", "tauri"),
+          outDir: path.join(tmpdir(), "moku-native-fixture", "dist-native")
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["a personal directory as projectDir", { projectDir: path.join(homedir(), "Documents") }],
+    ["the home directory as projectDir", { projectDir: homedir() }],
+    ["a filesystem root as projectDir", { projectDir: path.join(path.sep, "..") }],
+    ["a personal directory as outDir", { outDir: path.join(homedir(), "Documents") }]
+  ])("rejects %s", (_label, patch) => {
+    expect(() => validateProjectConfig(config(patch))).toThrow(
+      /^\[native] config\.(projectDir|outDir) /
+    );
+  });
+
+  it("names the fix in the error's second line", () => {
+    expect(() => validateProjectConfig(config({ projectDir: homedir() }))).toThrow(
+      'Set config.projectDir to a path inside the current working directory, such as ".moku/tauri".'
+    );
   });
 });
