@@ -1,6 +1,6 @@
 {
   "name": "@moku-labs/native",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Node-only native packager framework for Moku — generates a gitignored Tauri project, codegens capabilities/Info.plist/AndroidManifest from composed system plugins, and runs tauri build.",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,11 @@
       }
     }
   },
-  "files": ["dist", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "publishConfig": {
     "access": "public"
   },
