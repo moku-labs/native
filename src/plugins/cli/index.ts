@@ -5,6 +5,7 @@ import { projectPlugin } from "../project";
 import { tauriPlugin } from "../tauri";
 import { createCliApi } from "./api";
 import { createCliHandlers } from "./handlers";
+import { createLogSink } from "./render";
 import { createCliState } from "./state";
 import type { Config } from "./types";
 
@@ -30,6 +31,23 @@ export const cliPlugin = createPlugin("cli", {
   depends: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin],
   config: defaultConfig,
   createState: createCliState,
+  /**
+   * Swaps the framework's default log sink for the branded one: once a CLI verb owns the
+   * terminal, every `ctx.log` record renders as a branded line through this plugin's own
+   * console instead of printing raw `{ level, event, data, ts }` objects between the
+   * branded lines. Debug detail (a raw `tauri info` dump, for one) stays in the in-memory
+   * trace.
+   *
+   * @param ctx - The real plugin context (log core API + this plugin's state).
+   * @example
+   * ```ts
+   * onInit: ctx => { ctx.log.clearSinks(); ctx.log.addSink(createLogSink(ctx.state.ui)); }
+   * ```
+   */
+  onInit: ctx => {
+    ctx.log.clearSinks();
+    ctx.log.addSink(createLogSink(ctx.state.ui));
+  },
   /**
    * Wires the real plugin context into `createCliApi`, resolving cli's four dependency APIs
    * here, where core's own `ctx.require` types them.

@@ -2,11 +2,21 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { generateTauriConf } from "../../../generators/tauri-conf";
-import { generatorInputFor, generatorInputWith } from "./fixtures";
+import { resolve } from "../../../registry";
+import { generatorInputComposing, generatorInputFor, generatorInputWith } from "./fixtures";
 
 const confFor = (...args: Parameters<typeof generatorInputFor>) => {
   const [artifact] = generateTauriConf(generatorInputFor(...args));
   return JSON.parse(artifact?.content ?? "{}");
+};
+
+/** The generated tauri.conf.json text for an explicit capability composition. */
+const contentComposing = (...args: Parameters<typeof generatorInputComposing>) =>
+  generateTauriConf(generatorInputComposing(...args))[0]?.content ?? "";
+
+const deepLinkConf = {
+  desktop: { schemes: ["mycoolapp"] },
+  mobile: [{ scheme: ["mycoolapp"], appLink: false }]
 };
 
 describe("generateTauriConf", () => {
@@ -131,22 +141,44 @@ describe("generateTauriConf", () => {
     expect(conf.bundle.macOS).toEqual({ entitlements: "Entitlements.plist" });
   });
 
-  it("carries a plugins.<name> block per resolved capability, deep-link in desktop+mobile form", () => {
+  it("carries a plugins block holding ONLY the capabilities that have config", () => {
     const conf = confFor("macos");
-    expect(conf.plugins.store).toEqual({});
-    expect(conf.plugins.tray).toEqual({});
-    expect(conf.plugins["deep-link"]).toEqual({
-      desktop: { schemes: ["mycoolapp"] },
-      mobile: [{ scheme: ["mycoolapp"], appLink: false }]
-    });
+    // All five are composed; deep-link is the only one whose Tauri plugin takes config.
+    expect(conf.plugins).toEqual({ "deep-link": deepLinkConf });
+  });
+
+  it("keeps an empty plugins object when nothing is composed", () => {
+    const content = contentComposing("macos", []);
+    expect(JSON.parse(content).plugins).toEqual({});
+    expect(content).toContain('"plugins": {}');
+  });
+
+  it("writes NO key for a capability whose Tauri plugin deserializes unit", () => {
+    // store, notification and clipboard-manager take no config at all: a `{}` map under
+    // their key aborts startup with `invalid type: map, expected unit`.
+    const content = contentComposing("macos", [
+      resolve("store"),
+      resolve("notification"),
+      resolve("clipboard-manager"),
+      resolve("tray")
+    ]);
+
+    expect(JSON.parse(content).plugins).toEqual({});
+    expect(content).not.toContain("clipboard-manager");
+    expect(content).not.toContain("notification");
+  });
+
+  it("writes the deep-link key in desktop+mobile form, and only that key", () => {
+    const content = contentComposing("macos", [
+      resolve("store"),
+      resolve("deep-link", { mode: "scheme", scheme: "mycoolapp" })
+    ]);
+
+    expect(JSON.parse(content).plugins).toEqual({ "deep-link": deepLinkConf });
   });
 
   it("omits tray's plugins block on a mobile target (platform-filtered upstream)", () => {
     const conf = confFor("ios");
-    expect(conf.plugins.tray).toBeUndefined();
-    expect(conf.plugins["deep-link"]).toEqual({
-      desktop: { schemes: ["mycoolapp"] },
-      mobile: [{ scheme: ["mycoolapp"], appLink: false }]
-    });
+    expect(conf.plugins).toEqual({ "deep-link": deepLinkConf });
   });
 });

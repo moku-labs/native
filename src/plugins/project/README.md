@@ -36,7 +36,7 @@ code, and tray is desktop-only (filtered from every mobile target-set).
 
 | Path (under `projectDir`) | Generator | What it carries |
 |---|---|---|
-| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring, bundle metadata, Apple signing, `plugins.<name>` blocks |
+| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring, bundle metadata, Apple signing, a `plugins.<name>` block per **configured** capability |
 | `src-tauri/Cargo.toml` | `generators/cargo.ts` | package manifest, `tauri` cargo features, one pinned crate per plugin-backed capability |
 | `src-tauri/build.rs` | `generators/build-script.ts` | `tauri_build::build()` — without it capabilities are never compiled in and `tauri build` fails |
 | `src-tauri/src/lib.rs`, `src/main.rs` | `generators/rust.ts` | mobile entry point + one `.plugin(...)` line per capability |
@@ -288,3 +288,10 @@ returns fresh copies, so a caller can never mutate the registry.
 { "desktop": { "schemes": ["myapp"] },
   "mobile": [{ "scheme": ["myapp"], "appLink": false }] }
 ```
+
+It is also the only row that gets a `plugins.<name>` key at all. `store`, `notification`
+and `clipboard-manager` take **no** config: their Tauri plugin deserializes the config
+slot as `unit`, so an empty `{}` map under their key aborts the app on the first frame
+with `PluginInitialization("clipboard-manager", "… invalid type: map, expected unit")`.
+A capability whose resolved conf has zero keys therefore contributes no key — only the
+empty `"plugins": {}` object survives, which Tauri accepts.

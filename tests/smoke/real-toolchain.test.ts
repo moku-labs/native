@@ -10,16 +10,37 @@
  * also what it proves. The single `rm` in this file is guarded by
  * {@link assertSmokeWorkspace}.
  */
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Doctor } from "../../src/index";
 import { createApp } from "../../src/index";
 
 /** Marker every temp path this file may delete has to carry. */
 const SMOKE_PREFIX = "moku-native-smoke-";
+
+/**
+ * Every v1 capability, composed at once. A build succeeds no matter what the generated
+ * `plugins` block says — only a launched binary reads it, which is why this suite composes
+ * the full surface instead of an empty one.
+ */
+const ALL_CAPABILITIES = [
+  { name: "store" },
+  { name: "notification" },
+  { name: "clipboard-manager" },
+  { name: "tray" },
+  { name: "deep-link" }
+];
+
+/** How long the launched app must stay up before it counts as "started cleanly". */
+const LAUNCH_WATCH_MS = 4000;
+
+/** Grace period between SIGTERM and SIGKILL for the one child this file spawns. */
+const LAUNCH_TERMINATE_MS = 3000;
 
 /** iOS is buildable on a macOS host only — both cases are skipped elsewhere. */
 const IS_MACOS = process.platform === "darwin";
@@ -63,8 +84,8 @@ function composeSmokeApp(workspace: string, rendered: string[]) {
         // The whole run is anchored here — never on the process cwd.
         cwd: workspace
       },
-      system: [],
-      capabilities: {},
+      system: ALL_CAPABILITIES,
+      capabilities: { "deep-link": { mode: "scheme", scheme: "mokusmoke" } },
       targets: ["macos", "ios"],
       projectDir: path.join(workspace, ".moku", "tauri"),
       outDir: path.join(workspace, "dist-native")
@@ -137,6 +158,81 @@ async function findAppBundle(deliveryDirectory: string): Promise<string> {
   return path.join(deliveryDirectory, bundle ?? "");
 }
 
+/**
+ * Finds the single executable inside a macOS bundle's `Contents/MacOS` directory — the
+ * binary `open` would run, named after `productName`.
+ *
+ * @param bundle - The absolute path of the `.app` bundle.
+ * @returns The absolute path of the bundled binary.
+ */
+async function findBundleBinary(bundle: string): Promise<string> {
+  const directory = path.join(bundle, "Contents", "MacOS");
+  const entries = await readdir(directory);
+  expect(entries, `expected exactly one binary in ${directory}`).toHaveLength(1);
+  return path.join(directory, entries[0] ?? "");
+}
+
+/** What the launch watchdog saw. */
+type LaunchProbe = {
+  /** True when the app was still running after {@link LAUNCH_WATCH_MS}. */
+  alive: boolean;
+  /** Everything the app wrote to stderr while it was watched. */
+  stderr: string;
+  /** How it ended, when it ended early. */
+  exitReason: string;
+};
+
+/**
+ * Launches the built binary, watches it for {@link LAUNCH_WATCH_MS}, then shuts it down.
+ *
+ * A Tauri config the plugins cannot deserialize is invisible to `tauri build` — it aborts
+ * on the first frame, so starting the real binary is the only check that sees it. A window
+ * flashes on screen for those few seconds; that is the test working.
+ *
+ * SAFETY. Termination signals the ONE pid this function spawned (`child.kill`), never a
+ * process group and never a name-matched process.
+ *
+ * @param binary - The absolute path of the bundled binary.
+ * @returns What the watchdog observed.
+ */
+async function launchAndWatch(binary: string): Promise<LaunchProbe> {
+  const child = spawn(binary, [], { stdio: ["ignore", "ignore", "pipe"] });
+
+  let stderr = "";
+  child.stderr?.on("data", chunk => {
+    stderr += String(chunk);
+  });
+
+  let exitReason: string | undefined;
+  const exited = new Promise<void>(resolve => {
+    child.on("exit", (code, signal) => {
+      exitReason = `exited with code=${code} signal=${signal}`;
+      resolve();
+    });
+    child.on("error", error => {
+      exitReason = `failed to spawn: ${error.message}`;
+      resolve();
+    });
+  });
+
+  await Promise.race([exited, delay(LAUNCH_WATCH_MS)]);
+  const alive = exitReason === undefined;
+
+  if (alive) {
+    child.kill("SIGTERM");
+    const stopped = await Promise.race([
+      exited.then(() => true),
+      delay(LAUNCH_TERMINATE_MS, false)
+    ]);
+    if (!stopped) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
+
+  return { alive, stderr, exitReason: exitReason ?? "still running when terminated" };
+}
+
 beforeAll(async () => {
   const workspace = await mkdtemp(path.join(tmpdir(), SMOKE_PREFIX));
   assertSmokeWorkspace(workspace);
@@ -184,7 +280,7 @@ afterAll(async () => {
 });
 
 describe("real toolchain — macOS desktop", () => {
-  it("builds a cold generated project into a .app under outDir/macos", async ctx => {
+  it("builds a cold generated project into a .app that starts without panicking", async ctx => {
     ctx.skip(!IS_MACOS, "a macOS installer can only be packaged on a macOS host");
     const { app, outDir } = requireSmoke();
 
@@ -193,6 +289,14 @@ describe("real toolchain — macOS desktop", () => {
     const bundle = await findAppBundle(path.join(outDir, "macos"));
     const bundleStats = await stat(bundle);
     expect(bundleStats.isDirectory()).toBe(true);
+
+    // With all five capabilities composed, the generated tauri.conf.json is only proven
+    // by a running app: a plugin block Tauri cannot deserialize builds fine and dies on
+    // the first frame.
+    const launch = await launchAndWatch(await findBundleBinary(bundle));
+
+    expect(launch.alive, `the app ${launch.exitReason}\n${launch.stderr}`).toBe(true);
+    expect(launch.stderr).not.toContain("panicked");
   });
 });
 

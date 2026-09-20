@@ -173,19 +173,14 @@ describe("journey consumer workflows (S13–S16)", () => {
       await app.cli.build({ target: "macos" });
       expect(events.filter(event => event.name === "native:complete")).toHaveLength(1);
 
-      // tauri.conf.json: one plugins.<name> block per composed capability, with the
-      // deep-link scheme riding in its conf fragment.
+      // tauri.conf.json: a plugins.<name> block for the ONE composed capability that has
+      // config, with the deep-link scheme riding in its conf fragment. The other four take
+      // no config — Tauri deserializes `unit` there, so an empty block would abort startup.
       const confRaw = await readFile(path.join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
       const conf = JSON.parse(confRaw) as {
         plugins: Record<string, { desktop?: { schemes?: string[] } }>;
       };
-      expect(Object.keys(conf.plugins).toSorted()).toEqual([
-        "clipboard-manager",
-        "deep-link",
-        "notification",
-        "store",
-        "tray"
-      ]);
+      expect(Object.keys(conf.plugins)).toEqual(["deep-link"]);
       expect(conf.plugins["deep-link"]?.desktop?.schemes).toEqual(["myapp"]);
 
       // capabilities/default.json: permission ids for all five capabilities — tray's

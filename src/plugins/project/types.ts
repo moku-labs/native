@@ -61,7 +61,12 @@ export type DeepLinkConf = {
   mobile: ReadonlyArray<{ scheme: readonly string[]; appLink: boolean }>;
 };
 
-/** A tauri.conf.json `plugins.<name>` contribution — the union of the real v1 shapes. */
+/**
+ * A tauri.conf.json `plugins.<name>` contribution — the union of the real v1 shapes. The
+ * empty member is the "this plugin takes no config" case: it is never written to
+ * tauri.conf.json, because such a plugin deserializes `unit` and a `{}` map there aborts
+ * the app at startup.
+ */
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
 /** An Info.ios.plist sidecar entry (src-tauri root, outside gen/) — empty for every v1 row. */

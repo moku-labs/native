@@ -3,7 +3,7 @@
  * metadata, Apple signing, plugin blocks).
  */
 import path from "node:path";
-import type { TauriConfFragment } from "../types";
+import type { ResolvedCapability, TauriConfFragment } from "../types";
 import { entitlementsPath } from "./entitlements";
 import { relativeToTauriRoot } from "./paths";
 import type { Artifact, GeneratorInput } from "./types";
@@ -83,12 +83,41 @@ function buildBundle(input: GeneratorInput) {
 }
 
 /**
+ * Builds the `plugins` block — one `plugins.<name>` key per capability that actually
+ * carries config.
+ *
+ * A capability whose Tauri plugin takes NO config (store, notification,
+ * clipboard-manager) deserializes its config slot as `unit`, so an empty map there is a
+ * TYPE error that aborts the app at startup:
+ * `PluginInitialization("clipboard-manager", "… invalid type: map, expected unit")`. An
+ * empty fragment therefore produces no key at all. The `plugins` object itself always
+ * exists — Tauri accepts it empty.
+ *
+ * @param capabilities - Capabilities resolved and platform-filtered for this target.
+ * @returns The `plugins` object for tauri.conf.json, keyed by capability name.
+ * @example
+ * ```ts
+ * buildPlugins([resolve("store"), resolve("deep-link", { mode: "scheme", scheme: "app" })]);
+ * // { "deep-link": { desktop: …, mobile: … } } — store contributes no key
+ * ```
+ */
+function buildPlugins(
+  capabilities: readonly ResolvedCapability[]
+): Record<string, TauriConfFragment> {
+  const plugins: Record<string, TauriConfFragment> = {};
+  for (const capability of capabilities) {
+    if (Object.keys(capability.conf).length > 0) plugins[capability.name] = capability.conf;
+  }
+  return plugins;
+}
+
+/**
  * Generates `src-tauri/tauri.conf.json` — app identity, the web build/dev wiring, the
- * bundle/signing metadata, and one `plugins.<name>` block per resolved capability (this is
- * where deep-link's scheme rides — per D-011/D-012 the whole v1 mobile-permission story is
- * conf-only). Both path-shaped fields are rebased onto `src-tauri`, which is where Tauri
- * resolves them from, and the before-commands carry an explicit `cwd` so a monorepo
- * consumer's web build runs in its own package.
+ * bundle/signing metadata, and a `plugins.<name>` block per CONFIGURED capability (see
+ * {@link buildPlugins}; this is where deep-link's scheme rides — per D-011/D-012 the whole
+ * v1 mobile-permission story is conf-only). Both path-shaped fields are rebased onto
+ * `src-tauri`, which is where Tauri resolves them from, and the before-commands carry an
+ * explicit `cwd` so a monorepo consumer's web build runs in its own package.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/tauri.conf.json`.
@@ -99,12 +128,6 @@ function buildBundle(input: GeneratorInput) {
  */
 export function generateTauriConf(input: GeneratorInput): Artifact[] {
   const { global, capabilities } = input;
-
-  const plugins: Record<string, TauriConfFragment> = {};
-  for (const capability of capabilities) {
-    plugins[capability.name] = capability.conf;
-  }
-
   const webRoot = path.resolve(global.web.cwd ?? ".");
   const conf = {
     productName: global.app.name,
@@ -120,7 +143,7 @@ export function generateTauriConf(input: GeneratorInput): Artifact[] {
       windows: [{ title: global.app.name }]
     },
     bundle: buildBundle(input),
-    plugins
+    plugins: buildPlugins(capabilities)
   };
 
   return [

@@ -127,7 +127,8 @@ export function assertKnownCapabilities(system: ReadonlyArray<{ name: string }>)
 /**
  * Builds the tauri.conf.json `plugins.<name>` contribution for a resolved row. Only
  * deep-link carries consumer-supplied config in v1 (D-011: custom-scheme-only); every
- * other row contributes an empty config block.
+ * other row contributes an EMPTY fragment, which the tauri-conf generator drops instead
+ * of writing — those plugins deserialize their config slot as `unit` and reject a map.
  *
  * @param row - The registry row being resolved.
  * @param config - Optional per-capability packaging parameters from `Config["capabilities"]`.

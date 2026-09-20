@@ -136,6 +136,22 @@ describe("cli plugin integration", () => {
     });
   });
 
+  describe("log sink", () => {
+    it("renders ctx.log records through the render seam, never as raw console objects", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const lines: string[] = [];
+      // onInit swapped the framework's default object sink for the branded one, which
+      // writes through THIS app's render seam — so the records land in `lines`.
+      const app = createTestApp({ renderImpl: line => lines.push(line) });
+
+      await app.cli.doctor({ target: "macos" });
+
+      expect(lines.join("\n")).toContain("doctor:run");
+      expect(logSpy).not.toHaveBeenCalled();
+      logSpy.mockRestore();
+    });
+  });
+
   describe("dev", () => {
     afterEach(() => {
       vi.unstubAllGlobals();

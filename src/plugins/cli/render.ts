@@ -3,6 +3,7 @@
  * pure line/box formatters for native:phase, native:complete, and doctor:check.
  */
 
+import type { LogEntry, LogLevel, LogSink } from "@moku-labs/common";
 import type { BrandConsole } from "@moku-labs/common/cli";
 import { createBrandConsole, createBrandPrompts, spinnerFrameAt } from "@moku-labs/common/cli";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../config";
@@ -64,6 +65,87 @@ export function createRenderConsole(
   return renderImpl
     ? createBrandConsole({ write: renderImpl, writeError: renderImpl, width })
     : createBrandConsole({ width });
+}
+
+/** Severity order — an entry ranking below the sink's threshold is dropped. */
+const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+/**
+ * Formats a record's structured payload as a dim trailing JSON fragment, so a log line
+ * stays one readable line instead of a printed object.
+ *
+ * @param ui - The branded console supplying the palette.
+ * @param data - The record's optional structured payload.
+ * @returns The dim ` {"…":…}` suffix, or an empty string when there is no payload.
+ * @example
+ * ```ts
+ * formatEntryData(ui, { written: 7 }); // ' {"written":7}' (dim)
+ * ```
+ */
+function formatEntryData(ui: BrandConsole, data: unknown): string {
+  if (data === undefined) return "";
+  try {
+    const text = JSON.stringify(data);
+    return text === undefined ? "" : ` ${ui.palette.dim(text)}`;
+  } catch {
+    return ` ${ui.palette.dim(String(data))}`;
+  }
+}
+
+/**
+ * Builds the log sink the cli plugin installs over the framework's default one: every
+ * `ctx.log` record renders as a branded line through THIS plugin's console, so structured
+ * records and CLI UI share one surface (MC1) instead of raw `{ level, event, data, ts }`
+ * objects appearing between the branded lines.
+ *
+ * It takes the console rather than building its own, which is what keeps the injected
+ * render seam whole: with `renderImpl` set, log lines are captured with everything else.
+ *
+ * @param ui - The branded console to render through.
+ * @param minLevel - Lowest severity to render (default `"info"` — debug detail stays in the trace).
+ * @returns A log sink writing branded lines through `ui`.
+ * @example
+ * ```ts
+ * ctx.log.clearSinks();
+ * ctx.log.addSink(createLogSink(ctx.state.ui));
+ * ```
+ */
+export function createLogSink(ui: BrandConsole, minLevel: LogLevel = "info"): LogSink {
+  const threshold = LEVEL_RANK[minLevel];
+
+  return {
+    /**
+     * Renders one record as the branded line matching its level.
+     *
+     * @param entry - The record to render.
+     * @example
+     * ```ts
+     * sink.write({ level: "info", event: "project:generate", ts: Date.now() });
+     * ```
+     */
+    write(entry: LogEntry): void {
+      if (LEVEL_RANK[entry.level] < threshold) return;
+      const message = `${entry.event}${formatEntryData(ui, entry.data)}`;
+
+      switch (entry.level) {
+        case "error": {
+          ui.error(message);
+          break;
+        }
+        case "warn": {
+          ui.warn(message);
+          break;
+        }
+        case "debug": {
+          ui.line(`  ${ui.palette.dim(message)}`);
+          break;
+        }
+        default: {
+          ui.info(message);
+        }
+      }
+    }
+  };
 }
 
 /**

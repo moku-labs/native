@@ -330,7 +330,7 @@ bun run validate           # publint + are-the-types-wrong (publish readiness)
 ## Development
 
 - **Adding a plugin** — create `src/plugins/<name>/` with `index.ts` (the `createPlugin` call), `types.ts`, and an API factory; register the instance in `src/index.ts`'s plugin array and re-export it from `src/plugins/index.ts`. Consumer apps can also author their own plugins with the exported `createPlugin` and pass them to `createApp({ plugins: [...] })`.
-- **Tests** — plugin-specific tests are colocated (`src/plugins/<name>/__tests__/unit/` and `__tests__/integration/`); root `tests/` holds framework-level integration only. All subprocess/render/probe seams are injectable, so `bun run test` runs without any native toolchain. `tests/smoke/` is the one exception — `bun run test:smoke` packages a real macOS `.app` and a real iOS simulator `.app` inside a fresh `mkdtemp` workspace, and is never part of `bun run test`.
+- **Tests** — plugin-specific tests are colocated (`src/plugins/<name>/__tests__/unit/` and `__tests__/integration/`); root `tests/` holds framework-level integration only. All subprocess/render/probe seams are injectable, so `bun run test` runs without any native toolchain. `tests/smoke/` is the one exception — `bun run test:smoke` packages a real macOS `.app` and a real iOS simulator `.app` inside a fresh `mkdtemp` workspace, and is never part of `bun run test`. It composes all five capabilities and launches the built macOS binary for a few seconds (a window flashes on screen), because a generated config Tauri cannot deserialize builds fine and only aborts on the first frame.
 
 ## Requirements
 

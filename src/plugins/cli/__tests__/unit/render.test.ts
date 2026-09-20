@@ -3,6 +3,7 @@ import type { NativeCompleteEvent, NativePhaseEvent } from "../../../../config";
 import type { CheckResult, DoctorReport } from "../../../doctor/types";
 import { TauriError } from "../../../tauri/errors";
 import {
+  createLogSink,
   createRenderConsole,
   renderBuildFailure,
   renderCheckEvent,
@@ -358,6 +359,73 @@ describe("branded-kit compliance", () => {
     renderPhaseEvent(ui, { target: "macos", phase: "scaffold", status: "start" }, 0);
     renderDoctorSummary(ui, { ok: true, checks: [] });
     renderBuildFailure(ui, new Error("[native] boom.\n  Retry."));
+
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});
+
+describe("createLogSink", () => {
+  it("renders a structured record as one branded line, event first", () => {
+    const { lines, ui } = createSink();
+
+    createLogSink(ui).write({ level: "info", event: "project:generate", ts: 0 });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("project:generate");
+    expect(lines[0]).not.toContain('"level"');
+  });
+
+  it("appends the structured payload as JSON instead of a printed object", () => {
+    const { lines, ui } = createSink();
+
+    createLogSink(ui).write({
+      level: "info",
+      event: "project:generate",
+      data: { target: "macos", written: 7 },
+      ts: 0
+    });
+
+    expect(lines.join("\n")).toContain('{"target":"macos","written":7}');
+  });
+
+  it("routes warn and error through the console's own warn/error lines", () => {
+    const { lines, ui } = createSink();
+    const sink = createLogSink(ui);
+
+    sink.write({ level: "warn", event: "doctor:slow", ts: 0 });
+    sink.write({ level: "error", event: "build:failed", ts: 0 });
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("doctor:slow");
+    expect(lines[1]).toContain("build:failed");
+  });
+
+  it("drops entries below the threshold — debug spam never reaches the UI", () => {
+    const { lines, ui } = createSink();
+
+    createLogSink(ui).write({ level: "debug", event: "tauri:info-raw", ts: 0 });
+
+    expect(lines).toEqual([]);
+  });
+
+  it("keeps debug when the threshold is lowered to it", () => {
+    const { lines, ui } = createSink();
+
+    createLogSink(ui, "debug").write({ level: "debug", event: "tauri:info-raw", ts: 0 });
+
+    expect(lines).toHaveLength(1);
+  });
+
+  it("writes through the injected seam only — never raw console.*", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { ui } = createSink();
+
+    createLogSink(ui).write({ level: "error", event: "build:failed", data: { code: 1 }, ts: 0 });
 
     expect(logSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();

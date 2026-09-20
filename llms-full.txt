@@ -353,7 +353,7 @@ mobile/runner.ts owns the Xcode/Android-Studio runner-command rewrite.
 Generated artifacts (all through write-if-changed):
 | Path (under projectDir) | Generator | Carries |
 |---|---|---|
-| src-tauri/tauri.conf.json | generators/tauri-conf.ts | identity, web build/dev wiring, bundle metadata, Apple signing, plugins.<name> blocks |
+| src-tauri/tauri.conf.json | generators/tauri-conf.ts | identity, web build/dev wiring, bundle metadata, Apple signing, a plugins.<name> block per CONFIGURED capability (empty conf = no key: store/notification/clipboard-manager deserialize `unit` and a `{}` map there aborts startup) |
 | src-tauri/Cargo.toml | generators/cargo.ts | package manifest, `tauri = { version = "2", features = [...] }` (sorted unique cargo features), one pinned crate per plugin-backed capability |
 | src-tauri/build.rs | generators/build-script.ts | `fn main() { tauri_build::build() }` — without it capabilities are never compiled in and `tauri build` fails |
 | src-tauri/src/lib.rs, src/main.rs | generators/rust.ts | mobile entry point + one .plugin(...) line per capability |
@@ -414,7 +414,12 @@ export type DeepLinkConf = {
   mobile: ReadonlyArray<{ scheme: readonly string[]; appLink: boolean }>;
 };
 
-/** A tauri.conf.json plugins.<name> contribution — the union of the real v1 shapes. */
+/**
+ * A tauri.conf.json plugins.<name> contribution — the union of the real v1 shapes. The
+ * empty member is the "this plugin takes no config" case: it is never written to
+ * tauri.conf.json, because such a plugin deserializes `unit` and a `{}` map there aborts
+ * the app at startup.
+ */
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
 export type PlistEntry = { key: string; value: string };
@@ -688,8 +693,8 @@ Behavior:
   ready." when stop() was called or the dev process exited first.
   A second concurrent dev() call throws "[native] tauri dev already running". stop() never
   rejects. url = ctx.global.web.devUrl.
-- getVersion(): probes CLI presence/version via `tauri info` (used by doctor). Returns null when
-  the CLI cannot be invoked — never throws.
+- getVersion(): probes CLI presence/version via `tauri info` (used by doctor). Returns undefined
+  when the CLI cannot be invoked — never throws.
 
 cwd: one-shot verbs run in projectDir once it EXISTS, else in the consumer's cwd —
 icon/version legitimately run before scaffold created it, and spawning into a missing
@@ -979,6 +984,15 @@ hostTarget signature (exported from cli/api.ts, not the package root):
 Hooks (handlers.ts): "native:phase", "native:complete", "doctor:check" — see section 4. The
 running phase's startedAt lives in ctx.state.progress, not in closure variables.
 
+Lifecycle (index.ts): onInit runs `ctx.log.clearSinks()` then
+`ctx.log.addSink(createLogSink(ctx.state.ui))` — composing cli hands the framework's log
+output to the branded console, so a ctx.log record prints as `› event {"data":…}` (payload
+dim) instead of a raw { level, event, data, ts } object between the branded lines. Threshold
+is "info": debug records (the raw `tauri info` dump doctor keeps) stay in the in-memory trace.
+The sink takes the console rather than building its own, which is what keeps the renderImpl
+seam whole — with a seam injected, log lines are captured with every other line and a composed
+app makes zero raw console.* calls. No onStart, no onStop (D-002).
+
 ====================================================================
 10. PUBLIC EXPORTS (src/index.ts + src/plugins/index.ts)
 ====================================================================
@@ -1097,7 +1111,7 @@ const source = await native.project.ensureIconSource();      // absolute icon so
 await native.build.prepare({ target: "macos" });             // scaffold + codegen + icons
 const result = await native.build.run({ target: "macos" });  // BuildResult
 const all = await native.build.runAll();                     // sequential, config.targets order
-const v = await native.tauri.getVersion();                      // { cliVersion } | null
+const v = await native.tauri.getVersion();                      // { cliVersion } | undefined
 const runner = native.tauri.getRunner();                        // { nodePath, tauriJsPath }
 await native.stop();
 
@@ -1118,7 +1132,10 @@ const app = createApp({
 // `bun run test:smoke` is the opt-in real-toolchain proof: it packages a real macOS .app and
 // a real iOS simulator .app inside a fresh mkdtemp workspace, driven purely by web.cwd and
 // absolute projectDir/outDir paths (it never chdir's), and skips the iOS case when doctor's
-// ios-tools / ios-platform checks do not pass.
+// ios-tools / ios-platform checks do not pass. It composes ALL FIVE capabilities and then
+// LAUNCHES the macOS binary for 4s, asserting it is still alive with no panic on stderr
+// before terminating that one pid — a tauri.conf.json the plugins cannot deserialize builds
+// fine and only fails on the first frame.
 
 ====================================================================
 12. ERROR HANDLING PATTERNS (as implemented)
@@ -1306,7 +1323,8 @@ try {
     - Injectable seams (spawnImpl/probeImpl/renderImpl/confirmImpl) with `undefined` meaning
       "the real implementation" keep 90% coverage reachable without native toolchains.
     - State uses `undefined` for absence (never null), except where a union mirrors a Node
-      API surface (DevExit.code/signal, version()'s | null) — D-014.
+      API surface (DevExit.code/signal) — D-014, which is why getVersion() answers
+      `{ cliVersion } | undefined`.
     - `| undefined` is spelled explicitly on optional config fields (exactOptionalPropertyTypes).
 
 ====================================================================

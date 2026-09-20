@@ -44,6 +44,14 @@ export function generatorInputFor(target: GeneratorInput["target"]): GeneratorIn
   return { global: baseGlobalConfig, target, capabilities: resolvedCapabilitiesFor(target) };
 }
 
+/** Builds a `GeneratorInput` fixture composing exactly the given resolved capabilities. */
+export function generatorInputComposing(
+  target: GeneratorInput["target"],
+  capabilities: GeneratorInput["capabilities"]
+): GeneratorInput {
+  return { global: baseGlobalConfig, target, capabilities };
+}
+
 /** Builds a `GeneratorInput` fixture whose global config carries the given overrides. */
 export function generatorInputWith(
   target: GeneratorInput["target"],

@@ -76,13 +76,26 @@ at the first verb call; `undefined` (the default) binds the real branded kit. Gl
 consumed: `targets` (verb default fallback), `app.name` (complete-box panel header),
 `projectDir` (clean confirm message).
 
+## Log sink
+
+Composing this plugin also takes over the framework's log output: `onInit` clears the default
+sink and installs a branded one (`createLogSink`, threshold `info`). Structured `ctx.log`
+records render as branded lines — the event id, then its payload as dim JSON — instead of raw
+`{ level, event, data, ts }` objects printed between the branded lines. `debug` records (a raw
+`tauri info` dump, for one) stay in the in-memory trace and never reach the terminal.
+
+The sink renders through `ctx.state.ui`, the same console every verb and hook writes to, so an
+injected `renderImpl` captures log lines along with everything else and a composed app still
+makes zero raw `console.*` calls.
+
 ## Design notes
 
 - **`state.ts`** builds the ONE branded console (`ctx.state.ui`) from the configured render
   seam. `api.ts` and `handlers.ts` both render through it, so a verb and its live
   progress hooks always write to the same sink.
 - **`render.ts`** composes the branded kit behind the seams: `createRenderConsole` binds
-  `renderImpl` and the `terminalWidth()` column count into `createBrandConsole`; pure
+  `renderImpl` and the `terminalWidth()` column count into `createBrandConsole`,
+  `createLogSink` turns a console into the log sink `onInit` installs; pure
   formatters build the phase spinner lines
   (`spinnerFrameAt`, real progress ticks only — never a fake percentage), the `native:complete`
   `box` panel (target, artifact paths, total duration), the live doctor rows + fix-its, the
@@ -93,5 +106,6 @@ consumed: `targets` (verb default fallback), `app.name` (complete-box panel head
   (spec/11 §2.4). `undefined` marks "no active phase" (D-014).
 - **Dependencies**: all four upstream plugins via `ctx.require` (D-007) — `project` (clean),
   `tauri` (dev), `build` (run/runAll), `doctor` (run + the `doctor:check` hook edge).
-- **No lifecycle** — no `onInit` (project owns config validation), no `onStart` (verbs are
-  explicit calls), no `onStop` (nothing held — the dev handle never lives here, D-002).
+- **Lifecycle** — `onInit` installs the branded log sink and nothing else (project owns config
+  validation); no `onStart` (verbs are explicit calls), no `onStop` (nothing held — the dev
+  handle never lives here, D-002).
