@@ -10,13 +10,45 @@ import type { CheckResult, DoctorReport } from "../doctor/types";
 import { TauriError } from "../tauri/errors";
 import type { ConfirmFn, RenderFn } from "./types";
 
+/** Narrowest console width: below it a boxed diagnostic is cut so short it names nothing. */
+const MIN_CONSOLE_WIDTH = 60;
+
+/** Widest console width: past it a boxed diagnostic is too wide to scan. */
+const MAX_CONSOLE_WIDTH = 160;
+
+/** Width used when the stream reports no columns (CI, pipes) — the branded kit's own default. */
+const FALLBACK_CONSOLE_WIDTH = 66;
+
 /**
- * Creates the branded console bound to the injected render seam. When `renderImpl` is
- * provided every line flows through it (both the normal and error sinks) instead of the
- * branded kit's own `console.log`/`console.error` default — the seam tests inject to
- * capture output deterministically and assert zero raw `console.*` calls (MC1).
+ * The width the branded console aligns to: the terminal's own column count, clamped to a
+ * readable range, or the kit default when the stream has no columns (CI, pipes). This is
+ * the single place a raw `process.stdout` read happens — the column count is injectable so
+ * nothing downstream depends on the real terminal.
+ *
+ * @param columns - The stream's column count (default: `process.stdout.columns`).
+ * @returns The console width, between 60 and 160 inclusive.
+ * @example
+ * ```ts
+ * terminalWidth(120);       // 120
+ * terminalWidth(40);        // 60 — clamped up
+ * terminalWidth(undefined); // 66 — piped output
+ * ```
+ */
+export function terminalWidth(columns: number | undefined = process.stdout.columns): number {
+  if (columns === undefined) return FALLBACK_CONSOLE_WIDTH;
+  return Math.min(MAX_CONSOLE_WIDTH, Math.max(MIN_CONSOLE_WIDTH, columns));
+}
+
+/**
+ * Creates the branded console bound to the injected render seam, aligned to the terminal
+ * width. When `renderImpl` is provided every line flows through it (both the normal and
+ * error sinks) instead of the branded kit's own `console.log`/`console.error` default — the
+ * seam tests inject to capture output deterministically and assert zero raw `console.*`
+ * calls (MC1). The column count is injectable the same way, so the width a test renders at
+ * never depends on the terminal the test runs in.
  *
  * @param renderImpl - Injected line sink (default: undefined → branded console default).
+ * @param columns - Injected column count (default: undefined → `process.stdout.columns`).
  * @returns A branded console writing every line through the render seam.
  * @example
  * ```ts
@@ -24,10 +56,14 @@ import type { ConfirmFn, RenderFn } from "./types";
  * ui.info("ready");
  * ```
  */
-export function createRenderConsole(renderImpl: RenderFn | undefined): BrandConsole {
+export function createRenderConsole(
+  renderImpl: RenderFn | undefined,
+  columns?: number
+): BrandConsole {
+  const width = terminalWidth(columns);
   return renderImpl
-    ? createBrandConsole({ write: renderImpl, writeError: renderImpl })
-    : createBrandConsole();
+    ? createBrandConsole({ write: renderImpl, writeError: renderImpl, width })
+    : createBrandConsole({ width });
 }
 
 /**
@@ -170,16 +206,17 @@ const MIN_TAIL_LINE_LENGTH = 40;
 
 /**
  * Widest tail line the failure box keeps, derived from the branded console's own width —
- * the kit already knows what it aligns to, so nothing here reads `process.stdout`. A single
- * Rust/xcodebuild diagnostic can run thousands of characters; unbounded, it wraps the
- * branded box into unreadable noise, and a fixed bound wide enough to matter (160) wrapped
- * every ordinary 80-column terminal just the same.
+ * which {@link terminalWidth} bound to the terminal, so the box follows the real terminal
+ * instead of a fixed guess. A single Rust/xcodebuild diagnostic can run thousands of
+ * characters; unbounded, it wraps the branded box into unreadable noise, and a fixed bound
+ * wide enough to matter (160) wrapped every ordinary 80-column terminal just the same.
  *
  * @param consoleWidth - The branded console's width (`ui.width`).
  * @returns The maximum tail line length for that width.
  * @example
  * ```ts
- * maxTailLineLength(66); // 60
+ * maxTailLineLength(66);  // 60
+ * maxTailLineLength(120); // 114
  * ```
  */
 function maxTailLineLength(consoleWidth: number): number {

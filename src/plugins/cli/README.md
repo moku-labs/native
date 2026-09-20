@@ -26,8 +26,9 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
   hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` is framed in a
   branded `box` above the `[native]` error line (each tail line is truncated with an ellipsis
   to the branded console's own width minus the box chrome, floor 40, so the whole box fits
-  the terminal the kit aligns to instead of wrapping into noise — the width comes from
-  `ui.width`, never from a raw `process.stdout` read), then the error rethrows unchanged.
+  the terminal instead of wrapping into noise — the width comes from `ui.width`, which
+  `terminalWidth()` bound to `process.stdout.columns`, clamped to 60–160 and falling back to
+  66 when the stream has no columns), then the error rethrows unchanged.
 - **`dev`** — awaits `build.prepare({ target })` first, so `tauri dev` never meets a
   half-generated tree; the target defaults to the host target and a host with no
   desktop target throws the `[native]` fix-it error. Then it runs the dev loop
@@ -81,7 +82,8 @@ consumed: `targets` (verb default fallback), `app.name` (complete-box panel head
   seam. `api.ts` and `handlers.ts` both render through it, so a verb and its live
   progress hooks always write to the same sink.
 - **`render.ts`** composes the branded kit behind the seams: `createRenderConsole` binds
-  `renderImpl` into `createBrandConsole`; pure formatters build the phase spinner lines
+  `renderImpl` and the `terminalWidth()` column count into `createBrandConsole`; pure
+  formatters build the phase spinner lines
   (`spinnerFrameAt`, real progress ticks only — never a fake percentage), the `native:complete`
   `box` panel (target, artifact paths, total duration), the live doctor rows + fix-its, the
   counts-only summary, and the failed-build stderr-tail box. All failure text uses the

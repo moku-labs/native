@@ -9,16 +9,38 @@ import {
   renderCompleteEvent,
   renderDoctorSummary,
   renderPhaseEvent,
-  resolveConfirm
+  resolveConfirm,
+  terminalWidth
 } from "../../render";
 
 /** Builds a capturing render sink and the branded console bound to it. */
-function createSink() {
+function createSink(columns?: number) {
   const lines: string[] = [];
   const sink = (line: string): void => {
     lines.push(line);
   };
-  return { lines, sink, ui: createRenderConsole(sink) };
+  return { lines, sink, ui: createRenderConsole(sink, columns) };
+}
+
+/** Matches the ellipsis-terminated tail content inside the failure box. */
+const TRUNCATED_TAIL = /error: x+…/;
+
+/**
+ * Pulls the truncated tail line out of captured box output, stripped of box chrome.
+ *
+ * @param lines - Every line the sink captured.
+ * @returns The truncated tail content, or an empty string when nothing was truncated.
+ */
+function truncatedTail(lines: string[]): string {
+  return lines.map(line => TRUNCATED_TAIL.exec(line)?.[0]).find(Boolean) ?? "";
+}
+
+/** A classified failure whose stderr tail is one line wider than any terminal. */
+function longTailError(): TauriError {
+  return new TauriError("compile-failed", "[native] tauri compile failed.\n  Fix it.", {
+    exitCode: 101,
+    stderrTail: `error: ${"x".repeat(200)}`
+  });
 }
 
 describe("renderPhaseEvent", () => {
@@ -259,6 +281,31 @@ describe("renderBuildFailure", () => {
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(ui.width);
   });
 
+  it("truncates the tail to the terminal width on a wide terminal (120 → 114)", () => {
+    const { lines, ui } = createSink(120);
+
+    renderBuildFailure(ui, longTailError());
+
+    expect(truncatedTail(lines)).toHaveLength(114);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(120);
+  });
+
+  it("truncates to the 66-column fallback when the stream reports no columns (→ 60)", () => {
+    const { lines, ui } = createSink(terminalWidth(undefined));
+
+    renderBuildFailure(ui, longTailError());
+
+    expect(truncatedTail(lines)).toHaveLength(60);
+  });
+
+  it("truncates to the clamped minimum on a very narrow terminal (40 → 60 → 54)", () => {
+    const { lines, ui } = createSink(40);
+
+    renderBuildFailure(ui, longTailError());
+
+    expect(truncatedTail(lines)).toHaveLength(54);
+  });
+
   it("renders the error line without a box when the stderr tail is empty", () => {
     const { lines, ui } = createSink();
     const error = new TauriError("cancelled", "[native] tauri cancelled.\n  Retry.", {
@@ -281,6 +328,24 @@ describe("renderBuildFailure", () => {
     const text = lines.join("\n");
     expect(text).toContain("collect phase found no artifacts");
     expect(lines.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("terminalWidth", () => {
+  it("follows the terminal column count", () => {
+    expect(terminalWidth(120)).toBe(120);
+  });
+
+  it("falls back to 66 when the stream reports no columns (CI, pipes)", () => {
+    expect(terminalWidth(undefined)).toBe(66);
+  });
+
+  it("clamps a very narrow terminal up to 60", () => {
+    expect(terminalWidth(40)).toBe(60);
+  });
+
+  it("clamps a very wide terminal down to 160", () => {
+    expect(terminalWidth(400)).toBe(160);
   });
 });
 
