@@ -44,9 +44,10 @@ export function crateIdent(packageName: string): string {
 }
 
 /**
- * Generates `src-tauri/Cargo.toml` — the package manifest plus one pinned dependency
- * line per resolved capability that carries a real Rust plugin init (rows with an
- * empty `rustInit`, e.g. tray's core-feature row, contribute no crate dependency).
+ * Generates `src-tauri/Cargo.toml` — the package manifest, the `tauri` dependency with
+ * every cargo feature the composed capabilities ask for (tray's `tray-icon`; without it
+ * the tray API is not compiled in at all), plus one pinned dependency line per resolved
+ * capability that ships a real crate. Feature-only rows contribute no dependency line.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
@@ -58,9 +59,14 @@ export function crateIdent(packageName: string): string {
 export function generateCargo(input: GeneratorInput): Artifact[] {
   const packageName = sanitizePackageName(input.global.app.name);
   const pinnedDeps = input.capabilities
-    .filter(capability => capability.rustInit !== "")
+    .filter(capability => capability.crate && capability.crateRange)
     .map(capability => `${capability.crate} = "${capability.crateRange}"`)
     .toSorted();
+
+  const features = [...new Set(input.capabilities.flatMap(capability => capability.cargoFeatures))]
+    .toSorted()
+    .map(feature => `"${feature}"`)
+    .join(", ");
 
   const lines = [
     "[package]",
@@ -76,7 +82,7 @@ export function generateCargo(input: GeneratorInput): Artifact[] {
     'tauri-build = { version = "2", features = [] }',
     "",
     "[dependencies]",
-    'tauri = { version = "2", features = [] }',
+    `tauri = { version = "2", features = [${features}] }`,
     'serde = { version = "1", features = ["derive"] }',
     'serde_json = "1"',
     ...pinnedDeps,

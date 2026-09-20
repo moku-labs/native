@@ -5,8 +5,8 @@ import type { CheckResult } from "../types";
 import type { Check, CheckInput } from "./types";
 
 /**
- * Runs the mobile gen/ completeness gate for one target via `project.completeness()` +
- * `project.requiredFiles()`. A missing gen/ tree is "will init on first build" (pass, not
+ * Runs the mobile gen/ completeness gate for one target via `project.getCompleteness()` +
+ * `project.getRequiredFiles()`. A missing gen/ tree is "will init on first build" (pass, not
  * fail) — only a PARTIAL init (tauri#13902) is a fail, and its fix-it is always the same
  * one command.
  *
@@ -23,7 +23,7 @@ async function run(input: CheckInput): Promise<CheckResult> {
   }
   const { target } = input;
   const id = `gen-completeness-${target}`;
-  const result = input.project.completeness({ target });
+  const result = input.project.getCompleteness({ target });
 
   if (result.status === "incomplete") {
     return {
@@ -47,7 +47,7 @@ async function run(input: CheckInput): Promise<CheckResult> {
       id,
       target,
       status: "pass",
-      message: `[native] ${target} gen/ tree is complete (${input.project.requiredFiles(target).length} required files present).`
+      message: `[native] ${target} gen/ tree is complete (${input.project.getRequiredFiles({ target }).length} required files present).`
     };
   }
   return {

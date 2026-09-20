@@ -7,7 +7,8 @@ export const baseGlobalConfig: Readonly<Config> = {
   app: { name: "My Cool App", identifier: "com.example.mycoolapp", version: "1.2.3" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [
@@ -41,4 +42,24 @@ export function resolvedCapabilitiesFor(target: GeneratorInput["target"]) {
 /** Builds a `GeneratorInput` fixture for a given target, with all 5 capabilities composed. */
 export function generatorInputFor(target: GeneratorInput["target"]): GeneratorInput {
   return { global: baseGlobalConfig, target, capabilities: resolvedCapabilitiesFor(target) };
+}
+
+/** Builds a `GeneratorInput` fixture composing exactly the given resolved capabilities. */
+export function generatorInputComposing(
+  target: GeneratorInput["target"],
+  capabilities: GeneratorInput["capabilities"]
+): GeneratorInput {
+  return { global: baseGlobalConfig, target, capabilities };
+}
+
+/** Builds a `GeneratorInput` fixture whose global config carries the given overrides. */
+export function generatorInputWith(
+  target: GeneratorInput["target"],
+  overrides: Partial<Config>
+): GeneratorInput {
+  return {
+    global: { ...baseGlobalConfig, ...overrides },
+    target,
+    capabilities: resolvedCapabilitiesFor(target)
+  };
 }

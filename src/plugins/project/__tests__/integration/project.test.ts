@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,7 +15,8 @@ const validAppConfig = {
   app: { name: "Test App", identifier: "com.example.testapp" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [{ name: "store" }, { name: "deep-link" }],
@@ -80,6 +81,62 @@ describe("complex tier: project plugin (integration)", () => {
 
       expect(existsSync(path.join(projectDir, "src-tauri", "gen"))).toBe(false);
     });
+
+    it("re-generating macos then ios rewrites the target-scoped artifacts in place", async () => {
+      const app = createTestApp();
+      await app.project.generate({ target: "macos" });
+
+      const result = await app.project.generate({ target: "ios" });
+
+      // build.rs is target-independent, the capability set is not.
+      expect(result.unchanged).toContain(path.join(projectDir, "src-tauri", "build.rs"));
+      expect(result.written).toContain(
+        path.join(projectDir, "src-tauri", "capabilities", "default.json")
+      );
+
+      const capabilities = JSON.parse(
+        await readFile(path.join(projectDir, "src-tauri", "capabilities", "default.json"), "utf8")
+      );
+      expect(capabilities.platforms).toEqual(["iOS"]);
+    });
+
+    it("writes build.rs so tauri_build runs at compile time", async () => {
+      const app = createTestApp();
+      await app.project.generate({ target: "macos" });
+
+      expect(await readFile(path.join(projectDir, "src-tauri", "build.rs"), "utf8")).toBe(
+        "fn main() {\n  tauri_build::build()\n}\n"
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: icon source
+  // -------------------------------------------------------------------------
+
+  describe("runtime: ensureIconSource", () => {
+    it("writes a valid 1024x1024 placeholder PNG when app.icon is unset", async () => {
+      const app = createTestApp();
+
+      const source = await app.project.ensureIconSource();
+
+      expect(source).toBe(path.join(projectDir, "placeholder-icon.png"));
+      const bytes = await readFile(source);
+      expect([...bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      expect(bytes.readUInt32BE(16)).toBe(1024);
+      expect(bytes.readUInt32BE(20)).toBe(1024);
+    });
+
+    it("throws a [native] error when a configured app.icon is missing", async () => {
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: { ...validAppConfig, projectDir, app: { ...validAppConfig.app, icon: "nope.png" } }
+      });
+
+      await expect(app.project.ensureIconSource()).rejects.toThrow(
+        '[native] app.icon "nope.png" was not found'
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -89,7 +146,7 @@ describe("complex tier: project plugin (integration)", () => {
   describe("runtime: completeness and clean", () => {
     it("completeness reports not-initialized before any mobile init", async () => {
       const app = createTestApp();
-      expect(app.project.completeness({ target: "android" })).toEqual({
+      expect(app.project.getCompleteness({ target: "android" })).toEqual({
         status: "not-initialized"
       });
     });
@@ -174,8 +231,8 @@ describe("complex tier: project plugin (integration)", () => {
 
     it("exposes registryRows and requiredFiles for doctor", () => {
       const app = createTestApp();
-      expect(app.project.registryRows()).toHaveLength(5);
-      expect(app.project.requiredFiles("android").length).toBeGreaterThan(0);
+      expect(app.project.getRegistryRows()).toHaveLength(5);
+      expect(app.project.getRequiredFiles({ target: "android" }).length).toBeGreaterThan(0);
     });
   });
 });

@@ -1,5 +1,5 @@
 /* eslint-disable unicorn/no-null -- fixture mirrors tauri.version()'s real `{ cliVersion } | null`
-   contract (D-014), exercised here through a fake tauri CLI spawn instead of a fake probe. */
+   contract, exercised here through a fake tauri CLI spawn instead of a fake probe. */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,7 +12,7 @@ import type { SpawnFn } from "../../../tauri/types";
 import { doctorPlugin } from "../../index";
 import type { CheckResult, ProbeFn } from "../../types";
 
-// Complex tier: doctor depends on [project, tauri] (D-007) — the harness composes all three
+// Complex tier: doctor depends on [project, tauri] — the harness composes all three
 // so this test never has to reach past the real wiring to exercise doctor's own orchestration.
 const framework = createCore(coreConfig, { plugins: [projectPlugin, tauriPlugin, doctorPlugin] });
 
@@ -21,21 +21,38 @@ const validAppConfig = {
   app: { name: "Test App", identifier: "com.example.testapp" },
   web: {
     build: "bun run build",
-    dev: { command: "bun run dev", url: "http://localhost:5173" },
+    devCommand: "bun run dev",
+    devUrl: "http://localhost:5173",
     dist: "dist"
   },
   system: [],
   capabilities: {}
 };
 
-/** Rust target triples covering every configured target's rustup check. */
+/** Rust target triples covering every configured target's rustup + ios-tools check. */
 const ALL_TRIPLES = [
   "aarch64-apple-darwin",
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",
   "aarch64-apple-ios",
+  "aarch64-apple-ios-sim",
   "aarch64-linux-android"
 ].join("\n");
+
+/**
+ * Asserts the report carries exactly the emitted results. Order is compared id-wise after
+ * sorting: `doctor:check` fires per check AS IT SETTLES, so emission order is
+ * settle order, while `report.checks` keeps the registry order.
+ *
+ * @param checks - The report's results, in registry order.
+ * @param emitted - The recorded `doctor:check` payloads, in settle order.
+ */
+function expectSameResults(checks: readonly CheckResult[], emitted: readonly CheckResult[]): void {
+  const byId = (results: readonly CheckResult[]) =>
+    results.toSorted((a, b) => `${a.id}${a.target}`.localeCompare(`${b.id}${b.target}`));
+  expect(emitted).toHaveLength(checks.length);
+  expect(byId(emitted)).toEqual(byId(checks));
+}
 
 /** A probe fake that succeeds every binary presence/version probe doctor issues. */
 const probeAlwaysOk: ProbeFn = async cmd => ({
@@ -104,7 +121,7 @@ describe("doctor plugin integration", () => {
 
     const report = await app.doctor.run({ target: "ios" });
 
-    expect(report.checks).toEqual(emitted);
+    expectSameResults(report.checks, emitted);
     expect(report.checks.length).toBeGreaterThan(0);
     for (const result of report.checks) {
       expect(result.target).toBe("ios");
@@ -113,9 +130,6 @@ describe("doctor plugin integration", () => {
     expect(ids).toContain("rustup-targets");
     expect(ids).toContain("signing-ios");
     expect(ids).toContain("gen-completeness-ios");
-    if (process.platform === "darwin") {
-      expect(ids).toContain("xcode-toolchain");
-    }
     // No android/host-only checks leak into a single-target run.
     expect(ids).not.toContain("android-toolchain");
     expect(ids).not.toContain("node-binary");
@@ -124,12 +138,27 @@ describe("doctor plugin integration", () => {
     expect(report.ok).toBe(true);
   });
 
+  // The Apple toolchain checks gate on the REAL host (`appliesTo` reads `process.platform`,
+  // which is the production behaviour: there is no Xcode to diagnose elsewhere). Their
+  // per-platform logic is covered host-independently in the checks' own unit tests; this one
+  // proves the gate lets them through the orchestrator, so it only runs on macOS.
+  it.skipIf(process.platform !== "darwin")(
+    "includes the macOS-host-only Apple toolchain checks in an ios run",
+    async () => {
+      const { app } = createTestApp();
+
+      const report = await app.doctor.run({ target: "ios" });
+
+      expect(report.checks.map(result => result.id)).toContain("xcode-toolchain");
+    }
+  );
+
   it("run() with no target covers every configured target plus host checks once", async () => {
     const { app, emitted } = createTestApp({ targets: ["macos"] });
 
     const report = await app.doctor.run();
 
-    expect(report.checks).toEqual(emitted);
+    expectSameResults(report.checks, emitted);
     const targets = new Set(report.checks.map(result => result.target));
     expect(targets.has("macos")).toBe(true);
     expect(targets.has("host")).toBe(true);

@@ -10,10 +10,22 @@ describe("generateCapabilities", () => {
     expect(artifacts[0]?.path).toBe("src-tauri/capabilities/default.json");
   });
 
-  it("scopes the platforms field to the target", () => {
-    const [artifact] = generateCapabilities(generatorInputFor("android"));
+  it.each([
+    ["macos", "macOS"],
+    ["ios", "iOS"],
+    ["windows", "windows"],
+    ["linux", "linux"],
+    ["android", "android"]
+  ] as const)("maps %s to Tauri's %s platform id", (target, platformId) => {
+    const [artifact] = generateCapabilities(generatorInputFor(target));
     const doc = JSON.parse(artifact?.content ?? "{}");
-    expect(doc.platforms).toEqual(["android"]);
+    expect(doc.platforms).toEqual([platformId]);
+  });
+
+  it("starts the permission list with core:default", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("ios"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+    expect(doc.permissions[0]).toBe("core:default");
   });
 
   it("aggregates permissions from every resolved capability, tray excluded on mobile", () => {
@@ -29,5 +41,50 @@ describe("generateCapabilities", () => {
     const [artifact] = generateCapabilities(generatorInputFor("macos"));
     const doc = JSON.parse(artifact?.content ?? "{}");
     expect(doc.permissions).toContain("core:tray:default");
+  });
+
+  it("writes the exact macOS permission list, tray's core grants included", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("macos"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+
+    expect(doc).toEqual({
+      identifier: "default",
+      description: "Auto-generated capability set for the composed system plugins.",
+      windows: ["main"],
+      platforms: ["macOS"],
+      permissions: [
+        "core:default",
+        "store:default",
+        "notification:default",
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-write-text",
+        "core:tray:default",
+        "core:menu:default",
+        "core:image:default",
+        "core:resources:default",
+        "core:app:allow-default-window-icon",
+        "deep-link:default"
+      ]
+    });
+  });
+
+  it("writes the exact iOS permission list, with no tray grant at all", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("ios"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+
+    expect(doc).toEqual({
+      identifier: "default",
+      description: "Auto-generated capability set for the composed system plugins.",
+      windows: ["main"],
+      platforms: ["iOS"],
+      permissions: [
+        "core:default",
+        "store:default",
+        "notification:default",
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-write-text",
+        "deep-link:default"
+      ]
+    });
   });
 });

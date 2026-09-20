@@ -29,9 +29,23 @@ export type GroupKillOptions = {
   sendSignal?: SignalSender;
   /** Windows termination — injectable for tests (defaults to a real `taskkill` invocation). */
   taskkill?: (pid: number) => void;
+  /**
+   * Whether this spawn created its own process group (`detached: true`). Only then may a
+   * signal be sent to the NEGATED pid: a child that is not a group leader shares its
+   * parent's group, and `kill(-pid)` would either hit an unrelated group or fail with
+   * ESRCH. Default true — the historical, detached-dev-session shape.
+   */
+  group?: boolean;
 };
 
 const DEFAULT_GRACE_MS = 2000;
+
+/**
+ * How long to wait after SIGKILL before reporting the process dead. SIGKILL is delivered
+ * asynchronously and the kernel still has to reap the group, so resolving the instant the
+ * signal is sent makes `stop()` lie about the process being gone.
+ */
+export const SIGKILL_SETTLE_MS = 250;
 
 /**
  * Cap on the buffered stdout/stderr kept for the final result (per stream).
@@ -61,18 +75,25 @@ function appendBounded(existing: string, text: string): string {
 }
 
 /**
- * Kills a process group with an escalation ladder: POSIX sends SIGTERM to the
- * negated pid (the whole group), waits `graceMs` for a natural exit, then
- * escalates to SIGKILL. Windows has no group-signal concept, so it shells out
- * to `taskkill /PID <pid> /T /F` instead. Idempotent — resolves immediately
- * when the process has no pid or already exited.
+ * Kills a spawned process with an escalation ladder: POSIX sends SIGTERM, waits
+ * `graceMs` for a natural exit, then escalates to SIGKILL and gives the kernel
+ * {@link SIGKILL_SETTLE_MS} to reap it. The signal goes to the whole group (the
+ * negated pid) only when this spawn created that group — a one-shot verb spawns
+ * without `detached`, so its child shares the parent's group and is signalled by
+ * pid. Windows has no group-signal concept and shells out to
+ * `taskkill /PID <pid> /T /F` instead. Idempotent — resolves immediately when the
+ * process has no pid or already exited.
+ *
+ * Every signal is best-effort: a process that exited between the check and the
+ * signal raises ESRCH, which must never surface as a rejection — callers fire
+ * this from an abort handler, where a rejection becomes an unhandled one.
  *
  * @param proc - The process (or fake) to terminate.
- * @param opts - Grace period, platform, and injectable signal senders.
- * @returns A promise that resolves once the group is confirmed dead (or termination was requested).
+ * @param opts - Grace period, platform, group ownership, and injectable signal senders.
+ * @returns A promise that resolves once the process is confirmed dead (or termination has settled).
  * @example
  * ```ts
- * await killProcessGroup(child, { graceMs: 2000 });
+ * await killProcessGroup(child, { graceMs: 2000, group: true });
  * ```
  */
 export function killProcessGroup(
@@ -83,7 +104,8 @@ export function killProcessGroup(
     graceMs = DEFAULT_GRACE_MS,
     platform = process.platform,
     sendSignal = defaultSendSignal,
-    taskkill = defaultTaskkill
+    taskkill = defaultTaskkill,
+    group = true
   } = opts;
 
   return new Promise(resolve => {
@@ -99,9 +121,13 @@ export function killProcessGroup(
       return;
     }
 
+    // Negative = the whole process group; plain pid = this child alone.
+    const signalTarget = group ? -pid : pid;
+
     let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     /**
-     * Marks the group as dead (natural exit or SIGKILL escalation) and
+     * Marks the process as dead (natural exit or the SIGKILL settle window) and
      * resolves the outer promise exactly once.
      *
      * @example
@@ -112,20 +138,40 @@ export function killProcessGroup(
     const finish = (): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
       resolve();
     };
 
     proc.onExit(finish);
-    sendSignal(-pid, "SIGTERM");
+    sendSignalQuietly(sendSignal, signalTarget, "SIGTERM");
 
-    const timer = setTimeout(() => {
+    graceTimer = setTimeout(() => {
       if (settled) return;
-      settled = true;
-      sendSignal(-pid, "SIGKILL");
-      resolve();
+      sendSignalQuietly(sendSignal, signalTarget, "SIGKILL");
+      setTimeout(finish, SIGKILL_SETTLE_MS).unref();
     }, graceMs);
   });
+}
+
+/**
+ * Sends one signal and swallows the failure. Termination is best-effort by
+ * definition: the target may have exited a microsecond earlier (ESRCH) or never
+ * have been ours to signal (EPERM), and neither is worth failing a teardown over.
+ *
+ * @param send - The signal sender to call.
+ * @param pid - Target pid (negative = process group).
+ * @param signal - Signal to send.
+ * @example
+ * ```ts
+ * sendSignalQuietly(process.kill, -1234, "SIGTERM");
+ * ```
+ */
+function sendSignalQuietly(send: SignalSender, pid: number, signal: NodeJS.Signals): void {
+  try {
+    send(pid, signal);
+  } catch {
+    // Already gone, or not ours — the ladder's next rung (or the exit listener) covers it.
+  }
 }
 
 /**
@@ -172,9 +218,9 @@ function inheritedEnvironment(): NodeJS.ProcessEnv {
 
 /**
  * Real `SpawnFn` implementation — spawns a detached process (group leader on
- * POSIX), streams stdout/stderr line-by-line to `onLine`, and resolves with
- * the full buffered output once the process exits. Honors `opts.signal` by
- * group-killing the spawned process on abort.
+ * POSIX), streams stdout/stderr line-by-line to `onLine`, and resolves with the
+ * full buffered output once the process's stdio has closed (`close`, not `exit`).
+ * Honors `opts.signal` by group-killing the spawned process on abort.
  *
  * @param opts - Spawn options (cmd, cwd, env, detached, onLine, signal).
  * @returns The process result once it exits.
@@ -255,13 +301,24 @@ export const realSpawn: SpawnFn = opts =>
       }
     };
 
+    // Group-signalling is only legitimate when THIS spawn made the child a group leader.
+    const killOptions: GroupKillOptions = { group: opts.detached ?? false };
     if (opts.signal) {
-      if (opts.signal.aborted) void killProcessGroup(fakeable);
-      else opts.signal.addEventListener("abort", () => void killProcessGroup(fakeable));
+      if (opts.signal.aborted) void killProcessGroup(fakeable, killOptions);
+      else
+        opts.signal.addEventListener("abort", () => void killProcessGroup(fakeable, killOptions));
     }
 
     child.on("error", reject);
-    child.on("exit", (code, signal) => {
+    // Two distinct events on purpose: `exit` is when the process is gone — the
+    // group-kill ladder must see that immediately — while `close` is when its stdio
+    // pipes are drained. tauri's own children (xcodebuild, gradle, cargo) inherit
+    // those pipes, so output still arrives AFTER `exit`; resolving there would drop
+    // exactly the tail an error message is made of.
+    child.on("exit", () => {
+      hasExited = true;
+    });
+    child.on("close", (code, signal) => {
       hasExited = true;
       resolve({ code, signal, stdout, stderr });
     });

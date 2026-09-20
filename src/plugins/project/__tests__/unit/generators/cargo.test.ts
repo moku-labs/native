@@ -30,14 +30,24 @@ describe("generateCargo", () => {
     expect(artifact?.content).toContain('name = "my_cool_app_lib"');
   });
 
-  it("pins one crate dependency per capability with a real rustInit", () => {
+  it("pins one crate dependency per capability that carries a crate", () => {
     const [artifact] = generateCargo(generatorInputFor("macos"));
     expect(artifact?.content).toContain('tauri-plugin-store = "^2"');
     expect(artifact?.content).toContain('tauri-plugin-deep-link = "^2"');
   });
 
-  it("does not pin a crate for tray (empty rustInit, core feature)", () => {
+  it("does not pin a crate for tray (a core Tauri cargo feature, not a plugin)", () => {
     const [artifact] = generateCargo(generatorInputFor("macos"));
     expect(artifact?.content).not.toContain("tauri-plugin-tray");
+  });
+
+  it("enables tray's cargo feature on the tauri dependency", () => {
+    const [artifact] = generateCargo(generatorInputFor("macos"));
+    expect(artifact?.content).toContain('tauri = { version = "2", features = ["tray-icon"] }');
+  });
+
+  it("emits an empty feature list when no capability contributes a cargo feature", () => {
+    const [artifact] = generateCargo(generatorInputFor("ios"));
+    expect(artifact?.content).toContain('tauri = { version = "2", features = [] }');
   });
 });

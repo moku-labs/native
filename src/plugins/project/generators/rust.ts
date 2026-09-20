@@ -7,9 +7,9 @@ import type { Artifact, GeneratorInput } from "./types";
 /**
  * Generates `src-tauri/src/lib.rs` and `src-tauri/src/main.rs`. `lib.rs` carries the
  * `#[cfg_attr(mobile, tauri::mobile_entry_point)]`-annotated `run()` with one
- * `.plugin(...)` init line per resolved capability that has a real Rust init (empty
- * `rustInit` rows, e.g. tray, contribute no line); `main.rs` is a thin entry point that
- * calls into the lib crate.
+ * `.plugin(...)` init line per resolved capability that has a real Rust init (rows
+ * without one, e.g. tray's cargo-feature row, contribute no line); `main.rs` is a thin
+ * entry point that calls into the lib crate.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns Artifacts for `src-tauri/src/lib.rs` and `src-tauri/src/main.rs`.
@@ -21,7 +21,7 @@ import type { Artifact, GeneratorInput } from "./types";
 export function generateRust(input: GeneratorInput): Artifact[] {
   const packageIdent = crateIdent(sanitizePackageName(input.global.app.name));
   const pluginLines = input.capabilities
-    .filter(capability => capability.rustInit !== "")
+    .filter(capability => Boolean(capability.rustInit))
     .map(capability => `    .plugin(${capability.rustInit})`)
     .toSorted();
 

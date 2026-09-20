@@ -19,6 +19,7 @@ describe("generateSidecar", () => {
       crateRange: "^2",
       npmRange: "^2",
       rustInit: "tauri_plugin_notification::init()",
+      cargoFeatures: [],
       permissions: ["notification:default"],
       platforms: ["ios"],
       confidence: "high",

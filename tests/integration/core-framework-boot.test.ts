@@ -2,9 +2,11 @@
  * @file Root integration — core framework boot (scenarios S01–S04).
  *
  * S01 — Framework boots via package-entry createApp with all five plugin APIs.
- * S02 — Global-config defaults + partial override composition (incl. MC1 render seam).
+ * S02 — Global-config defaults + partial override composition (incl. the branded render seam).
  * S03 — project.onInit validates app identity at createApp time (not at first verb).
  * S04 — Consumer plugin composes into the chain with ctx.log/ctx.env present.
+ * S20 — env core plugin resolves real host variables; targets default to the host's own.
+ * S21 — replacing the env providers list breaks node resolution.
  *
  * All apps compose through the SHIPPED package entry (`src/index.ts`) — never a
  * `createCore` re-composition — with every subprocess/render seam injected.
@@ -14,8 +16,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { Doctor, NativePhaseEvent } from "../../src/index";
-import { createApp, createPlugin } from "../../src/index";
+import type { Doctor, NativePhaseEvent, Target, Tauri } from "../../src/index";
+import { createApp, createPlugin, hostTargets } from "../../src/index";
 import { createTestApp, VALID_APP_CONFIG } from "./helpers/create-test-app";
 import { spawnBuildSucceeds } from "./helpers/fixtures";
 
@@ -74,20 +76,20 @@ describe("S01 — framework boots via package-entry createApp with all five plug
 
     // project — capability registry + generators + writer + clean.
     expect(app.project.generate).toBeTypeOf("function");
-    expect(app.project.completeness).toBeTypeOf("function");
+    expect(app.project.getCompleteness).toBeTypeOf("function");
     expect(app.project.patchMobile).toBeTypeOf("function");
     expect(app.project.clean).toBeTypeOf("function");
     expect(app.project.resolve).toBeTypeOf("function");
     expect(app.project.isKnownCapability).toBeTypeOf("function");
-    expect(app.project.registryRows).toBeTypeOf("function");
-    expect(app.project.requiredFiles).toBeTypeOf("function");
+    expect(app.project.getRegistryRows).toBeTypeOf("function");
+    expect(app.project.getRequiredFiles).toBeTypeOf("function");
 
     // tauri — the @tauri-apps/cli subprocess surface.
     expect(app.tauri.icon).toBeTypeOf("function");
     expect(app.tauri.build).toBeTypeOf("function");
     expect(app.tauri.mobileInit).toBeTypeOf("function");
     expect(app.tauri.dev).toBeTypeOf("function");
-    expect(app.tauri.version).toBeTypeOf("function");
+    expect(app.tauri.getVersion).toBeTypeOf("function");
 
     // build + doctor + cli — orchestrator, diagnosis, and verb surface.
     expect(app.build.run).toBeTypeOf("function");
@@ -112,7 +114,7 @@ describe("S01 — framework boots via package-entry createApp with all five plug
 });
 
 describe("S02 — global-config defaults + partial override composition", () => {
-  it("generates under the overridden projectDir with default web wiring, MC1-clean", async () => {
+  it("generates under the overridden projectDir with default web wiring, rendering through the branded seam", async () => {
     const { projectDir, outDir } = await makeTempDirs();
 
     // Override ONLY dirs/targets/app identity — web wiring must come from defaultConfig.
@@ -143,15 +145,23 @@ describe("S02 — global-config defaults + partial override composition", () => 
     // Content reflects the framework's DEFAULT web wiring (web was never configured).
     const conf = JSON.parse(await readFile(confPath, "utf8")) as {
       productName: string;
-      build: { beforeBuildCommand: string; devUrl: string; frontendDist: string };
+      build: {
+        beforeBuildCommand: { script: string; cwd: string };
+        devUrl: string;
+        frontendDist: string;
+      };
     };
     expect(conf.productName).toBe("Test App");
-    expect(conf.build.beforeBuildCommand).toBe("bun run build");
+    expect(conf.build.beforeBuildCommand.script).toBe("bun run build");
+    expect(conf.build.beforeBuildCommand.cwd).toBe(path.resolve("."));
     expect(conf.build.devUrl).toBe("http://localhost:5173");
-    expect(conf.build.frontendDist).toBe("dist");
+    // frontendDist is resolved FROM src-tauri, where Tauri reads it.
+    expect(conf.build.frontendDist).toBe(
+      path.relative(path.join(projectDir, "src-tauri"), path.resolve("dist")).replaceAll("\\", "/")
+    );
 
     // pluginConfigs seam layering: the framework default `cli.renderImpl: undefined` is
-    // replaced by the injected sink — the CLI renders there, never via raw console (MC1).
+    // replaced by the injected sink — the CLI renders there, never via raw console.
     // ctx.log's structured records (plain objects) are the logging seam, not CLI UI, so
     // the spy asserts no rendered STRING line ever reached raw console.log.
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -292,5 +302,91 @@ describe("S04 — consumer plugin composes into the chain with ctx.log/ctx.env p
       "collect:done"
     ]);
     expect(observedPhases.every(event => event.target === "macos")).toBe(true);
+  });
+});
+
+describe("S20 — env core plugin providers + host-derived default targets", () => {
+  it("resolves PATH through ctx.env and defaults targets to the host's own", async () => {
+    const { projectDir, outDir } = await makeTempDirs();
+
+    // A consumer plugin captures what the kernel handed it at onInit: the resolved
+    // env accessor (the framework seeds a process-env provider in coreConfig)
+    // and the global config the framework defaults produced.
+    let observed: { path: string | undefined; targets: readonly Target[] } | undefined;
+    const observer = createPlugin("env-observer", {
+      onInit: ctx => {
+        observed = { path: ctx.env.get("PATH"), targets: ctx.global.targets };
+      }
+    });
+
+    // No `targets` override — this scenario is about what the DEFAULTS produce.
+    const app = createApp({
+      plugins: [observer],
+      config: { ...VALID_APP_CONFIG, projectDir, outDir }
+    });
+
+    // (1) env resolves real host variables. With zero providers every get() answered
+    // undefined, which left the tauri plugin's PATH-walk node resolution nothing to walk.
+    expect(app.env.get("PATH")).toBeTypeOf("string");
+    expect(app.env.get("PATH")).not.toBe("");
+    expect(observed?.path).toBe(app.env.get("PATH"));
+
+    // (2) targets default to the host's own packaging target — never all five, and
+    // mobile is opt-in (it needs an SDK the host may not have).
+    expect(observed?.targets).toEqual(hostTargets(process.platform));
+    expect(observed?.targets).not.toContain("ios");
+    expect(observed?.targets).not.toContain("android");
+  });
+});
+
+describe("S21 — replacing the env providers list breaks node resolution", () => {
+  it("fails the build with the [native] node-not-found error and never spawns", async () => {
+    const { projectDir, outDir } = await makeTempDirs();
+
+    const spawnCalls: Array<readonly string[]> = [];
+    const recordingSpawn: Tauri.SpawnFn = opts => {
+      spawnCalls.push(opts.cmd);
+      return spawnBuildSucceeds(opts);
+    };
+
+    // `env` is a CORE plugin: core types `createApp({ pluginConfigs })` from the framework's
+    // REGULAR plugins only, so this key is reachable at runtime (the kernel merges it as
+    // cascade level 4 — spec/03 §5) but not through the typed literal. Passing the options
+    // as a pre-built object is what a consumer replacing the provider list actually gets,
+    // and it is the documented hazard: the merge is shallow, so `providers: []` REPLACES
+    // the framework's `[workerSafeProcessEnv()]` instead of extending it.
+    const options = {
+      config: {
+        ...VALID_APP_CONFIG,
+        app: { name: "Test App", identifier: "com.example.testapp" },
+        projectDir,
+        outDir,
+        targets: ["macos"] as const
+      },
+      pluginConfigs: {
+        // No `nodePath` — node resolution has to walk the PATH ctx.env hands it.
+        tauri: { spawnImpl: recordingSpawn },
+        cli: {
+          renderImpl: () => {
+            /* silent */
+          }
+        },
+        env: { providers: [] }
+      }
+    };
+    const app = createApp(options);
+
+    expect(app.env.get("PATH")).toBeUndefined();
+
+    // The icons phase is the first verb that needs the CLI, so that is where it dies.
+    await expect(app.build.run({ target: "macos" })).rejects.toThrow(
+      /^\[native\] Could not locate a `node` binary on PATH\./
+    );
+    await expect(app.build.run({ target: "macos" })).rejects.toThrow(
+      /Install Node\.js \(or make sure your version manager/
+    );
+
+    // Nothing was spawned: resolution fails before the subprocess seam is reached.
+    expect(spawnCalls).toEqual([]);
   });
 });

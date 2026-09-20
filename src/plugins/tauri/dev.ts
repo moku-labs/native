@@ -11,6 +11,12 @@ import type { DevExit, DevHandle, SpawnFn } from "./types";
 /** Probes whether the dev URL is responding yet. Injectable — the real one is `fetchReadinessProbe`. */
 export type ReadinessProbe = (url: string) => Promise<boolean>;
 
+/**
+ * Per-probe budget. A dev server that accepts the connection and then never answers would
+ * otherwise hold one probe open for the whole readiness window.
+ */
+const PROBE_TIMEOUT_MS = 2000;
+
 /** Dependencies {@link startDev} needs, all injectable for tests. */
 export type DevOrchestrationDeps = {
   spawn: SpawnFn;
@@ -36,7 +42,8 @@ export type StartDevOptions = {
 /**
  * Default readiness probe — resolves `true` as soon as `fetch(url)` settles
  * (any response, even non-2xx, means the dev server is up); `false` on a
- * network-level failure (connection refused, DNS, etc.).
+ * network-level failure (connection refused, DNS, etc.) or when the request
+ * outruns {@link PROBE_TIMEOUT_MS}.
  *
  * @param url - The dev URL to probe.
  * @returns Whether the dev server responded.
@@ -47,7 +54,7 @@ export type StartDevOptions = {
  */
 export const fetchReadinessProbe: ReadinessProbe = async url => {
   try {
-    await fetch(url);
+    await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
     return true;
   } catch {
     return false;
@@ -71,6 +78,7 @@ export const fetchReadinessProbe: ReadinessProbe = async url => {
 export function startDev(opts: StartDevOptions): DevHandle {
   const controller = new AbortController();
   let stopRequested = false;
+  let processExited = false;
 
   const exitedPromise: Promise<DevExit> = opts.deps
     .spawn({
@@ -100,15 +108,19 @@ export function startDev(opts: StartDevOptions): DevHandle {
   opts.deps.onSignal("SIGTERM", handleSignal);
 
   const exited = exitedPromise.finally(() => {
+    processExited = true;
     opts.deps.offSignal("SIGINT", handleSignal);
     opts.deps.offSignal("SIGTERM", handleSignal);
   });
 
   /**
-   * Stops the dev session: aborts the spawn signal (real impl group-kills)
-   * and waits for the process group to exit. Idempotent.
+   * Stops the dev session: aborts the spawn signal (real impl group-kills) and
+   * waits for the process group to exit. Idempotent, and never rejects — it
+   * reports teardown completion, not the session's exit status (a spawn that
+   * failed outright is observed through `exited`). Signal handlers and `finally`
+   * blocks call this, and neither can deal with a rejection.
    *
-   * @returns Resolves once the process group has exited.
+   * @returns Resolves once the process group is gone.
    * @example
    * ```ts
    * await handle.stop();
@@ -119,10 +131,24 @@ export function startDev(opts: StartDevOptions): DevHandle {
       stopRequested = true;
       controller.abort();
     }
-    await exited;
+    await exited.catch(() => {
+      // Deliberate: the failure belongs to `exited`, not to teardown.
+    });
   }
 
-  const ready = pollUntilReady(opts.url, opts.deps).catch(async (error: unknown) => {
+  /**
+   * Whether the session is over: Ctrl-C (or an explicit `stop()`) was requested, or the dev
+   * process is already gone. Either way nothing will ever answer the readiness probe.
+   *
+   * @returns Whether polling should give up.
+   * @example
+   * ```ts
+   * if (isAborted()) throw stoppedBeforeReadyError();
+   * ```
+   */
+  const isAborted = (): boolean => stopRequested || processExited;
+
+  const ready = pollUntilReady(opts.url, opts.deps, isAborted).catch(async (error: unknown) => {
     await stop();
     throw error;
   });
@@ -131,22 +157,48 @@ export function startDev(opts: StartDevOptions): DevHandle {
 }
 
 /**
- * Polls `url` until the readiness probe succeeds or `deps.timeoutMs` elapses.
+ * Builds the `[native]` error a readiness poll ends with when the session is gone — Ctrl-C,
+ * an explicit `stop()`, or a dev process that died on its own (a taken port, a config error).
+ *
+ * @returns A formatted `[native] ...` error.
+ * @example
+ * ```ts
+ * throw stoppedBeforeReadyError();
+ * ```
+ */
+function stoppedBeforeReadyError(): Error {
+  return new Error(
+    "[native] dev session stopped before the dev server became ready.\n" +
+      "  Check the dev process output above for why it exited, then run the dev command again."
+  );
+}
+
+/**
+ * Polls `url` until the readiness probe succeeds, the session is aborted, or `deps.timeoutMs`
+ * elapses. The abort check is what keeps Ctrl-C and a crashed dev process from polling out
+ * the full timeout.
  *
  * @param url - The dev URL to poll.
  * @param deps - Orchestration dependencies (probe, interval/timeout, clock).
+ * @param isAborted - Whether the session is already over (stop requested or process exited).
  * @returns Resolves once the probe succeeds.
- * @throws {Error} `[native]` when the timeout elapses before readiness.
+ * @throws {Error} `[native]` when the session ends, or the timeout elapses, before readiness.
  * @example
  * ```ts
- * await pollUntilReady("http://localhost:5173", deps);
+ * await pollUntilReady("http://localhost:5173", deps, () => false);
  * ```
  */
-async function pollUntilReady(url: string, deps: DevOrchestrationDeps): Promise<void> {
+async function pollUntilReady(
+  url: string,
+  deps: DevOrchestrationDeps,
+  isAborted: () => boolean
+): Promise<void> {
   const clock = deps.now ?? Date.now;
   const deadline = clock() + deps.timeoutMs;
   for (;;) {
+    if (isAborted()) throw stoppedBeforeReadyError();
     if (await deps.probeReady(url)) return;
+    if (isAborted()) throw stoppedBeforeReadyError();
     if (clock() >= deadline) {
       throw new Error(
         `[native] dev server at ${url} did not become ready within ${deps.timeoutMs}ms.\n` +

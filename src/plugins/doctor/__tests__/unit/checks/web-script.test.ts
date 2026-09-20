@@ -18,7 +18,7 @@ describe("webScriptCheck.run", () => {
 
     expect(result.status).toBe("fail");
     expect(result.message).toContain("web.build");
-    expect(result.message).toContain("web.dev.command");
+    expect(result.message).toContain("web.devCommand");
   });
 
   it("passes when both scripts are present", async () => {
@@ -33,16 +33,14 @@ describe("webScriptCheck.run", () => {
     expect(result.status).toBe("pass");
   });
 
-  it("resolves the default cwd Tauri will use: <projectDir>/src-tauri", async () => {
+  it("resolves the default cwd Tauri will use: the consumer root", async () => {
     const readFile = vi.fn(async (_path: string) =>
       JSON.stringify({ scripts: { build: "x", dev: "y" } })
     );
 
     await webScriptCheck.run(createCheckInput({ fs: { readFile } }));
 
-    expect(readFile).toHaveBeenCalledWith(
-      path.join(baseGlobalConfig.projectDir, "src-tauri", "package.json")
-    );
+    expect(readFile).toHaveBeenCalledWith(path.join(path.resolve("."), "package.json"));
   });
 
   it("honors a web.cwd override for monorepo layouts", async () => {

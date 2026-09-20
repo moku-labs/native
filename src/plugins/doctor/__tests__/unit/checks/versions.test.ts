@@ -1,6 +1,7 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { versionsCheck } from "../../../checks/versions";
-import { createCheckInput } from "./fixtures";
+import { baseGlobalConfig, createCheckInput } from "./fixtures";
 
 const storeRow = {
   name: "store" as const,
@@ -9,6 +10,16 @@ const storeRow = {
   crateRange: "^2",
   npmRange: "^2",
   rustInit: "",
+  cargoFeatures: [],
+  permissions: [],
+  platforms: [],
+  confidence: "high" as const
+};
+
+/** The tray row: a cargo-feature-only capability — no npm package, no crate. */
+const trayRow = {
+  name: "tray" as const,
+  cargoFeatures: ["tray-icon"],
   permissions: [],
   platforms: [],
   confidence: "high" as const
@@ -29,9 +40,9 @@ describe("versionsCheck.run", () => {
       )
     };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));
@@ -47,9 +58,9 @@ describe("versionsCheck.run", () => {
       )
     };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));
@@ -77,12 +88,47 @@ describe("versionsCheck.run", () => {
     expect(result.status).not.toBe("fail");
   });
 
+  it("skips a row with no npm package (tray) instead of throwing", async () => {
+    const fs = {
+      readFile: vi.fn(async () =>
+        JSON.stringify({ dependencies: { "@tauri-apps/plugin-store": "^3.0.0" } })
+      )
+    };
+    const project = {
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [trayRow])
+    };
+
+    const result = await versionsCheck.run(createCheckInput({ fs, project }));
+
+    expect(result.status).toBe("pass");
+    expect(result.message).not.toContain("tray");
+  });
+
+  it("resolves package.json from the configured web.cwd root", async () => {
+    const readFile = vi.fn(async () => "{}");
+    const global = { ...baseGlobalConfig, web: { ...baseGlobalConfig.web, cwd: "apps/web" } };
+
+    await versionsCheck.run(createCheckInput({ fs: { readFile }, global }));
+
+    expect(readFile).toHaveBeenCalledWith(path.join(path.resolve("apps/web"), "package.json"));
+  });
+
+  it("resolves package.json from the process cwd when web.cwd is unset", async () => {
+    const readFile = vi.fn(async () => "{}");
+
+    await versionsCheck.run(createCheckInput({ fs: { readFile } }));
+
+    expect(readFile).toHaveBeenCalledWith(path.join(path.resolve("."), "package.json"));
+  });
+
   it("passes when no composed capability is declared in package.json", async () => {
     const fs = { readFile: vi.fn(async () => JSON.stringify({ dependencies: {} })) };
     const project = {
-      requiredFiles: vi.fn(() => []),
-      completeness: vi.fn(() => ({ status: "not-applicable" as const })),
-      registryRows: vi.fn(() => [storeRow])
+      getRequiredFiles: vi.fn(() => []),
+      getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
+      getRegistryRows: vi.fn(() => [storeRow])
     };
 
     const result = await versionsCheck.run(createCheckInput({ fs, project }));

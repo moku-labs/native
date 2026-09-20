@@ -10,7 +10,11 @@
     "remark", "rehype", "shiki", "satori", "resvg", "hast", "mdast", "Cloudflare", "wrangler",
     "NFKD", "subprocess", "afplay", "paplay", "expectTypeOf", "EISDIR", "antipatterns",
     "logPlugin", "envPlugin", "Tauri", "codegen", "packager", "AndroidManifest", "entitlements",
-    "notarization", "Xcode", "plist", "sidecar", "webview", "signable", "toolchain"
+    "notarization", "Xcode", "plist", "sidecar", "webview", "signable", "toolchain",
+    "xcodebuild", "xcodegen", "xcrun", "simctl", "cocoapods", "xcodeproj", "pbxproj",
+    "iphonesimulator", "aarch64", "rustup", "notariz", "signtool", "jarsigner", "keystore",
+    "keychain", "codesign", "codesigning", "gradle", "kts", "buildSrc", "getenv", "apk", "aab",
+    "icns", "appimage", "AppImage", "nsis", "hdiutil", "mkdtemp", "tmpdir", "doctype"
   ],
   "ignorePaths": ["node_modules/**", "dist/**", ".planning/**"]
 }

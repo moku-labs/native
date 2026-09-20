@@ -30,10 +30,13 @@ export type FsFacade = {
 };
 
 /** The project plugin's API surface a check may read — narrowed to doctor's three needs. */
-export type CheckProjectApi = Pick<ProjectApi, "requiredFiles" | "completeness" | "registryRows">;
+export type CheckProjectApi = Pick<
+  ProjectApi,
+  "getRequiredFiles" | "getCompleteness" | "getRegistryRows"
+>;
 
 /** The tauri plugin's API surface a check may read — the one probe routed through tauri (D-013). */
-export type CheckTauriApi = Pick<TauriApi, "version">;
+export type CheckTauriApi = Pick<TauriApi, "getVersion">;
 
 /**
  * Fresh input assembled per `(check, scope)` invocation by the doctor API factory.
@@ -65,6 +68,15 @@ export type CheckInput = {
 export type Check = {
   /** Stable check identifier (module-level; individual results may specialize it per target). */
   id: string;
+  /**
+   * The id this check's own result carries for one scope. Implemented only by checks that
+   * specialize their id per target, so a synthetic result (a timeout, an internal error) is
+   * reported under the SAME id a real run would have produced.
+   *
+   * @param scope - The scope the check ran against.
+   * @returns The per-scope result id.
+   */
+  resultId?(scope: Target | "host"): string;
   /**
    * Whether this check applies to a given scope.
    *

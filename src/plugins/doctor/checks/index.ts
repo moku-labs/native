@@ -5,6 +5,8 @@
 import { androidCheck } from "./android";
 import { completenessCheck } from "./completeness";
 import { crossRepoCorsCheck, crossRepoDeepLinkCheck } from "./cross-repo";
+import { iosPlatformCheck } from "./ios-platform";
+import { iosToolsCheck } from "./ios-tools";
 import { nodeCheck } from "./node";
 import { rustupCheck } from "./rustup";
 import { signingCheck } from "./signing";
@@ -23,6 +25,8 @@ export const CHECKS: readonly Check[] = [
   tauriCliCheck,
   rustupCheck,
   xcodeCheck,
+  iosToolsCheck,
+  iosPlatformCheck,
   androidCheck,
   signingCheck,
   completenessCheck,

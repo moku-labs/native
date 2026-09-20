@@ -3,28 +3,21 @@
  */
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import type { Target } from "../../config";
+import { bundleLayout } from "./layout";
+import { isDerivedPath, realResolve } from "./paths";
 import type { CleanResult } from "./types";
-
-/**
- * Tauri's bundle output directories are FORMAT-named, not target-named
- * (`bundle/dmg`, `bundle/nsis`, …) — one desktop target maps to several
- * format directories (same table spec 03-build's collect phase reads).
- */
-const DESKTOP_BUNDLE_FORMATS: Record<Exclude<Target, "ios" | "android">, readonly string[]> = {
-  macos: ["dmg", "macos"],
-  windows: ["nsis", "msi"],
-  linux: ["appimage", "deb", "rpm"]
-};
 
 /**
  * Computes the absolute path(s) a clean pass would delete for a given scope, without
  * touching the filesystem. Mobile targets scope to `gen/<platform>` only; desktop
  * targets scope to that target's bundle-FORMAT output directories under Cargo's
- * `target/` (Tauri names bundle dirs by format — dmg/nsis/appimage/… — never by
- * target); omitting `target` scopes to the whole project root (D-006: project owns
- * this destructive filesystem knowledge — `cli.clean` is a thin delegate).
+ * `target/` (both read from `layout.ts`, the one owner of that table); omitting `target`
+ * scopes to the whole project root (D-006: project owns this destructive filesystem
+ * knowledge — `cli.clean` is a thin delegate).
  *
  * @param projectDirectory - The Tauri project root.
  * @param target - The optional packaging target to scope the clean to.
@@ -38,12 +31,50 @@ const DESKTOP_BUNDLE_FORMATS: Record<Exclude<Target, "ios" | "android">, readonl
 export function cleanTargets(projectDirectory: string, target?: Target): string[] {
   const root = path.resolve(projectDirectory);
   if (!target) return [root];
-  if (target === "ios" || target === "android") {
-    const platform = target === "ios" ? "apple" : "android";
-    return [path.resolve(root, "src-tauri", "gen", platform)];
+
+  const layout = bundleLayout(target);
+  if (layout.genDirectory) {
+    return [path.resolve(root, layout.root, layout.genDirectory)];
   }
-  return DESKTOP_BUNDLE_FORMATS[target].map(format =>
-    path.resolve(root, "src-tauri", "target", "release", "bundle", format)
+  return layout.formats.map(format => path.resolve(root, layout.root, "bundle", format.directory));
+}
+
+/**
+ * Refuses to treat anything but derived build output as a cleanable `projectDir`. This is
+ * the FIRST gate every clean pass passes through, before a single path is computed.
+ *
+ * The rule is positive containment, not a blacklist of dangerous paths: `projectDir` must
+ * resolve strictly INSIDE the current working directory (or inside the OS temp root, where
+ * test and smoke workspaces live), and must not be — or contain — the cwd or the home
+ * directory. `~/Documents` is refused for the same reason `/` is: it is not derived state.
+ * Symlinks are followed and, on case-insensitive filesystems, case is ignored, so neither
+ * a link nor a re-typed capitalization walks around the gate.
+ *
+ * Pure predicate by design — it is tested by calling it directly with unsafe paths, never
+ * by letting {@link clean} loose on one.
+ *
+ * @param root - The configured `projectDir` a clean pass wants to remove.
+ * @param cwd - The current working directory (injectable for tests).
+ * @param home - The user's home directory (injectable for tests).
+ * @param platform - The host platform, deciding case sensitivity (injectable for tests).
+ * @throws {Error} When `root` does not resolve strictly inside the cwd or the temp root, or
+ *   when it is, or contains, the cwd or the home directory.
+ * @example
+ * ```ts
+ * assertCleanableRoot("/repo/.moku/tauri", "/repo", "/Users/alex"); // ok
+ * assertCleanableRoot("/Users/alex/Documents", "/repo", "/Users/alex"); // throws
+ * ```
+ */
+export function assertCleanableRoot(
+  root: string,
+  cwd: string = process.cwd(),
+  home: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (isDerivedPath(root, { cwd, home, platform })) return;
+
+  throw new Error(
+    `[native] Refusing to clean projectDir "${realResolve(root)}".\n  Set config.projectDir to a dedicated subdirectory such as ".moku/tauri".`
   );
 }
 
@@ -71,12 +102,15 @@ export function assertWithinRoot(root: string, candidate: string): void {
 /**
  * Deletes derived state for the given scope. `target` omitted removes the whole
  * `projectDir`; a mobile `target` removes `gen/<platform>` only; a desktop `target`
- * removes that target's bundle output. Every candidate path is validated against
- * `projectDir` before deletion, and only paths that actually exist are removed/reported.
+ * removes that target's bundle output. `projectDir` itself is checked by
+ * {@link assertCleanableRoot} before anything is computed — for BOTH the scoped and the
+ * unscoped case — and every candidate path is then validated against `projectDir`, so
+ * only existing paths inside a legitimately derived root are removed/reported.
  *
  * @param projectDirectory - The Tauri project root.
  * @param target - The optional packaging target to scope the clean to.
  * @returns The list of paths actually removed.
+ * @throws {Error} When `projectDir` is not derived state inside the cwd or the temp root.
  * @example
  * ```ts
  * await clean("/repo/.moku/tauri", "android");
@@ -84,6 +118,8 @@ export function assertWithinRoot(root: string, candidate: string): void {
  */
 export async function clean(projectDirectory: string, target?: Target): Promise<CleanResult> {
   const root = path.resolve(projectDirectory);
+  assertCleanableRoot(root);
+
   const removed: string[] = [];
 
   for (const candidate of cleanTargets(projectDirectory, target)) {

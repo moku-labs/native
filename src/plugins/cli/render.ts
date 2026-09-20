@@ -3,19 +3,53 @@
  * pure line/box formatters for native:phase, native:complete, and doctor:check.
  */
 
+import type { LogEntry, LogLevel, LogSink } from "@moku-labs/common";
 import type { BrandConsole } from "@moku-labs/common/cli";
 import { createBrandConsole, createBrandPrompts, spinnerFrameAt } from "@moku-labs/common/cli";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../config";
 import type { CheckResult, DoctorReport } from "../doctor/types";
+import { TauriError } from "../tauri/errors";
 import type { ConfirmFn, RenderFn } from "./types";
 
+/** Narrowest console width: below it a boxed diagnostic is cut so short it names nothing. */
+const MIN_CONSOLE_WIDTH = 60;
+
+/** Widest console width: past it a boxed diagnostic is too wide to scan. */
+const MAX_CONSOLE_WIDTH = 160;
+
+/** Width used when the stream reports no columns (CI, pipes) — the branded kit's own default. */
+const FALLBACK_CONSOLE_WIDTH = 66;
+
 /**
- * Creates the branded console bound to the injected render seam. When `renderImpl` is
- * provided every line flows through it (both the normal and error sinks) instead of the
- * branded kit's own `console.log`/`console.error` default — the seam tests inject to
- * capture output deterministically and assert zero raw `console.*` calls (MC1).
+ * The width the branded console aligns to: the terminal's own column count, clamped to a
+ * readable range, or the kit default when the stream has no columns (CI, pipes). This is
+ * the single place a raw `process.stdout` read happens — the column count is injectable so
+ * nothing downstream depends on the real terminal.
+ *
+ * @param columns - The stream's column count (default: `process.stdout.columns`).
+ * @returns The console width, between 60 and 160 inclusive.
+ * @example
+ * ```ts
+ * terminalWidth(120);       // 120
+ * terminalWidth(40);        // 60 — clamped up
+ * terminalWidth(undefined); // 66 — piped output
+ * ```
+ */
+export function terminalWidth(columns: number | undefined = process.stdout.columns): number {
+  if (columns === undefined) return FALLBACK_CONSOLE_WIDTH;
+  return Math.min(MAX_CONSOLE_WIDTH, Math.max(MIN_CONSOLE_WIDTH, columns));
+}
+
+/**
+ * Creates the branded console bound to the injected render seam, aligned to the terminal
+ * width. When `renderImpl` is provided every line flows through it (both the normal and
+ * error sinks) instead of the branded kit's own `console.log`/`console.error` default — the
+ * seam tests inject to capture output deterministically and assert zero raw `console.*`
+ * calls (MC1). The column count is injectable the same way, so the width a test renders at
+ * never depends on the terminal the test runs in.
  *
  * @param renderImpl - Injected line sink (default: undefined → branded console default).
+ * @param columns - Injected column count (default: undefined → `process.stdout.columns`).
  * @returns A branded console writing every line through the render seam.
  * @example
  * ```ts
@@ -23,10 +57,95 @@ import type { ConfirmFn, RenderFn } from "./types";
  * ui.info("ready");
  * ```
  */
-export function createRenderConsole(renderImpl: RenderFn | undefined): BrandConsole {
+export function createRenderConsole(
+  renderImpl: RenderFn | undefined,
+  columns?: number
+): BrandConsole {
+  const width = terminalWidth(columns);
   return renderImpl
-    ? createBrandConsole({ write: renderImpl, writeError: renderImpl })
-    : createBrandConsole();
+    ? createBrandConsole({ write: renderImpl, writeError: renderImpl, width })
+    : createBrandConsole({ width });
+}
+
+/** Severity order — an entry ranking below the sink's threshold is dropped. */
+const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+/**
+ * Formats a record's structured payload as a dim trailing JSON fragment, so a log line
+ * stays one readable line instead of a printed object.
+ *
+ * @param ui - The branded console supplying the palette.
+ * @param data - The record's optional structured payload.
+ * @returns The dim ` {"…":…}` suffix, or an empty string when there is no payload.
+ * @example
+ * ```ts
+ * formatEntryData(ui, { written: 7 }); // ' {"written":7}' (dim)
+ * ```
+ */
+function formatEntryData(ui: BrandConsole, data: unknown): string {
+  if (data === undefined) return "";
+  try {
+    const text = JSON.stringify(data);
+    return text === undefined ? "" : ` ${ui.palette.dim(text)}`;
+  } catch {
+    return ` ${ui.palette.dim(String(data))}`;
+  }
+}
+
+/**
+ * Builds the log sink the cli plugin installs over the framework's default one: every
+ * `ctx.log` record renders as a branded line through THIS plugin's console, so structured
+ * records and CLI UI share one surface (MC1) instead of raw `{ level, event, data, ts }`
+ * objects appearing between the branded lines.
+ *
+ * It takes the console rather than building its own, which is what keeps the injected
+ * render seam whole: with `renderImpl` set, log lines are captured with everything else.
+ *
+ * @param ui - The branded console to render through.
+ * @param minLevel - Lowest severity to render (default `"info"` — debug detail stays in the trace).
+ * @returns A log sink writing branded lines through `ui`.
+ * @example
+ * ```ts
+ * ctx.log.clearSinks();
+ * ctx.log.addSink(createLogSink(ctx.state.ui));
+ * ```
+ */
+export function createLogSink(ui: BrandConsole, minLevel: LogLevel = "info"): LogSink {
+  const threshold = LEVEL_RANK[minLevel];
+
+  return {
+    /**
+     * Renders one record as the branded line matching its level.
+     *
+     * @param entry - The record to render.
+     * @example
+     * ```ts
+     * sink.write({ level: "info", event: "project:generate", ts: Date.now() });
+     * ```
+     */
+    write(entry: LogEntry): void {
+      if (LEVEL_RANK[entry.level] < threshold) return;
+      const message = `${entry.event}${formatEntryData(ui, entry.data)}`;
+
+      switch (entry.level) {
+        case "error": {
+          ui.error(message);
+          break;
+        }
+        case "warn": {
+          ui.warn(message);
+          break;
+        }
+        case "debug": {
+          ui.line(`  ${ui.palette.dim(message)}`);
+          break;
+        }
+        default: {
+          ui.info(message);
+        }
+      }
+    }
+  };
 }
 
 /**
@@ -138,8 +257,9 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
 }
 
 /**
- * Renders the final doctor summary once the full report has resolved: a heading, one row
- * per check (reusing {@link renderCheckEvent}), and an overall pass/fail line.
+ * Renders the final doctor summary once the full report has resolved: a heading, the
+ * pass/warn/fail counts, and the overall verdict. It repeats NO row — every check already
+ * printed exactly once, live from the `doctor:check` hook.
  *
  * @param ui - The branded console to render through.
  * @param report - The aggregated diagnosis report.
@@ -149,8 +269,75 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
  * ```
  */
 export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): void {
+  const counts = { pass: 0, warn: 0, fail: 0 };
+  for (const result of report.checks) counts[result.status] += 1;
+
   ui.heading("Doctor summary");
-  for (const result of report.checks) renderCheckEvent(ui, result);
-  ui.line();
+  ui.line(`  pass ${counts.pass} · warn ${counts.warn} · fail ${counts.fail}`);
   ui.check(report.ok, report.ok ? "All checks passed" : "One or more checks failed");
+}
+
+/** Columns the box's own borders and padding occupy around a tail line. */
+const BOX_CHROME_COLUMNS = 6;
+
+/**
+ * Floor for the tail budget. Below this a diagnostic is cut so short it names nothing, so a
+ * very narrow console gets a wrapped line rather than a useless one.
+ */
+const MIN_TAIL_LINE_LENGTH = 40;
+
+/**
+ * Widest tail line the failure box keeps, derived from the branded console's own width —
+ * which {@link terminalWidth} bound to the terminal, so the box follows the real terminal
+ * instead of a fixed guess. A single Rust/xcodebuild diagnostic can run thousands of
+ * characters; unbounded, it wraps the branded box into unreadable noise, and a fixed bound
+ * wide enough to matter (160) wrapped every ordinary 80-column terminal just the same.
+ *
+ * @param consoleWidth - The branded console's width (`ui.width`).
+ * @returns The maximum tail line length for that width.
+ * @example
+ * ```ts
+ * maxTailLineLength(66);  // 60
+ * maxTailLineLength(120); // 114
+ * ```
+ */
+function maxTailLineLength(consoleWidth: number): number {
+  return Math.max(MIN_TAIL_LINE_LENGTH, consoleWidth - BOX_CHROME_COLUMNS);
+}
+
+/**
+ * Truncates one tail line to `budget`, marking the cut with an ellipsis.
+ *
+ * @param line - One line of the scrubbed stderr tail.
+ * @param budget - The maximum length, from {@link maxTailLineLength}.
+ * @returns The line, at most `budget` characters long.
+ * @example
+ * ```ts
+ * truncateLine("error: " + "x".repeat(400), 60); // "error: xxx…"
+ * ```
+ */
+function truncateLine(line: string, budget: number): string {
+  if (line.length <= budget) return line;
+  return `${line.slice(0, budget - 1)}…`;
+}
+
+/**
+ * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
+ * in a branded box, then the `[native]` error line. Cause first, verdict second —
+ * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
+ * failure (or an empty tail) prints the error line alone.
+ *
+ * @param ui - The branded console to render through.
+ * @param error - The failure thrown by `build.run`/`build.runAll`.
+ * @example
+ * ```ts
+ * try { await build.run({ target: "macos" }); } catch (error) { renderBuildFailure(ui, error); throw error; }
+ * ```
+ */
+export function renderBuildFailure(ui: BrandConsole, error: unknown): void {
+  const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
+  const budget = maxTailLineLength(ui.width);
+
+  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line, budget)));
+  ui.error(error instanceof Error ? error.message : String(error));
 }

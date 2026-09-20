@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { assertWritablePath, writeIfChanged } from "../../writer";
 
+const PROJECT_ROOT = path.join(path.sep, "repo", ".moku", "tauri");
+
 describe("assertWritablePath", () => {
   it("allows a pure project file path", () => {
-    expect(() => assertWritablePath(`/repo/.moku/tauri/src-tauri/tauri.conf.json`)).not.toThrow();
+    expect(() =>
+      assertWritablePath(path.join(PROJECT_ROOT, "src-tauri", "tauri.conf.json"), PROJECT_ROOT)
+    ).not.toThrow();
   });
 
   it.each([
@@ -15,9 +19,26 @@ describe("assertWritablePath", () => {
     ".gradle",
     "DerivedData",
     "Pods"
-  ])("refuses a path through a %s segment", segment => {
-    const forbidden = ["repo", ".moku", "tauri", "src-tauri", segment, "x"].join(path.sep);
-    expect(() => assertWritablePath(forbidden)).toThrow("[native] Refusing to write");
+  ])("refuses a path through a %s segment below projectDir", segment => {
+    const forbidden = path.join(PROJECT_ROOT, "src-tauri", segment, "x");
+    expect(() => assertWritablePath(forbidden, PROJECT_ROOT)).toThrow("[native] Refusing to write");
+  });
+
+  it.each([
+    ["a sibling directory reached with ..", path.join(path.sep, "repo", ".moku", "evil.conf")],
+    ["an unrelated absolute path", path.join(path.sep, "etc", "passwd")],
+    ["projectDir itself", PROJECT_ROOT]
+  ])("refuses %s", (_label, filePath) => {
+    expect(() => assertWritablePath(filePath, PROJECT_ROOT)).toThrow(
+      `[native] Refusing to write outside projectDir: ${path.resolve(filePath)}.`
+    );
+  });
+
+  it("scans only below projectDir — a repo checked out under a dir named target is fine", () => {
+    const root = path.join(path.sep, "Users", "alex", "target", "repo", ".moku", "tauri");
+    expect(() =>
+      assertWritablePath(path.join(root, "src-tauri", "tauri.conf.json"), root)
+    ).not.toThrow();
   });
 });
 
@@ -34,7 +55,7 @@ describe("writeIfChanged", () => {
 
   it("writes a brand-new file", async () => {
     const filePath = path.join(dir, "nested", "new.txt");
-    const action = await writeIfChanged(filePath, "hello");
+    const action = await writeIfChanged(filePath, "hello", dir);
 
     expect(action).toBe("written");
     expect(await readFile(filePath, "utf8")).toBe("hello");
@@ -44,7 +65,7 @@ describe("writeIfChanged", () => {
     const filePath = path.join(dir, "file.txt");
     await writeFile(filePath, "old", "utf8");
 
-    const action = await writeIfChanged(filePath, "new");
+    const action = await writeIfChanged(filePath, "new", dir);
 
     expect(action).toBe("written");
     expect(await readFile(filePath, "utf8")).toBe("new");
@@ -58,10 +79,19 @@ describe("writeIfChanged", () => {
     // Ensure the filesystem's mtime resolution would detect a rewrite if one happened.
     await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
 
-    const action = await writeIfChanged(filePath, "same");
+    const action = await writeIfChanged(filePath, "same", dir);
     const after = await stat(filePath);
 
     expect(action).toBe("unchanged");
     expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("round-trips binary content byte-for-byte and diffs it too", async () => {
+    const filePath = path.join(dir, "icon.png");
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0a]);
+
+    expect(await writeIfChanged(filePath, bytes, dir)).toBe("written");
+    expect(new Uint8Array(await readFile(filePath))).toEqual(bytes);
+    expect(await writeIfChanged(filePath, bytes, dir)).toBe("unchanged");
   });
 });

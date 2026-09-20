@@ -3,7 +3,7 @@
    Node-mirroring reconciliation — not a lazy `null` fallback. */
 import { describe, expect, it, vi } from "vitest";
 import type { DevOrchestrationDeps } from "../../dev";
-import { startDev } from "../../dev";
+import { fetchReadinessProbe, startDev } from "../../dev";
 import type { SpawnFn } from "../../types";
 
 /** No-op placeholder for `resolveFn` before the Promise executor assigns the real resolver. */
@@ -44,6 +44,19 @@ function createDeferredSpawn(): DeferredSpawn {
   };
   return { spawn, resolve: resolveFn, calls };
 }
+
+/** Spawn seam that fails outright (the `node` binary is gone / not executable). */
+const spawnRejects: SpawnFn = async () => {
+  throw new Error("spawn ENOENT");
+};
+
+/** Spawn seam for a dev process that dies on its own — a taken port, a config error. */
+const spawnExitsImmediately: SpawnFn = async () => ({
+  code: 1,
+  signal: null,
+  stdout: "",
+  stderr: "port already in use"
+});
 
 function createDeps(overrides: Partial<DevOrchestrationDeps> = {}): DevOrchestrationDeps {
   return {
@@ -173,6 +186,58 @@ describe("startDev", () => {
     expect(received).toEqual(["Compiling app v0.1.0"]);
   });
 
+  it("stop() resolves even when the spawn itself rejected (teardown never rethrows)", async () => {
+    const handle = startDev({
+      cmd: ["node", "tauri.js", "dev", "--ci"],
+      cwd: "/proj",
+      url: "http://localhost:5173",
+      onLine: () => {},
+      deps: createDeps({ spawn: spawnRejects })
+    });
+    handle.exited.catch(() => {
+      // The session's failure is observed through `exited`, not through stop().
+    });
+
+    await expect(handle.stop()).resolves.toBeUndefined();
+  });
+
+  it("ready rejects as soon as stop() is requested, without waiting out the timeout", async () => {
+    const { spawn } = createDeferredSpawn();
+    const probeReady = vi.fn(async () => false);
+    const handle = startDev({
+      cmd: ["node", "tauri.js", "dev", "--ci"],
+      cwd: "/proj",
+      url: "http://localhost:5173",
+      onLine: () => {},
+      // A timeout long enough that waiting it out would hang the suite.
+      deps: createDeps({ spawn, probeReady, intervalMs: 1, timeoutMs: 600_000 })
+    });
+
+    await handle.stop();
+
+    await expect(handle.ready).rejects.toThrow(
+      /^\[native\] dev session stopped before the dev server became ready\./
+    );
+  });
+
+  it("ready rejects when the dev process exits before the server is ready", async () => {
+    const handle = startDev({
+      cmd: ["node", "tauri.js", "dev", "--ci"],
+      cwd: "/proj",
+      url: "http://localhost:5173",
+      onLine: () => {},
+      deps: createDeps({
+        spawn: spawnExitsImmediately,
+        probeReady: vi.fn(async () => false),
+        intervalMs: 1,
+        timeoutMs: 600_000
+      })
+    });
+
+    await expect(handle.ready).rejects.toThrow(/dev session stopped before the dev server/);
+    await expect(handle.exited).resolves.toEqual({ code: 1, signal: null });
+  });
+
   it("readiness timeout rejects ready and reaps the process group", async () => {
     const { spawn } = createDeferredSpawn();
     const probeReady = vi.fn(async () => false);
@@ -187,5 +252,26 @@ describe("startDev", () => {
     await expect(handle.ready).rejects.toThrow(/did not become ready/);
     const exit = await handle.exited;
     expect(exit).toEqual({ code: null, signal: "SIGTERM" });
+  });
+});
+
+describe("fetchReadinessProbe", () => {
+  it("bounds every probe with an abort signal so a hung dev server cannot stall the poll", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("", { status: 200 }));
+
+    await expect(fetchReadinessProbe("http://localhost:5173")).resolves.toBe(true);
+
+    const init = fetchSpy.mock.calls[0]?.[1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    fetchSpy.mockRestore();
+  });
+
+  it("reports not-ready when the probe itself fails or times out", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(fetchReadinessProbe("http://localhost:5173")).resolves.toBe(false);
+    fetchSpy.mockRestore();
   });
 });

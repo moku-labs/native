@@ -93,6 +93,21 @@ function findCheck(report: Doctor.DoctorReport, id: string): Doctor.CheckResult 
 }
 
 /**
+ * Sorts check results by id+target — `doctor:check` fires per check AS IT SETTLES,
+ * so event order is settle order while `report.checks` keeps registry order.
+ *
+ * @param checks - The check results to sort.
+ * @returns A new, id-sorted array.
+ * @example
+ * ```ts
+ * expect(sortChecksById(emitted)).toEqual(sortChecksById(report.checks));
+ * ```
+ */
+function sortChecksById(checks: readonly Doctor.CheckResult[]): Doctor.CheckResult[] {
+  return checks.toSorted((a, b) => `${a.id}${a.target}`.localeCompare(`${b.id}${b.target}`));
+}
+
+/**
  * Counts non-overlapping occurrences of `needle` in `haystack`.
  *
  * @param haystack - The text to search.
@@ -131,10 +146,13 @@ async function writePackageJsonFixture(
   await writeFile(path.join(dir, "package.json"), JSON.stringify(pkg, undefined, 2), "utf8");
 }
 
-/** A probe fake whose rustup answer carries the macos, ios, AND android target triples. */
+/** A probe fake whose rustup answer carries the macos, ios (device + sim), AND android triples. */
 const probeOkAllTriples: Doctor.ProbeFn = async cmd => ({
   code: 0,
-  stdout: cmd === "rustup" ? "aarch64-apple-darwin\naarch64-apple-ios\naarch64-linux-android" : "ok"
+  stdout:
+    cmd === "rustup"
+      ? "aarch64-apple-darwin\naarch64-apple-ios\naarch64-apple-ios-sim\naarch64-linux-android"
+      : "ok"
 });
 
 afterEach(async () => {
@@ -154,13 +172,24 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     // ios (not android) as the mobile target: the android-toolchain check needs env vars,
     // and the composed env table is frozen EMPTY (envPlugin has no providers configured),
     // so an android scope could never reach ok: true through the shipped composition.
+    // The host-scoped web-script/versions checks resolve <web.cwd>/package.json, so the
+    // fixture root is pinned there instead of leaking to the repo's own package.json.
+    const fixtureDir = await newFixtureDir();
+    await writePackageJsonFixture(fixtureDir);
+
     const testApp = await newTestApp({
-      config: { targets: ["macos", "ios"] },
+      config: {
+        targets: ["macos", "ios"],
+        web: {
+          build: "bun run build",
+          devCommand: "bun run dev",
+          devUrl: "http://localhost:5173",
+          dist: "dist",
+          cwd: fixtureDir
+        }
+      },
       probeImpl: probeOkAllTriples
     });
-
-    // The host-scoped web-script check resolves <projectDir>/src-tauri/package.json.
-    await writePackageJsonFixture(path.join(testApp.projectDir, "src-tauri"));
 
     // No target → scopes are every configured target PLUS "host" (where tauri-cli lives).
     const report = await testApp.app.doctor.run();
@@ -169,13 +198,14 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     expect(report.ok).toBe(true);
     expect(report.checks.length).toBeGreaterThan(0);
 
-    // Exactly one doctor:check event per report entry — count AND id equality, in order.
+    // Exactly one doctor:check event per report entry. Emission is per check AS IT SETTLES
+    //, so the event order is settle order while report.checks keeps registry order —
+    // the two are compared as sets of the same size.
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents).toHaveLength(report.checks.length);
-    expect(checkEvents.map(event => event.payload.id)).toEqual(
-      report.checks.map(check => check.id)
+    expect(sortChecksById(checkEvents.map(event => event.payload))).toEqual(
+      sortChecksById(report.checks)
     );
-    expect(checkEvents.map(event => event.payload)).toEqual([...report.checks]);
 
     // tauri-cli is routed through tauri.version() — the SPAWN seam, not probeImpl:
     // the fake spawn's stdout ("built") becomes the detected CLI version.
@@ -190,7 +220,7 @@ describe("S08 — doctor.run diagnoses over project + tauri", () => {
     expect(completeness.message).toContain("not initialized");
 
     // The same spawn fake answers tauri.version() directly.
-    await expect(testApp.app.tauri.version()).resolves.toEqual({ cliVersion: "built" });
+    await expect(testApp.app.tauri.getVersion()).resolves.toEqual({ cliVersion: "built" });
   });
 });
 
@@ -206,7 +236,8 @@ describe("S09 — doctor warn-only semantics + registry/env consumption", () => 
       config: {
         web: {
           build: "bun run build",
-          dev: { command: "bun run dev", url: "http://localhost:5173" },
+          devCommand: "bun run dev",
+          devUrl: "http://localhost:5173",
           dist: "dist",
           cwd: fixtureDir
         }
@@ -233,7 +264,7 @@ describe("S09 — doctor warn-only semantics + registry/env consumption", () => 
     expect(crossRepo.message).toContain("tauri://localhost");
 
     // The registry the versions check consumed — 5 pinned rows.
-    expect(testApp.app.project.registryRows()).toHaveLength(5);
+    expect(testApp.app.project.getRegistryRows()).toHaveLength(5);
   });
 
   it("reports signing env-var PRESENCE by name only — never a value", async () => {
@@ -299,23 +330,28 @@ describe("S10 — cli.build renders live progress from real build emissions", ()
 });
 
 describe("S11 — cli.doctor renders per-check rows + summary", () => {
-  it("returns true with all-ok probes and renders one live row per doctor:check plus the summary", async () => {
+  it("returns true with all-ok probes and renders one live row per doctor:check plus a counts summary", async () => {
     const testApp = await newTestApp();
 
     const ok = await testApp.app.cli.doctor({ target: "macos" });
 
     expect(ok).toBe(true);
 
-    // One live row per doctor:check PLUS one summary row each → every check id renders
-    // at least twice, and the summary block closes with the overall pass line.
+    // Exactly ONE row per doctor:check — live from the hook; the summary repeats no row
+    // and prints the counts plus the overall verdict.
     const text = testApp.rendered.join("\n");
     const checkEvents = doctorCheckEvents(testApp.events);
     expect(checkEvents.length).toBeGreaterThan(0);
     for (const event of checkEvents) {
-      expect(countOccurrences(text, event.payload.id)).toBeGreaterThanOrEqual(2);
+      expect(countOccurrences(text, event.payload.id)).toBe(1);
     }
+
+    const counts = { pass: 0, warn: 0, fail: 0 };
+    for (const event of checkEvents) counts[event.payload.status] += 1;
+
     expect(text).toContain("rustup-targets");
     expect(text).toContain("Doctor summary");
+    expect(text).toContain(`pass ${counts.pass} · warn ${counts.warn} · fail ${counts.fail}`);
     expect(text).toContain("All checks passed");
   });
 
@@ -342,13 +378,13 @@ describe("S12 — cli.dev drives tauri.dev without owning teardown", () => {
 
     await expect(testApp.app.cli.dev()).resolves.toBeUndefined();
 
-    // The dev process's output line was forwarded through the render seam (D-014),
+    // The dev process's output line was forwarded through the render seam,
     // and the dev verb actually reached the spawn seam.
     expect(testApp.rendered.join("\n")).toContain("Local:");
     expect(testApp.spawnCalls.some(call => call.argv.includes("dev"))).toBe(true);
   });
 
-  it("tauri.dev's handle resolves ready then exited without anything calling stop (D-002)", async () => {
+  it("tauri.dev's handle resolves ready then exited without anything calling stop", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok")));
     const testApp = await newTestApp({ spawnImpl: spawnDevExitsZero });
 

@@ -3,15 +3,16 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Target } from "../../config";
-import type { CompletenessResult } from "./types";
+import type { MobileTarget, Target } from "../../../config";
+import { genDirectoryPath } from "../layout";
+import type { CompletenessResult } from "../types";
 
 /**
  * Required top-level entries per mobile `gen/<platform>` tree (Tauri 2.9.x scaffolding).
  * A partial init (tauri#13902) can leave some of these absent — `completeness` checks
  * the required-file SET, not mere directory existence.
  */
-const REQUIRED_FILES: Readonly<Record<"ios" | "android", readonly string[]>> = {
+const REQUIRED_FILES: Readonly<Record<MobileTarget, readonly string[]>> = {
   ios: ["project.yml", "Assets.xcassets", "Sources", "ExportOptions.plist"],
   android: [
     "build.gradle.kts",
@@ -21,20 +22,6 @@ const REQUIRED_FILES: Readonly<Record<"ios" | "android", readonly string[]>> = {
     "app/src/main/AndroidManifest.xml"
   ]
 };
-
-/**
- * The `gen/<platform>` subdirectory name Tauri uses for a mobile target (`"apple"` for iOS).
- *
- * @param target - A mobile packaging target.
- * @returns The `gen/<platform>` directory name.
- * @example
- * ```ts
- * genPlatformDirectoryName("ios"); // "apple"
- * ```
- */
-function genPlatformDirectoryName(target: "ios" | "android"): "apple" | "android" {
-  return target === "ios" ? "apple" : "android";
-}
 
 /**
  * Returns the required-file set for a mobile platform — consumed by `doctor` and by
@@ -47,7 +34,7 @@ function genPlatformDirectoryName(target: "ios" | "android"): "apple" | "android
  * requiredFiles("android"); // ["build.gradle.kts", "settings.gradle.kts", ...]
  * ```
  */
-export function requiredFiles(platform: "ios" | "android"): readonly string[] {
+export function requiredFiles(platform: MobileTarget): readonly string[] {
   return REQUIRED_FILES[platform];
 }
 
@@ -70,12 +57,7 @@ export function completeness(projectDirectory: string, target: Target): Complete
     return { status: "not-applicable" };
   }
 
-  const genDirectory = path.join(
-    projectDirectory,
-    "src-tauri",
-    "gen",
-    genPlatformDirectoryName(target)
-  );
+  const genDirectory = genDirectoryPath(projectDirectory, target);
   if (!existsSync(genDirectory)) {
     return { status: "not-initialized" };
   }

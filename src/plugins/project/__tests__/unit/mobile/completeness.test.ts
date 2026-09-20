@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { completeness, requiredFiles } from "../../completeness";
+import { completeness, requiredFiles } from "../../../mobile/completeness";
 
 describe("requiredFiles", () => {
   it("returns a non-empty required set for ios", () => {

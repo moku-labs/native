@@ -1,6 +1,9 @@
 /**
  * @file tauri plugin — API factory: composes resolve + argv + spawn + stream + errors + scrub + dev.
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
+import type { TauriRunner } from "../../config";
 import { buildArgv, devArgv, iconArgv, infoArgv, mobileInitArgv } from "./argv";
 import { fetchReadinessProbe, startDev } from "./dev";
 import { classify } from "./errors";
@@ -35,7 +38,7 @@ export function createTauriApi(ctx: TauriContext): Api {
    * const { nodePath, tauriJsPath } = resolvePaths();
    * ```
    */
-  function resolvePaths(): { nodePath: string; tauriJsPath: string } {
+  function resolvePaths(): TauriRunner {
     const nodePath = resolveNodePath({
       nodePath: ctx.config.nodePath,
       pathEnv: ctx.env.get("PATH")
@@ -45,8 +48,28 @@ export function createTauriApi(ctx: TauriContext): Api {
   }
 
   /**
+   * Resolves the cwd a one-shot verb runs in: the generated project root once it
+   * exists, else the consumer's own cwd — `icon`/`version` legitimately run before
+   * `scaffold` has created `projectDir`, and spawning into a missing directory
+   * fails with a bare ENOENT instead of a `[native]` message. The long-lived
+   * `dev` verb is NOT covered: it always needs the generated project.
+   *
+   * @returns The directory the subprocess is spawned in.
+   * @example
+   * ```ts
+   * await spawnFn({ cmd, cwd: runCwd() });
+   * ```
+   */
+  function runCwd(): string {
+    const { projectDir } = ctx.global;
+    return existsSync(projectDir) ? projectDir : process.cwd();
+  }
+
+  /**
    * Runs a one-shot tauri CLI verb to completion: spawns, scrubs every output
    * line before it reaches a log/callback, and classifies a non-zero exit.
+   *
+   * A non-zero exit is classified from BOTH scrubbed streams, never stderr alone.
    *
    * @param cmd - The full `[nodePath, tauriJsPath, ...]` argv to spawn.
    * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed).
@@ -85,13 +108,18 @@ export function createTauriApi(ctx: TauriContext): Api {
       if (tick) hooks?.onTick?.(tick);
     };
 
-    const result = await spawnFn({ cmd, cwd: ctx.global.projectDir, onLine: handleLine });
+    const result = await spawnFn({ cmd, cwd: runCwd(), onLine: handleLine });
     const durationMs = Date.now() - startedAt;
     const scrubbedStdout = scrub(result.stdout);
     const scrubbedStderr = scrub(result.stderr);
 
     if (result.code !== 0) {
-      throw classify(result.code, scrubbedStderr);
+      // Both streams: xcodebuild writes the real cause to stdout and leaves stderr
+      // holding only tauri's one-line `failed to build with xcodebuild` wrapper.
+      const scrubbedOutput = [scrubbedStdout, scrubbedStderr]
+        .filter(stream => stream.length > 0)
+        .join("\n");
+      throw classify(result.code, scrubbedOutput);
     }
     return { code: 0, stdout: scrubbedStdout, stderr: scrubbedStderr, durationMs };
   }
@@ -110,26 +138,31 @@ export function createTauriApi(ctx: TauriContext): Api {
      */
     async icon(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(iconArgv(nodePath, tauriJsPath, opts.source));
+      const outputDirectory = path.resolve(ctx.global.projectDir, "src-tauri", "icons");
+      return run(iconArgv(nodePath, tauriJsPath, opts.source, outputDirectory));
     },
 
     /**
      * Runs `tauri build` / `tauri ios|android build` for the given target,
      * streaming scrubbed output and parsed compile ticks through the callbacks.
      *
-     * @param opts - Build options (target + optional progress callbacks).
+     * @param opts - Build options (target, artifact flavour, progress callbacks).
      * @param opts.target - Packaging target.
+     * @param opts.simulator - iOS: build the host's simulator slice instead of a device archive.
+     * @param opts.exportMethod - iOS device builds: the `--export-method` to archive with.
+     * @param opts.aab - Android: emit a store bundle instead of the default installable APK.
      * @param opts.onTick - Called with parsed compile progress ("Compiling crate N/M").
      * @param opts.onOutput - Called with each scrubbed output line.
      * @returns The completed run's result.
      * @example
      * ```ts
-     * await app.tauri.build({ target: "macos", onTick: (t) => ctx.log.info("tick", t) });
+     * await app.tauri.build({ target: "ios", simulator: true, onOutput: line => ctx.log.info(line) });
      * ```
      */
     async build(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(buildArgv(nodePath, tauriJsPath, opts.target), {
+      // `config.arch` is the injectable host arch: undefined lets buildArgv read process.arch.
+      return run(buildArgv(nodePath, tauriJsPath, opts, ctx.config.arch), {
         onOutput: opts.onOutput,
         onTick: opts.onTick
       });
@@ -140,16 +173,16 @@ export function createTauriApi(ctx: TauriContext): Api {
      * check `project.completeness()` is `"not-initialized"` before calling this.
      *
      * @param opts - Mobile init options.
-     * @param opts.platform - Mobile platform to initialize.
+     * @param opts.target - Mobile target to initialize.
      * @returns The completed run's result.
      * @example
      * ```ts
-     * await app.tauri.mobileInit({ platform: "ios" });
+     * await app.tauri.mobileInit({ target: "ios" });
      * ```
      */
     async mobileInit(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(mobileInitArgv(nodePath, tauriJsPath, opts.platform));
+      return run(mobileInitArgv(nodePath, tauriJsPath, opts.target));
     },
 
     /**
@@ -176,7 +209,7 @@ export function createTauriApi(ctx: TauriContext): Api {
         );
       }
       const { nodePath, tauriJsPath } = resolvePaths();
-      const url = ctx.global.web.dev.url;
+      const url = ctx.global.web.devUrl;
       /**
        * Scrubs one raw dev-process output line before it can reach any log or
        * consumer callback — the SAME pipeline posture as `run()`'s one-shot verbs.
@@ -236,28 +269,50 @@ export function createTauriApi(ctx: TauriContext): Api {
         .catch(() => {
           // Swallow here — callers observe `handle.exited`/`handle.ready` directly.
         });
+      handle.ready.catch(() => {
+        // Parked like `exited`: a readiness timeout (or a dev process that died first) must
+        // not surface as an unhandled rejection for a caller that only awaits `exited`.
+      });
       return Promise.resolve(handle);
     },
 
     /**
      * Probes CLI presence/version via `tauri info` — used by `doctor`.
      *
-     * @returns The parsed CLI version, or `null` when the CLI can't be invoked.
+     * @returns The parsed CLI version, or `undefined` when the CLI can't be invoked.
      * @example
      * ```ts
-     * const version = await app.tauri.version();
+     * const version = await app.tauri.getVersion();
      * ```
      */
-    async version() {
+    async getVersion() {
       try {
         const { nodePath, tauriJsPath } = resolvePaths();
         const result = await run(infoArgv(nodePath, tauriJsPath));
         const match = CLI_VERSION_PATTERN.exec(result.stdout);
         return { cliVersion: match?.[1] ?? result.stdout.trim() };
       } catch {
-        // eslint-disable-next-line unicorn/no-null -- version() contract is `{ cliVersion } | null` (spec/02); `null` is the "CLI unavailable" signal, not a lazy fallback.
-        return null;
+        // Absence is `undefined` (D-014): an uninvokable CLI has no version to report,
+        // and a bare `return` is exactly that value.
+        return;
       }
+    },
+
+    /**
+     * Returns the resolved `node` + `tauri.js` pair every verb spawns with, so
+     * `project.patchMobile` can write the same invocation into the generated
+     * Xcode/Gradle build scripts (tauri emits a bare `node tauri`, which does
+     * not exist).
+     *
+     * @returns The resolved invocation prefix.
+     * @throws {Error} `[native]` when `node` or the tauri CLI cannot be resolved.
+     * @example
+     * ```ts
+     * await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
+     * ```
+     */
+    getRunner() {
+      return resolvePaths();
     }
   };
 }

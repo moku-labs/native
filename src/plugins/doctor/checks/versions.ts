@@ -3,7 +3,6 @@
  * ranges (major-version skew only). Warn-only: a version skew is often still buildable.
  */
 import path from "node:path";
-import process from "node:process";
 import type { CheckResult } from "../types";
 import type { Check, CheckInput } from "./types";
 
@@ -42,7 +41,8 @@ function parseMajor(input: string): number | undefined {
  * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
-  const packageJsonPath = path.join(process.cwd(), "package.json");
+  // the same root web-script resolves — the consumer's own package.json, never src-tauri's.
+  const packageJsonPath = path.join(path.resolve(input.global.web.cwd ?? "."), "package.json");
 
   let raw: string;
   try {
@@ -70,7 +70,9 @@ async function run(input: CheckInput): Promise<CheckResult> {
 
   const declared = { ...pkg.dependencies, ...pkg.devDependencies };
   const skewed: string[] = [];
-  for (const row of input.project.registryRows()) {
+  for (const row of input.project.getRegistryRows()) {
+    // a row can be backed by a cargo feature instead of a plugin (tray) — nothing to skew.
+    if (!row.npmPackage || !row.crate || !row.crateRange) continue;
     const declaredVersion = declared[row.npmPackage];
     if (!declaredVersion) continue;
     const declaredMajor = parseMajor(declaredVersion);

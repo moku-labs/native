@@ -1,4 +1,3 @@
-/* eslint-disable unicorn/no-null -- mirrors tauri.version()'s real `{ cliVersion } | null` contract (D-014). */
 import { describe, expect, it, vi } from "vitest";
 import { tauriCliCheck } from "../../../checks/tauri-cli";
 import { createCheckInput } from "./fixtures";
@@ -11,9 +10,9 @@ describe("tauriCliCheck.appliesTo", () => {
 });
 
 describe("tauriCliCheck.run", () => {
-  it("fails when tauri.version() resolves null", async () => {
+  it("fails when tauri.getVersion() resolves undefined", async () => {
     const tauri = {
-      version: vi.fn(async (): Promise<{ cliVersion: string } | null> => null)
+      getVersion: vi.fn(async (): Promise<{ cliVersion: string } | undefined> => undefined)
     };
 
     const result = await tauriCliCheck.run(createCheckInput({ tauri }));
@@ -23,7 +22,7 @@ describe("tauriCliCheck.run", () => {
   });
 
   it("passes and reports the detected cli version", async () => {
-    const tauri = { version: vi.fn(async () => ({ cliVersion: "2.9.1" })) };
+    const tauri = { getVersion: vi.fn(async () => ({ cliVersion: "2.9.1" })) };
 
     const result = await tauriCliCheck.run(createCheckInput({ tauri }));
 

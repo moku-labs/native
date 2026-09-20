@@ -1,6 +1,7 @@
 /**
- * @file doctor plugin check — web.build/web.dev.command scripts exist, resolved from the
- * SAME cwd Tauri will use (web.cwd override honored). Necessary-not-sufficient (documented):
+ * @file doctor plugin check — web.build/web.devCommand scripts exist, resolved from the
+ * SAME root Tauri will use (`web.cwd` override honored, else the consumer root).
+ * Necessary-not-sufficient (documented):
  * this never executes the script, only confirms package.json declares it.
  */
 import path from "node:path";
@@ -14,18 +15,18 @@ type PackageJsonShape = {
 
 /**
  * Resolves the cwd Tauri will run `beforeBuildCommand`/`beforeDevCommand` from — the
- * `web.cwd` override when set (monorepo layouts), else the directory containing the
- * generated `tauri.conf.json` (`<projectDir>/src-tauri`).
+ * `web.cwd` override when set (monorepo layouts), else the consumer root the packager was
+ * invoked from. Never `src-tauri`: the generated tree has no `package.json` of its own.
  *
  * @param global - Frozen global framework config.
  * @returns The resolved absolute cwd.
  * @example
  * ```ts
- * resolveWebCwd(ctx.global); // "/repo/apps/web" or "/repo/.moku/tauri/src-tauri"
+ * resolveWebCwd(ctx.global); // "/repo/apps/web" or "/repo"
  * ```
  */
 function resolveWebCwd(global: CheckInput["global"]): string {
-  return global.web.cwd ? path.resolve(global.web.cwd) : path.join(global.projectDir, "src-tauri");
+  return path.resolve(global.web.cwd ?? ".");
 }
 
 /**
@@ -46,7 +47,7 @@ function extractScriptName(command: string): string | undefined {
 }
 
 /**
- * Confirms `web.build`/`web.dev.command` name scripts present in the resolved cwd's
+ * Confirms `web.build`/`web.devCommand` name scripts present in the resolved cwd's
  * `package.json`. Presence is necessary but not sufficient — the script itself is never
  * executed by this check.
  *
@@ -88,13 +89,13 @@ async function run(input: CheckInput): Promise<CheckResult> {
   }
 
   const buildScript = extractScriptName(input.global.web.build);
-  const devScript = extractScriptName(input.global.web.dev.command);
+  const devScript = extractScriptName(input.global.web.devCommand);
   const missing: string[] = [];
   if (!buildScript || !(buildScript in scripts)) {
     missing.push(`web.build ("${input.global.web.build}")`);
   }
   if (!devScript || !(devScript in scripts)) {
-    missing.push(`web.dev.command ("${input.global.web.dev.command}")`);
+    missing.push(`web.devCommand ("${input.global.web.devCommand}")`);
   }
 
   if (missing.length > 0) {
@@ -110,11 +111,11 @@ async function run(input: CheckInput): Promise<CheckResult> {
     id: "web-script",
     target: "host",
     status: "pass",
-    message: `[native] web.build/web.dev.command scripts resolved in ${packageJsonPath} (not executed).`
+    message: `[native] web.build/web.devCommand scripts resolved in ${packageJsonPath} (not executed).`
   };
 }
 
-/** web.build/web.dev.command script presence — resolved from Tauri's own cwd. */
+/** web.build/web.devCommand script presence — resolved from Tauri's own cwd. */
 export const webScriptCheck: Check = {
   id: "web-script",
   /**

@@ -111,7 +111,7 @@ describe("S17 — invalid config fails loudly at createApp", () => {
     );
   });
 
-  it("throws synchronously for an empty web.dev.url with an actionable suggestion", async () => {
+  it("throws synchronously for an empty web.devUrl with an actionable suggestion", async () => {
     const { projectDir, outDir } = await makeTempDirs();
 
     // Shallow config merge — an override of `web` supplies the whole object.
@@ -123,13 +123,14 @@ describe("S17 — invalid config fails loudly at createApp", () => {
           outDir,
           web: {
             build: "bun run build",
-            dev: { command: "bun run dev", url: "" },
+            devCommand: "bun run dev",
+            devUrl: "",
             dist: "dist"
           }
         }
       })
     ).toThrow(
-      "[native] web.dev.url is required.\n  Set config.web.dev.url to your dev server's URL."
+      "[native] web.devUrl is required.\n  Set config.web.devUrl to your dev server's URL."
     );
   });
 
@@ -142,7 +143,7 @@ describe("S17 — invalid config fails loudly at createApp", () => {
         ...VALID_APP_CONFIG,
         projectDir,
         outDir,
-        web: { build: "bun run build", dev: { command: "bun run dev", url: "" }, dist: "dist" }
+        web: { build: "bun run build", devCommand: "bun run dev", devUrl: "", dist: "dist" }
       }
     ];
 
@@ -212,11 +213,11 @@ describe("S18 — cross-plugin error propagation", () => {
     );
   });
 
-  it("S18b: a partial gen/android tree fails the scaffold gate before any subprocess runs", async () => {
+  it("S18b: a partial gen/android tree fails the codegen gate before any subprocess runs", async () => {
     const testApp = await makeApp();
 
     // Fabricate a PARTIAL tree: only the FIRST required file, read from the API at runtime.
-    const required = testApp.app.project.requiredFiles("android");
+    const required = testApp.app.project.getRequiredFiles({ target: "android" });
     const firstRequired = required[0];
     expect(firstRequired).toBeDefined();
     if (firstRequired === undefined) throw new Error("requiredFiles(android) is empty");
@@ -247,14 +248,15 @@ describe("S18 — cross-plugin error propagation", () => {
     // ...and no subprocess EVER ran (no mobileInit re-init of a partial tree — tauri#13902 posture).
     expect(testApp.spawnCalls).toHaveLength(0);
 
-    // The failure surfaced as a scaffold-phase error; codegen never started.
+    // The failure surfaced as a codegen-phase error (the gate lives in codegen, since
+    // `tauri android init --ci` needs the generated tauri.conf.json); icons never started.
     const phaseEvents = testApp.events.filter(event => event.name === "native:phase");
     expect(
       phaseEvents.some(
-        event => event.payload.phase === "scaffold" && event.payload.status === "error"
+        event => event.payload.phase === "codegen" && event.payload.status === "error"
       )
     ).toBe(true);
-    expect(phaseEvents.some(event => event.payload.phase === "codegen")).toBe(false);
+    expect(phaseEvents.some(event => event.payload.phase === "icons")).toBe(false);
   });
 });
 
@@ -351,12 +353,12 @@ describe("S19 — lifecycle edges", () => {
     );
 
     // The composed surface stays functional after stop — no held resources.
-    expect(firstApp.app.project.registryRows()).toHaveLength(5);
+    expect(firstApp.app.project.getRegistryRows()).toHaveLength(5);
 
     // A SECOND fresh app cycles just as cleanly — nothing leaked across app lifecycles.
     const secondApp = await makeApp();
     await expect(secondApp.app.start()).resolves.toBeUndefined();
     await expect(secondApp.app.stop()).resolves.toBeUndefined();
-    expect(secondApp.app.project.registryRows()).toHaveLength(5);
+    expect(secondApp.app.project.getRegistryRows()).toHaveLength(5);
   });
 });

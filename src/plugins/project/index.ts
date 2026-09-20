@@ -1,9 +1,11 @@
 import { createPlugin } from "../../config";
-import { createProjectApi, validateProjectConfig } from "./api";
+import { createProjectApi } from "./api";
+import { validateProjectConfig } from "./validate";
 
 /**
- * Complex tier — capability registry + .moku/tauri generators + write-if-changed writer +
- * mobile init-once-then-patch (Android signing only in v1) + clean.
+ * Complex tier — capability registry + generators/ + write-if-changed writer + the mobile/
+ * sub-domain (completeness gate, Android signing block, runner-command rewrite) + the
+ * guarded clean.
  *
  * @see README.md
  * @example

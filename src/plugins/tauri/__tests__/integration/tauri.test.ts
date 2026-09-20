@@ -3,9 +3,9 @@
    Node-mirroring reconciliation — not a lazy `null` fallback. */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import { TauriError } from "../../errors";
 import { tauriPlugin } from "../../index";
 import type { SpawnFn } from "../../types";
-import { TauriError } from "../../types";
 
 // Scoped harness: composes ONLY the tauri plugin (depends: []), so this test
 // never depends on sibling plugins (project/build/doctor/cli) being implemented.
@@ -23,6 +23,15 @@ const spawnSigningFailure: SpawnFn = async () => ({
   stdout: "",
   stderr: "error: codesign failed: no identity found in keychain"
 });
+
+/**
+ * The two simulator hosts, pinned so no assertion reads the real `process.arch`: Tauri
+ * names the Intel simulator slice `x86_64` and every other one `<arch>-sim`.
+ */
+const SIMULATOR_HOSTS = [
+  { arch: "arm64", rustTarget: "aarch64-sim" },
+  { arch: "x64", rustTarget: "x86_64" }
+] as const;
 
 /** Fake dev-verb spawn: resolves with a synthetic SIGTERM exit once the caller aborts. */
 const spawnAbortsToSigterm: SpawnFn = opts =>
@@ -67,6 +76,48 @@ describe("tauri plugin integration", () => {
     await app.stop();
   });
 
+  it.each(
+    SIMULATOR_HOSTS
+  )("build() carries the simulator option and the injected $arch arch through to the spawned argv", async ({
+    arch,
+    rustTarget
+  }) => {
+    const calls: Array<readonly string[]> = [];
+    const spawnRecording: SpawnFn = async opts => {
+      calls.push(opts.cmd);
+      return { code: 0, signal: null, stdout: "built", stderr: "" };
+    };
+    const app = createApp({
+      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node", arch } }
+    });
+    await app.start();
+
+    await app.tauri.build({ target: "ios", simulator: true });
+
+    expect(calls[0]?.slice(2)).toEqual(["ios", "build", "--ci", "--target", rustTarget]);
+
+    await app.stop();
+  });
+
+  it("runner() exposes the same invocation prefix every verb spawns with", async () => {
+    const calls: Array<readonly string[]> = [];
+    const spawnRecording: SpawnFn = async opts => {
+      calls.push(opts.cmd);
+      return { code: 0, signal: null, stdout: "", stderr: "" };
+    };
+    const app = createApp({
+      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node" } }
+    });
+    await app.start();
+
+    await app.tauri.mobileInit({ target: "ios" });
+    const runner = app.tauri.getRunner();
+
+    expect([runner.nodePath, runner.tauriJsPath]).toEqual(calls[0]?.slice(0, 2));
+
+    await app.stop();
+  });
+
   it("dev() lifecycle: installs signal handlers, stop() group-kills and removes them", async () => {
     const onSignal = vi.fn();
     const offSignal = vi.fn();
@@ -93,6 +144,9 @@ describe("tauri plugin integration", () => {
     await app.start();
 
     const handle = await app.tauri.dev({ target: "macos" });
+    handle.ready.catch(() => {
+      // Readiness is irrelevant here — the probe targets a URL nothing serves.
+    });
     expect(onSignal).toHaveBeenCalledWith("SIGINT", expect.any(Function));
     expect(onSignal).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
 
@@ -114,6 +168,9 @@ describe("tauri plugin integration", () => {
     await app.start();
 
     const handle = await app.tauri.dev({ target: "macos" });
+    handle.ready.catch(() => {
+      // Readiness is irrelevant here — the probe targets a URL nothing serves.
+    });
     await expect(app.tauri.dev({ target: "macos" })).rejects.toThrow(
       /\[native\] tauri dev already running/
     );

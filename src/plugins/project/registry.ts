@@ -6,9 +6,10 @@ import type { RegistryRow, ResolvedCapability, TauriConfFragment } from "./types
 
 /**
  * The five v1 capability registry rows (spike (a), Tauri 2.9.x source-verified 2026-07-03).
- * `tray` ships as a core Tauri capability (no dedicated plugin crate/package) — it is
- * modeled here as a plugin-shaped row for registry uniformity across the pipeline; its
- * `confidence: "low"` flags that divergence from the other four real official plugins.
+ * Four rows are backed by a real official Tauri plugin (crate + npm package + Rust init);
+ * `tray` is a core Tauri CARGO FEATURE — it carries no crate, no npm package and no Rust
+ * init, only `cargoFeatures: ["tray-icon"]`, and its `confidence: "low"` flags that
+ * divergence from the other four.
  */
 const REGISTRY: readonly RegistryRow[] = [
   {
@@ -18,6 +19,7 @@ const REGISTRY: readonly RegistryRow[] = [
     crateRange: "^2",
     npmRange: "^2",
     rustInit: "tauri_plugin_store::Builder::default().build()",
+    cargoFeatures: [],
     permissions: ["store:default"],
     platforms: ["macos", "windows", "linux", "ios", "android"],
     confidence: "high"
@@ -29,6 +31,7 @@ const REGISTRY: readonly RegistryRow[] = [
     crateRange: "^2",
     npmRange: "^2",
     rustInit: "tauri_plugin_notification::init()",
+    cargoFeatures: [],
     permissions: ["notification:default"],
     platforms: ["macos", "windows", "linux", "ios", "android"],
     confidence: "high"
@@ -40,18 +43,28 @@ const REGISTRY: readonly RegistryRow[] = [
     crateRange: "^2",
     npmRange: "^2",
     rustInit: "tauri_plugin_clipboard_manager::init()",
+    cargoFeatures: [],
     permissions: ["clipboard-manager:allow-read-text", "clipboard-manager:allow-write-text"],
     platforms: ["macos", "windows", "linux", "ios", "android"],
     confidence: "high"
   },
   {
     name: "tray",
-    npmPackage: "@tauri-apps/plugin-tray",
-    crate: "tauri-plugin-tray",
-    crateRange: "^2",
-    npmRange: "^2",
-    rustInit: "",
-    permissions: ["core:tray:default"],
+    // No crate, no npm package, no Rust init: tray is a core Tauri cargo FEATURE.
+    cargoFeatures: ["tray-icon"],
+    // A tray needs more than `core:tray:default`: building the icon calls `Image`, the
+    // menu calls `Menu`, and `@moku-labs/system` defaults the icon to `defaultWindowIcon()`,
+    // whose command `plugin:app|default_window_icon` is NOT in `core:default` — without the
+    // explicit grant a real shell rejects it with "not allowed by ACL". The menu, image and
+    // resources ids are already inside `core:default`; they are spelled out anyway so the
+    // row documents the whole surface tray actually touches.
+    permissions: [
+      "core:tray:default",
+      "core:menu:default",
+      "core:image:default",
+      "core:resources:default",
+      "core:app:allow-default-window-icon"
+    ],
     // Desktop-only (spike a) — tray has no mobile packaging artifact, so it is filtered
     // out of every mobile target-set purely by this platforms list.
     platforms: ["macos", "windows", "linux"],
@@ -64,6 +77,7 @@ const REGISTRY: readonly RegistryRow[] = [
     crateRange: "^2",
     npmRange: "^2",
     rustInit: "tauri_plugin_deep_link::init()",
+    cargoFeatures: [],
     permissions: ["deep-link:default"],
     platforms: ["macos", "windows", "linux", "ios", "android"],
     confidence: "high"
@@ -125,7 +139,8 @@ export function assertKnownCapabilities(system: ReadonlyArray<{ name: string }>)
 /**
  * Builds the tauri.conf.json `plugins.<name>` contribution for a resolved row. Only
  * deep-link carries consumer-supplied config in v1 (D-011: custom-scheme-only); every
- * other row contributes an empty config block.
+ * other row contributes an EMPTY fragment, which the tauri-conf generator drops instead
+ * of writing — those plugins deserialize their config slot as `unit` and reject a map.
  *
  * @param row - The registry row being resolved.
  * @param config - Optional per-capability packaging parameters from `Config["capabilities"]`.
@@ -133,7 +148,8 @@ export function assertKnownCapabilities(system: ReadonlyArray<{ name: string }>)
  * @throws {Error} When resolving deep-link without a non-empty `scheme`.
  * @example
  * ```ts
- * buildConfFragment(deepLinkRow, { mode: "scheme", scheme: "myapp" }); // { schemes: ["myapp"] }
+ * buildConfFragment(deepLinkRow, { mode: "scheme", scheme: "myapp" });
+ * // { desktop: { schemes: ["myapp"] }, mobile: [{ scheme: ["myapp"], appLink: false }] }
  * ```
  */
 function buildConfFragment(
@@ -148,7 +164,9 @@ function buildConfFragment(
       '[native] deep-link capability requires a non-empty scheme.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
     );
   }
-  return { schemes: [scheme] };
+  // The plugin reads desktop and mobile from separate keys; `appLink: false` keeps v1
+  // custom-scheme-only (D-011) — universal links would need an associated-domains file.
+  return { desktop: { schemes: [scheme] }, mobile: [{ scheme: [scheme], appLink: false }] };
 }
 
 /**
@@ -183,12 +201,12 @@ export function resolve<K extends keyof CapabilityConfigMap>(
  * Registry data consumed by `doctor`: pinned crate/npm ranges, mobile required-file
  * sets (via `requiredFiles`), and per-row confidence markers.
  *
- * @returns A frozen copy of every registry row.
+ * @returns A fresh copy of every registry row — callers can never mutate the registry.
  * @example
  * ```ts
  * registryRows().map(row => row.name); // ["store", "notification", ...]
  * ```
  */
 export function registryRows(): ReadonlyArray<RegistryRow> {
-  return REGISTRY;
+  return REGISTRY.map(row => ({ ...row }));
 }

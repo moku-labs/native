@@ -1,71 +1,96 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Config as GlobalConfig, Target, TauriRunner } from "../../../../config";
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
+import { bundleLayout } from "../../../project/layout";
+import { comparableRealPath } from "../../../project/paths";
+import type { CompletenessResult } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
+import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { bundleRoot } from "../../collect";
 import {
+  ICON_SOURCE_STAMP_FILE,
   runCodegen,
   runCompileAndBundle,
   runIcons,
   runPipeline,
+  runPrepare,
   runScaffold
 } from "../../pipeline";
-import type { BuildContext } from "../../types";
+import type { BuildContext, BuildDeps } from "../../types";
 
-/** Minimal project-api mock — only the methods the scaffold/codegen phases call. */
-function createProjectMock() {
+/** The resolved runner pair the tauri mock hands to `project.patchMobile`. */
+const RUNNER: TauriRunner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/tauri.js" };
+
+/** A successful one-shot verb result. */
+const okResult = (): RunResult => ({ code: 0, stdout: "", stderr: "", durationMs: 1 });
+
+/** Minimal project-api mock — the four methods the prepare phases call. */
+function createProjectMock(iconSource: string) {
   return {
-    generate: vi.fn().mockResolvedValue({ written: [], unchanged: [], skipped: [] }),
-    completeness: vi.fn().mockReturnValue({ status: "complete" }),
-    patchMobile: vi.fn().mockResolvedValue({ patched: [], unchanged: [] })
+    generate: vi.fn(async () => ({ written: [], unchanged: [], skipped: [] })),
+    getBundleLayout: vi.fn((opts: { target: Target }) => bundleLayout(opts.target)),
+    getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
+    patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
+    ensureIconSource: vi.fn(async () => iconSource),
+    resolveDerivedPath: vi.fn((target: string) => comparableRealPath(target))
   };
 }
 
-/** Minimal tauri-api mock — only the methods the scaffold/compile phases call. */
+/** Minimal tauri-api mock — the four methods the codegen/icons/compile phases call. */
 function createTauriMock() {
   return {
-    mobileInit: vi.fn().mockResolvedValue({ code: 0, stdout: "", stderr: "", durationMs: 1 }),
-    build: vi.fn(
-      async (opts: {
-        onTick?: (tick: { crate: string }) => void;
-        onOutput?: (line: string) => void;
-      }) => {
-        opts.onTick?.({ crate: "demo" });
-        opts.onOutput?.("Bundling app.dmg");
-        return { code: 0, stdout: "", stderr: "", durationMs: 1 };
-      }
-    )
+    mobileInit: vi.fn(async (): Promise<RunResult> => okResult()),
+    icon: vi.fn(async (): Promise<RunResult> => okResult()),
+    getRunner: vi.fn((): TauriRunner => RUNNER),
+    build: vi.fn(async (opts: BuildOptions): Promise<RunResult> => {
+      opts.onTick?.({ crate: "demo" });
+      opts.onOutput?.("Bundling app.dmg");
+      return okResult();
+    })
   };
 }
 
 type ProjectMock = ReturnType<typeof createProjectMock>;
 type TauriMock = ReturnType<typeof createTauriMock>;
 
-/** Builds a mock `BuildContext` with fake `project`/`tauri` require targets and a spy emit. */
-function createMockCtx(overrides?: {
+/** Builds a mock `BuildContext` + `BuildDeps` pair with a spy `emit`. */
+function createMocks(overrides?: {
   projectDir?: string;
   outDir?: string;
+  iconSource?: string;
+  appIcon?: string;
+  signing?: GlobalConfig["signing"];
   project?: ProjectMock;
   tauri?: TauriMock;
-}): { ctx: BuildContext; emit: ReturnType<typeof vi.fn>; project: ProjectMock; tauri: TauriMock } {
-  const project = overrides?.project ?? createProjectMock();
+}): {
+  ctx: BuildContext;
+  deps: BuildDeps;
+  emit: ReturnType<typeof vi.fn>;
+  project: ProjectMock;
+  tauri: TauriMock;
+} {
+  const project =
+    overrides?.project ?? createProjectMock(overrides?.iconSource ?? "/icons/src.png");
   const tauri = overrides?.tauri ?? createTauriMock();
   const emit = vi.fn();
-  const requireFn = vi.fn();
-  requireFn.mockImplementation((plugin: { name: string }) =>
-    plugin.name === "project" ? project : tauri
-  );
 
   const ctx: BuildContext = {
     global: {
-      app: { name: "Test App", identifier: "com.example.testapp" },
+      app: {
+        name: "Test App",
+        identifier: "com.example.testapp",
+        ...(overrides?.appIcon === undefined ? {} : { icon: overrides.appIcon })
+      },
       web: {
         build: "bun run build",
-        dev: { command: "bun run dev", url: "https://x" },
+        devCommand: "bun run dev",
+        devUrl: "https://x",
         dist: "dist"
       },
       system: [],
@@ -73,7 +98,7 @@ function createMockCtx(overrides?: {
       targets: ["macos"],
       projectDir: overrides?.projectDir ?? "/unused",
       outDir: overrides?.outDir ?? "dist-native",
-      signing: {}
+      signing: overrides?.signing ?? {}
     },
     log: {
       info: vi.fn(),
@@ -86,11 +111,21 @@ function createMockCtx(overrides?: {
       reset: vi.fn(),
       clearSinks: vi.fn()
     },
-    emit,
-    require: requireFn
+    // build declares neither config nor state — core hands every plugin the empty objects.
+    config: {},
+    state: {},
+    emit
   };
 
-  return { ctx, emit, project, tauri };
+  return { ctx, deps: { project, tauri }, emit, project, tauri };
+}
+
+/** Projects the spy emit's calls into `"phase:status"` keys, in emission order. */
+function phaseKeys(emit: ReturnType<typeof vi.fn>): string[] {
+  return emit.mock.calls.map(call => {
+    const payload = call[1] as { phase: string; status: string };
+    return `${payload.phase}:${payload.status}`;
+  });
 }
 
 describe("runScaffold", () => {
@@ -104,97 +139,282 @@ describe("runScaffold", () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it("desktop: only ensures projectDir exists, never touches project/tauri", async () => {
+  it("only ensures projectDir exists — the mobile gate moved into codegen", async () => {
     const nestedDir = path.join(projectDir, "nested");
-    const { ctx, project, tauri } = createMockCtx({ projectDir: nestedDir });
+    const { ctx, project, tauri } = createMocks({ projectDir: nestedDir });
 
-    await runScaffold(ctx, "macos");
+    await runScaffold(ctx);
 
-    const { existsSync } = await import("node:fs");
     expect(existsSync(nestedDir)).toBe(true);
-    expect(project.completeness).not.toHaveBeenCalled();
-    expect(tauri.mobileInit).not.toHaveBeenCalled();
-  });
-
-  it("mobile not-initialized: initializes once via tauri.mobileInit, then re-checks", async () => {
-    const { ctx, project, tauri } = createMockCtx({ projectDir });
-    project.completeness
-      .mockReturnValueOnce({ status: "not-initialized" })
-      .mockReturnValueOnce({ status: "complete" });
-
-    await runScaffold(ctx, "android");
-
-    expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ platform: "android" });
-    expect(project.completeness).toHaveBeenCalledTimes(2);
-  });
-
-  it("mobile incomplete: fails fast with a [native] fix-it, never calling mobileInit", async () => {
-    const { ctx, project, tauri } = createMockCtx({ projectDir });
-    project.completeness.mockReturnValue({ status: "incomplete", missing: ["build.gradle.kts"] });
-
-    await expect(runScaffold(ctx, "android")).rejects.toThrow(
-      /^\[native\] android project tree is incomplete\.\n {2}Missing build\.gradle\.kts — run `native doctor`/
-    );
-    expect(tauri.mobileInit).not.toHaveBeenCalled();
-  });
-
-  it("mobile complete: succeeds without calling mobileInit", async () => {
-    const { ctx, tauri } = createMockCtx({ projectDir });
-
-    await expect(runScaffold(ctx, "ios")).resolves.toBeUndefined();
+    expect(project.getCompleteness).not.toHaveBeenCalled();
     expect(tauri.mobileInit).not.toHaveBeenCalled();
   });
 });
 
 describe("runCodegen", () => {
   it("desktop: calls project.generate only", async () => {
-    const { ctx, project } = createMockCtx();
+    const { ctx, deps, project, tauri } = createMocks();
 
-    await runCodegen(ctx, "macos");
+    const result = await runCodegen(ctx, deps, "macos");
 
+    expect(result).toEqual({ mobileInitRan: false });
     expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "macos" });
     expect(project.patchMobile).not.toHaveBeenCalled();
+    expect(tauri.mobileInit).not.toHaveBeenCalled();
   });
 
-  it("mobile: calls project.generate then project.patchMobile", async () => {
-    const { ctx, project } = createMockCtx();
+  it("mobile not-initialized: generate runs BEFORE mobileInit, then patchMobile gets the runner", async () => {
+    const { ctx, deps, project, tauri } = createMocks();
+    project.getCompleteness
+      .mockReturnValueOnce({ status: "not-initialized" })
+      .mockReturnValueOnce({ status: "complete" });
 
-    await runCodegen(ctx, "android");
+    const result = await runCodegen(ctx, deps, "ios");
 
-    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "android" });
-    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({ target: "android" });
+    expect(result).toEqual({ mobileInitRan: true });
+    // `tauri ios init --ci` needs tauri.conf.json on disk first: generate strictly first.
+    const generateOrder = project.generate.mock.invocationCallOrder[0] ?? 0;
+    const initOrder = tauri.mobileInit.mock.invocationCallOrder[0] ?? 0;
+    const patchOrder = project.patchMobile.mock.invocationCallOrder[0] ?? 0;
+    expect(generateOrder).toBeLessThan(initOrder);
+    expect(initOrder).toBeLessThan(patchOrder);
+    expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ target: "ios" });
+    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
+      target: "ios",
+      runner: RUNNER
+    });
+  });
+
+  it("mobile complete: skips mobileInit but still re-applies the idempotent patch pass", async () => {
+    const { ctx, deps, project, tauri } = createMocks();
+
+    const result = await runCodegen(ctx, deps, "android");
+
+    expect(result).toEqual({ mobileInitRan: false });
+    expect(tauri.mobileInit).not.toHaveBeenCalled();
+    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      runner: RUNNER
+    });
+  });
+
+  it("mobile incomplete: fails with a [native] fix-it, never patching", async () => {
+    const { ctx, deps, project, tauri } = createMocks();
+    project.getCompleteness.mockReturnValue({
+      status: "incomplete",
+      missing: ["build.gradle.kts"]
+    });
+
+    await expect(runCodegen(ctx, deps, "android")).rejects.toThrow(
+      /^\[native\] android project tree is incomplete\.\n {2}Missing build\.gradle\.kts — run `native doctor`/
+    );
+    expect(tauri.mobileInit).not.toHaveBeenCalled();
+    expect(project.patchMobile).not.toHaveBeenCalled();
   });
 });
 
 describe("runIcons", () => {
-  it("always reports done/skipped (no icon-source config field exists in v1)", async () => {
-    await expect(runIcons()).resolves.toEqual({ detail: "skipped" });
+  let projectDir: string;
+  let iconSource: string;
+
+  /** The stamp `runIcons` writes next to the generated set to record what it generated from. */
+  const stampPath = (): string =>
+    path.join(projectDir, "src-tauri", "icons", ICON_SOURCE_STAMP_FILE);
+
+  /** Writes the generated `src-tauri/icons/icon.png`, newer than the source by an hour. */
+  async function seedGeneratedIconNewerThanSource(): Promise<void> {
+    const iconsDir = path.join(projectDir, "src-tauri", "icons");
+    await mkdir(iconsDir, { recursive: true });
+    await writeFile(path.join(iconsDir, "icon.png"), "generated", "utf8");
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    await utimes(iconSource, anHourAgo, anHourAgo);
+  }
+
+  /** Records `source` as the icon set's origin — what a previous generating pass would leave. */
+  async function seedStampFor(source: string): Promise<void> {
+    const stats = await stat(source);
+    await writeFile(
+      stampPath(),
+      [path.resolve(source), stats.size, stats.mtimeMs].join("\n"),
+      "utf8"
+    );
+  }
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-icons-"));
+    iconSource = path.join(projectDir, "app-icon.png");
+    await writeFile(iconSource, "source", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+  });
+
+  it("up to date: the stamp matches the source and no mobileInit → never spawns", async () => {
+    await seedGeneratedIconNewerThanSource();
+    await seedStampFor(iconSource);
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "up to date"
+    });
+    expect(tauri.icon).not.toHaveBeenCalled();
+  });
+
+  it("regenerates when the generated set carries no stamp, however new it is", async () => {
+    await seedGeneratedIconNewerThanSource();
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: iconSource });
+  });
+
+  it("regenerates when app.icon switched to an OLDER file than the generated set", async () => {
+    await seedGeneratedIconNewerThanSource();
+    const olderIcon = path.join(projectDir, "older-icon.png");
+    await writeFile(olderIcon, "older", "utf8");
+    const lastYear = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    await utimes(olderIcon, lastYear, lastYear);
+    await seedStampFor(iconSource);
+    const { ctx, deps, tauri } = createMocks({
+      projectDir,
+      iconSource: olderIcon,
+      appIcon: olderIcon
+    });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: olderIcon });
+  });
+
+  it("writes the stamp after generating, so the next pass is a no-op", async () => {
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await runIcons(ctx, deps, { mobileInitRan: false });
+    // The real `tauri icon` writes the set; the mock does not, so seed it here.
+    await mkdir(path.join(projectDir, "src-tauri", "icons"), { recursive: true });
+    await writeFile(path.join(projectDir, "src-tauri", "icons", "icon.png"), "generated", "utf8");
+
+    const stamp = await readFile(stampPath(), "utf8");
+    expect(stamp).toContain(path.resolve(iconSource));
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "up to date"
+    });
+    expect(tauri.icon).toHaveBeenCalledOnce();
+  });
+
+  it("generated: a configured app.icon with no generated set yet regenerates from the source", async () => {
+    const { ctx, deps, tauri, project } = createMocks({
+      projectDir,
+      iconSource,
+      appIcon: iconSource
+    });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(project.ensureIconSource).toHaveBeenCalledOnce();
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: iconSource });
+  });
+
+  it("placeholder: no app.icon configured → the generated placeholder source is reported", async () => {
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: false })).resolves.toEqual({
+      detail: "placeholder"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: iconSource });
+  });
+
+  it("mobileInit in this pass always regenerates, even with an up-to-date icon set", async () => {
+    await seedGeneratedIconNewerThanSource();
+    const { ctx, deps, tauri } = createMocks({ projectDir, iconSource, appIcon: iconSource });
+
+    await expect(runIcons(ctx, deps, { mobileInitRan: true })).resolves.toEqual({
+      detail: "generated"
+    });
+    expect(tauri.icon).toHaveBeenCalledExactlyOnceWith({ source: iconSource });
   });
 });
 
 describe("runCompileAndBundle", () => {
-  it("splits compile/bundle durations at the detected bundling transition line", async () => {
-    const { ctx, tauri } = createMockCtx();
+  it("emits compile done + bundle start LIVE, at the transition line", async () => {
+    const tauri = createTauriMock();
+    let keysAtTransition: string[] = [];
+    const { ctx, deps, emit } = createMocks({ tauri });
+    tauri.build.mockImplementation(async opts => {
+      opts.onTick?.({ crate: "demo", index: 1, total: 2 });
+      opts.onOutput?.("Bundling application (App.dmg)");
+      keysAtTransition = phaseKeys(emit);
+      return okResult();
+    });
 
-    const result = await runCompileAndBundle(ctx, "macos");
+    const result = await runCompileAndBundle(ctx, deps, { target: "macos" });
 
-    expect(tauri.build).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ target: "macos" })
-    );
+    // The transition events were already emitted while the subprocess was still running.
+    expect(keysAtTransition).toEqual([
+      "compile:start",
+      "compile:progress",
+      "compile:done",
+      "bundle:start"
+    ]);
+    expect(phaseKeys(emit)).toEqual([
+      "compile:start",
+      "compile:progress",
+      "compile:done",
+      "bundle:start",
+      "bundle:done"
+    ]);
     expect(result.compileDurationMs).toBeGreaterThanOrEqual(0);
     expect(result.bundleDurationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("emits compile progress ticks and a zero-duration bundle fallback when no transition line appears", async () => {
+  it("stops emitting compile progress once the bundle phase is open", async () => {
+    const tauri = createTauriMock();
+    tauri.build.mockImplementation(async opts => {
+      opts.onTick?.({ crate: "before" });
+      opts.onOutput?.("Bundling application (App.dmg)");
+      opts.onTick?.({ crate: "after" });
+      return okResult();
+    });
+    const { ctx, deps, emit } = createMocks({ tauri });
+
+    await runCompileAndBundle(ctx, deps, { target: "macos" });
+
+    expect(phaseKeys(emit)).toEqual([
+      "compile:start",
+      "compile:progress",
+      "compile:done",
+      "bundle:start",
+      "bundle:done"
+    ]);
+    expect(emit).not.toHaveBeenCalledWith(
+      "native:phase",
+      expect.objectContaining({ detail: "Compiling after" })
+    );
+  });
+
+  it("no transition line: compile done, bundle start and a zero-duration bundle done after exit", async () => {
     const tauri = createTauriMock();
     tauri.build.mockImplementation(async opts => {
       opts.onTick?.({ crate: "demo" });
-      return { code: 0, stdout: "", stderr: "", durationMs: 1 };
+      return okResult();
     });
-    const { ctx, emit } = createMockCtx({ tauri });
+    const { ctx, deps, emit } = createMocks({ tauri });
 
-    const result = await runCompileAndBundle(ctx, "macos");
+    const result = await runCompileAndBundle(ctx, deps, { target: "macos" });
 
+    expect(phaseKeys(emit)).toEqual([
+      "compile:start",
+      "compile:progress",
+      "compile:done",
+      "bundle:start",
+      "bundle:done"
+    ]);
     expect(emit).toHaveBeenCalledWith("native:phase", {
       target: "macos",
       phase: "compile",
@@ -204,19 +424,80 @@ describe("runCompileAndBundle", () => {
     expect(result.bundleDurationMs).toBe(0);
   });
 
-  it("a build failure emits a compile error and never emits a bundle event", async () => {
+  it("a failure before the transition is reported on compile", async () => {
     const tauri = createTauriMock();
     tauri.build.mockRejectedValue(new Error("[native] tauri compile failed"));
-    const { ctx, emit } = createMockCtx({ tauri });
+    const { ctx, deps, emit } = createMocks({ tauri });
 
-    await expect(runCompileAndBundle(ctx, "macos")).rejects.toThrow(
+    await expect(runCompileAndBundle(ctx, deps, { target: "macos" })).rejects.toThrow(
       "[native] tauri compile failed"
     );
+    expect(phaseKeys(emit)).toEqual(["compile:start", "compile:error"]);
+  });
 
-    const phasesSeen = emit.mock.calls.map(call => (call[1] as { phase: string }).phase);
-    expect(phasesSeen).toEqual(["compile", "compile"]);
-    const statusesSeen = emit.mock.calls.map(call => (call[1] as { status: string }).status);
-    expect(statusesSeen).toEqual(["start", "error"]);
+  it("a failure after the transition is reported on the open bundle phase", async () => {
+    const tauri = createTauriMock();
+    tauri.build.mockImplementation(async opts => {
+      opts.onOutput?.("Bundling application (App.dmg)");
+      throw new Error("[native] tauri bundling failed");
+    });
+    const { ctx, deps, emit } = createMocks({ tauri });
+
+    await expect(runCompileAndBundle(ctx, deps, { target: "macos" })).rejects.toThrow(
+      "[native] tauri bundling failed"
+    );
+    expect(phaseKeys(emit)).toEqual([
+      "compile:start",
+      "compile:done",
+      "bundle:start",
+      "bundle:error"
+    ]);
+  });
+
+  it("forwards simulator/aab and the configured Apple export method to tauri.build", async () => {
+    const { ctx, deps, tauri } = createMocks({
+      signing: { apple: { exportMethod: "release-testing" } }
+    });
+
+    await runCompileAndBundle(ctx, deps, { target: "ios", simulator: true, aab: false });
+
+    expect(tauri.build).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "ios",
+        simulator: true,
+        aab: false,
+        exportMethod: "release-testing"
+      })
+    );
+  });
+});
+
+describe("runPrepare", () => {
+  let projectDir: string;
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-prepare-"));
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+  });
+
+  it("runs scaffold → codegen → icons only, never the build verb", async () => {
+    const { ctx, deps, emit, tauri } = createMocks({ projectDir });
+
+    const phases = await runPrepare(ctx, deps, "macos");
+
+    expect(phases.map(phase => phase.phase)).toEqual(["scaffold", "codegen", "icons"]);
+    expect(phaseKeys(emit)).toEqual([
+      "scaffold:start",
+      "scaffold:done",
+      "codegen:start",
+      "codegen:done",
+      "icons:start",
+      "icons:done"
+    ]);
+    expect(tauri.build).not.toHaveBeenCalled();
   });
 });
 
@@ -234,14 +515,14 @@ describe("runPipeline", () => {
     await rm(outDir, { recursive: true, force: true });
   });
 
-  it("runs every phase in PHASE_ORDER, records timings, and emits native:complete", async () => {
-    const dmgDir = path.join(bundleRoot(projectDir, "macos"), "bundle", "dmg");
+  it("runs every phase in PHASE_ORDER, records six timings, and emits native:complete", async () => {
+    const dmgDir = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
     await mkdir(dmgDir, { recursive: true });
     await writeFile(path.join(dmgDir, "App.dmg"), "bytes", "utf8");
 
-    const { ctx, emit } = createMockCtx({ projectDir, outDir });
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
 
-    const result = await runPipeline(ctx, "macos");
+    const result = await runPipeline(ctx, deps, { target: "macos" });
 
     expect(result.phases.map(phase => phase.phase)).toEqual([...PHASE_ORDER]);
     for (const phase of result.phases) {
@@ -249,7 +530,6 @@ describe("runPipeline", () => {
     }
     expect(result.artifacts).toEqual([path.join(outDir, "macos", "App.dmg")]);
     expect(result.outPath).toBe(path.join(outDir, "macos"));
-
     expect(emit).toHaveBeenCalledWith(
       "native:complete",
       expect.objectContaining({
@@ -260,40 +540,65 @@ describe("runPipeline", () => {
     );
   });
 
-  it("stops at the first failing phase — later phases never start", async () => {
-    const { ctx, project, emit } = createMockCtx({ projectDir, outDir });
-    project.generate.mockRejectedValue(new Error("[native] codegen exploded"));
+  it("a simulator run collects the simulator .app instead of a device .ipa", async () => {
+    const simulatorApp = path.join(
+      bundleRoot(projectDir, bundleLayout("ios")),
+      "gen",
+      "apple",
+      "build",
+      "arm64-sim",
+      "Test App.app"
+    );
+    await mkdir(simulatorApp, { recursive: true });
+    await writeFile(path.join(simulatorApp, "Info.plist"), "plist", "utf8");
 
-    await expect(runPipeline(ctx, "macos")).rejects.toThrow("[native] codegen exploded");
+    const { ctx, deps } = createMocks({ projectDir, outDir });
 
-    const phasesStarted = emit.mock.calls
-      .filter(call => (call[1] as { status: string }).status === "start")
-      .map(call => (call[1] as { phase: string }).phase);
-    expect(phasesStarted).toEqual(["scaffold", "codegen"]);
+    const result = await runPipeline(ctx, deps, { target: "ios", simulator: true });
 
-    const phasesWithErrors = emit.mock.calls
-      .filter(call => (call[1] as { status: string }).status === "error")
-      .map(call => (call[1] as { phase: string }).phase);
-    expect(phasesWithErrors).toEqual(["codegen"]);
+    expect(result.artifacts).toEqual([path.join(outDir, "ios", "Test App.app")]);
+    expect(existsSync(path.join(outDir, "ios", "Test App.app", "Info.plist"))).toBe(true);
   });
 
-  it("propagates the mobile scaffold fix-it error before any codegen/compile work happens", async () => {
-    const { ctx, project, tauri, emit } = createMockCtx({ projectDir, outDir });
-    project.completeness.mockReturnValue({ status: "incomplete", missing: ["build.gradle.kts"] });
+  it("stops at the first failing phase — later phases never start", async () => {
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.generate.mockRejectedValue(new Error("[native] codegen exploded"));
 
-    await expect(runPipeline(ctx, "android")).rejects.toThrow(/project tree is incomplete/);
+    await expect(runPipeline(ctx, deps, { target: "macos" })).rejects.toThrow(
+      "[native] codegen exploded"
+    );
+    expect(phaseKeys(emit)).toEqual([
+      "scaffold:start",
+      "scaffold:done",
+      "codegen:start",
+      "codegen:error"
+    ]);
+  });
 
-    expect(project.generate).not.toHaveBeenCalled();
+  it("propagates the mobile completeness fix-it from codegen, before any compile work", async () => {
+    const { ctx, deps, project, tauri, emit } = createMocks({ projectDir, outDir });
+    project.getCompleteness.mockReturnValue({
+      status: "incomplete",
+      missing: ["build.gradle.kts"]
+    });
+
+    await expect(runPipeline(ctx, deps, { target: "android" })).rejects.toThrow(
+      /project tree is incomplete/
+    );
+
     expect(tauri.build).not.toHaveBeenCalled();
-    const phasesStarted = emit.mock.calls
-      .filter(call => (call[1] as { status: string }).status === "start")
-      .map(call => (call[1] as { phase: string }).phase);
-    expect(phasesStarted).toEqual(["scaffold"]);
+    expect(tauri.icon).not.toHaveBeenCalled();
+    expect(phaseKeys(emit)).toEqual([
+      "scaffold:start",
+      "scaffold:done",
+      "codegen:start",
+      "codegen:error"
+    ]);
   });
 });
 
-describe("projectPlugin/tauriPlugin identity used by the require mock", () => {
-  it("both plugin instances carry the names the mock dispatcher branches on", () => {
+describe("projectPlugin/tauriPlugin identity", () => {
+  it("both plugin instances carry the names the build plugin wires them in by", () => {
     expect(projectPlugin.name).toBe("project");
     expect(tauriPlugin.name).toBe("tauri");
   });

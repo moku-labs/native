@@ -173,18 +173,15 @@ describe("journey consumer workflows (S13–S16)", () => {
       await app.cli.build({ target: "macos" });
       expect(events.filter(event => event.name === "native:complete")).toHaveLength(1);
 
-      // tauri.conf.json: one plugins.<name> block per composed capability, with the
-      // deep-link scheme riding in its conf fragment (D-011).
+      // tauri.conf.json: a plugins.<name> block for the ONE composed capability that has
+      // config, with the deep-link scheme riding in its conf fragment. The other four take
+      // no config — Tauri deserializes `unit` there, so an empty block would abort startup.
       const confRaw = await readFile(path.join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
-      const conf = JSON.parse(confRaw) as { plugins: Record<string, { schemes?: string[] }> };
-      expect(Object.keys(conf.plugins).toSorted()).toEqual([
-        "clipboard-manager",
-        "deep-link",
-        "notification",
-        "store",
-        "tray"
-      ]);
-      expect(conf.plugins["deep-link"]?.schemes).toEqual(["myapp"]);
+      const conf = JSON.parse(confRaw) as {
+        plugins: Record<string, { desktop?: { schemes?: string[] } }>;
+      };
+      expect(Object.keys(conf.plugins)).toEqual(["deep-link"]);
+      expect(conf.plugins["deep-link"]?.desktop?.schemes).toEqual(["myapp"]);
 
       // capabilities/default.json: permission ids for all five capabilities — tray's
       // core:tray:default is present because macos is a desktop target.
@@ -196,9 +193,11 @@ describe("journey consumer workflows (S13–S16)", () => {
         platforms: string[];
         permissions: string[];
       };
-      expect(capabilityDoc.platforms).toEqual(["macos"]);
+      // Tauri's own platform id for macos is "macOS".
+      expect(capabilityDoc.platforms).toEqual(["macOS"]);
       expect(capabilityDoc.permissions).toEqual(
         expect.arrayContaining([
+          "core:default",
           "store:default",
           "notification:default",
           "clipboard-manager:allow-read-text",
@@ -229,12 +228,15 @@ describe("journey consumer workflows (S13–S16)", () => {
       expect(app.project.isKnownCapability("store")).toBe(true);
       expect(app.project.isKnownCapability("nope")).toBe(false);
       const resolved = app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" });
-      expect(resolved.conf).toEqual({ schemes: ["myapp"] });
+      expect(resolved.conf).toEqual({
+        desktop: { schemes: ["myapp"] },
+        mobile: [{ scheme: ["myapp"], appLink: false }]
+      });
       expect(resolved.permissions).toContain("deep-link:default");
 
       // Type-level: a bogus deep-link mode is rejected at compile time (never invoked).
       const rejectsBogusMode = () =>
-        // @ts-expect-error — "universal" is not a valid v1 deep-link mode (scheme-only, D-011)
+        // @ts-expect-error — "universal" is not a valid v1 deep-link mode (scheme-only in v1)
         app.project.resolve("deep-link", { mode: "universal", scheme: "myapp" });
       expect(rejectsBogusMode).toBeTypeOf("function");
     });
