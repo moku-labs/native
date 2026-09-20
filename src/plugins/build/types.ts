@@ -3,9 +3,17 @@
  */
 
 import type { LogApi } from "@moku-labs/common";
-import type { EmitFn } from "@moku-labs/core";
-import type { Events, Config as GlobalConfig, NativePhase, RequireFn, Target } from "../../config";
+import type { PluginCtx } from "@moku-labs/core";
+import type {
+  BuildFlavor,
+  Events,
+  Config as GlobalConfig,
+  NativePhase,
+  Target
+} from "../../config";
+import type { projectPlugin } from "../project";
 import type { Api as ProjectApi } from "../project/types";
+import type { tauriPlugin } from "../tauri";
 import type { Api as TauriApi } from "../tauri/types";
 
 /** One pipeline phase's measured duration, in execution order. */
@@ -21,24 +29,14 @@ export type BuildResult = {
 };
 
 /** Options for one target's pipeline pass. Platform-specific flags are ignored elsewhere. */
-export type RunOptions = {
-  target: Target;
-  /** iOS: build for the host's simulator arch instead of a signed device archive. */
-  simulator?: boolean | undefined;
-  /** Android: emit a store bundle (`.aab`) instead of the default installable `.apk`. */
-  aab?: boolean | undefined;
-};
+export type RunOptions = BuildFlavor & { target: Target };
 
 /** Options for a sequential multi-target pass (default targets: `ctx.global.targets`). */
-export type RunAllOptions = {
-  targets?: readonly Target[] | undefined;
-  simulator?: boolean | undefined;
-  aab?: boolean | undefined;
-};
+export type RunAllOptions = BuildFlavor & { targets?: readonly Target[] | undefined };
 
 /**
- * The dependency API slices the pipeline calls, resolved ONCE in `createBuildApi` (N3)
- * and threaded through every phase — `Pick` rather than the whole `Api`, so the exact
+ * The dependency API slices the pipeline calls, resolved ONCE in `createBuildApi` and
+ * threaded through every phase — `Pick` rather than the whole `Api`, so the exact
  * cross-plugin surface build depends on (D-007) is readable in one place.
  */
 export type BuildDeps = {
@@ -57,15 +55,21 @@ export type Api = {
 };
 
 /**
- * Domain context for the build plugin's pipeline. Structural (not the bare `PluginCtx`
- * export) because this plugin genuinely needs `require` — build's only two dependencies
- * are `project` and `tauri` (D-007) — alongside `global` and the `log` core API (MC2).
- * No `config`/`state` fields: build has neither (spec/03 §Config, §State). `RequireFn`
- * is the framework-shared mirror of core's unexported `PluginLike` (see `src/config.ts`).
+ * Domain context for the build plugin's pipeline: core's `PluginCtx` (build declares no
+ * config and no state, and emits the framework's own `Events`) plus `global`, the `log`
+ * core API (MC2), and a `require` constrained to build's real dependencies — `project` and
+ * `tauri` (D-007).
  */
-export type BuildContext = {
+export type BuildContext = PluginCtx<Record<string, never>, Record<string, never>, Events> & {
   readonly global: Readonly<GlobalConfig>;
   readonly log: LogApi;
-  readonly emit: EmitFn<Events>;
-  readonly require: RequireFn;
+  /**
+   * Resolves a dependency plugin's API. The constraint IS build's dependency list, and the
+   * API type is read off the resolved instance's own phantom slot — no mirror of core's
+   * registry types, and no plugin outside `depends` can be required by accident.
+   *
+   * @param plugin - `projectPlugin` or `tauriPlugin`.
+   * @returns That plugin's public API.
+   */
+  require<P extends typeof projectPlugin | typeof tauriPlugin>(plugin: P): P["_phantom"]["api"];
 };

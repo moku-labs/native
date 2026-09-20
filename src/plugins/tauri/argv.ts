@@ -5,7 +5,7 @@
  * `[nodePath, tauriJsPath, ...]` — callers never assemble the prefix themselves.
  * No `tauri init` verb exists here by design (D-013) — only `ios|android init`.
  */
-import type { Target } from "../../config";
+import type { MobileTarget, Target } from "../../config";
 import type { BuildArgvOptions } from "./types";
 
 /**
@@ -126,7 +126,7 @@ export function iconArgv(
 export function mobileInitArgv(
   nodePath: string,
   tauriJsPath: string,
-  target: "ios" | "android"
+  target: MobileTarget
 ): readonly string[] {
   return [nodePath, tauriJsPath, target, "init", "--ci"];
 }

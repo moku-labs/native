@@ -3,7 +3,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Config } from "../../config";
+import type { Config, Target } from "../../config";
 import { clean } from "./clean";
 import { completeness, requiredFiles } from "./completeness";
 import { generateBuildScript } from "./generators/build-script";
@@ -161,19 +161,23 @@ export function createProjectApi(ctx: ProjectContext): Api {
       ...generateSidecar(input)
     ];
 
-    const result: GenerateResult = { written: [], unchanged: [], skipped: [] };
+    const buckets: Record<"written" | "unchanged" | "skipped", string[]> = {
+      written: [],
+      unchanged: [],
+      skipped: []
+    };
     for (const artifact of artifacts) {
       const fullPath = path.join(ctx.global.projectDir, artifact.path);
       const action = await writeIfChanged(fullPath, artifact.content, ctx.global.projectDir);
-      result[action].push(fullPath);
+      buckets[action].push(fullPath);
       ctx.log.debug("project:generate:artifact", { path: fullPath, action });
     }
     ctx.log.info("project:generate", {
       target: opts.target,
-      written: result.written.length,
-      unchanged: result.unchanged.length
+      written: buckets.written.length,
+      unchanged: buckets.unchanged.length
     });
-    return result;
+    return buckets;
   };
 
   /**
@@ -251,7 +255,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
    * await runClean({ target: "android" });
    * ```
    */
-  const runClean = async (opts: { target?: GeneratorInput["target"] } = {}) => {
+  const runClean = async (opts: { target?: Target | undefined } = {}) => {
     const result = await clean(ctx.global.projectDir, opts.target);
     ctx.log.info("project:clean", { target: opts.target, removed: result.removed.length });
     return result;

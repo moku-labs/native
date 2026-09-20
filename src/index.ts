@@ -108,15 +108,15 @@ export { TauriError } from "./plugins/tauri/errors";
 export type {
   AppleExportMethod,
   AppleSigning,
+  BuildFlavor,
   CapabilityConfigMap,
   Config,
   Events,
+  MobileTarget,
   NativeCompleteEvent,
   NativePhase,
   NativePhaseEvent,
-  PluginApiOf,
-  PluginLike,
-  RequireFn,
   SigningConfig,
-  Target
+  Target,
+  TauriRunner
 } from "./config";

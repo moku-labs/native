@@ -3,6 +3,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
+import type { TauriRunner } from "../../config";
 import { buildArgv, devArgv, iconArgv, infoArgv, mobileInitArgv } from "./argv";
 import { fetchReadinessProbe, startDev } from "./dev";
 import { classify } from "./errors";
@@ -10,7 +11,7 @@ import { resolveNodePath, resolveTauriJsPath } from "./resolve";
 import { scrub } from "./scrub";
 import { realSpawn } from "./spawn";
 import { parseCompileTick } from "./stream";
-import type { Api, CompileTick, Runner, RunResult, TauriContext } from "./types";
+import type { Api, CompileTick, RunResult, TauriContext } from "./types";
 
 const CLI_VERSION_PATTERN = /tauri[- ]cli[^\d]*(\d+\.\d+\.\d+)/i;
 
@@ -37,7 +38,7 @@ export function createTauriApi(ctx: TauriContext): Api {
    * const { nodePath, tauriJsPath } = resolvePaths();
    * ```
    */
-  function resolvePaths(): Runner {
+  function resolvePaths(): TauriRunner {
     const nodePath = resolveNodePath({
       nodePath: ctx.config.nodePath,
       pathEnv: ctx.env.get("PATH")

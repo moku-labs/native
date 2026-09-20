@@ -55,7 +55,7 @@ Registration order in src/index.ts: project, tauri, build, doctor, cli.
 
 Subprocess-seam ownership: tauri is the ONLY plugin that spawns processes for @tauri-apps/cli. doctor has its own `probeImpl` seam for non-tauri binaries (rustup/node/xcodebuild/xcodegen/pod/security/java/...), but its one tauri-CLI probe goes through `tauri.version()` (D-013 ownership boundary).
 
-Shared cross-plugin types (N2): `PluginLike`, `PluginApiOf<P>` and `RequireFn` are declared ONCE in src/config.ts — the structural mirror of core's unexported PluginLike — and imported by build/doctor/cli's own `types.ts`. No plugin re-derives them.
+Shared cross-plugin types: `MobileTarget`, `TauriRunner` and `BuildFlavor` are declared ONCE in src/config.ts and imported by the plugins' own `types.ts`. A plugin context is core's `PluginCtx<Config, State, Events>` intersected with what the plugin really uses, and `require` is constrained to that plugin's real dependencies — no mirror of core's internal types.
 
 ====================================================================
 2. GLOBAL CONFIG + EVENTS (src/config.ts — verbatim)
@@ -188,19 +188,10 @@ export type Events = {
   "native:complete": NativeCompleteEvent;
 };
 
-/** Structural mirror of core's unexported PluginLike, shared by build/doctor/cli (N2). */
-export type PluginLike = {
-  readonly name: string;
-  readonly spec: unknown;
-  readonly _phantom: {
-    readonly config: unknown;
-    readonly state: unknown;
-    readonly api: unknown;
-    readonly events?: Record<string, unknown>;
-  };
-};
-export type PluginApiOf<P extends PluginLike> = /* the phantom `api` slot */;
-export type RequireFn = <P extends PluginLike>(plugin: P) => PluginApiOf<P>;
+/** Shapes shared by several plugins — declared once here, never re-derived per plugin. */
+export type MobileTarget = Extract<Target, "ios" | "android">;
+export type TauriRunner = { nodePath: string; tauriJsPath: string };
+export type BuildFlavor = { simulator?: boolean | undefined; aab?: boolean | undefined };
 
 Framework default config literal (src/config.ts):
 
@@ -370,15 +361,12 @@ export type CompletenessResult =
   | { status: "complete" };
 
 /** Result of the idempotent mobile patch pass (Android signing + the mobile runner command). */
-export type PatchResult = { patched: string[]; unchanged: string[] };
-
-/** The absolute Node + tauri.js pair that replaces Tauri's own `node tauri …` build phase. */
-export type MobileRunner = { nodePath: string; tauriJsPath: string };
+export type PatchResult = { readonly patched: readonly string[]; readonly unchanged: readonly string[] };
 
 /** Options for one mobile patch pass. The runner patch is skipped when `runner` is absent. */
 export type PatchMobileOptions = {
-  target: "ios" | "android";
-  runner?: MobileRunner | undefined;
+  target: MobileTarget;
+  runner?: TauriRunner | undefined;
 };
 
 /** Result of a clean pass. */
@@ -552,11 +540,8 @@ export type RunResult = { code: 0; stdout: string; stderr: string; durationMs: n
 /** Parsed compile progress tick — real crate counts, never fake percentages. */
 export type CompileTick = { crate: string; index?: number; total?: number };
 
-/** The resolved D-013 invocation prefix, exposed so project.patchMobile can reuse it. */
-export type Runner = { nodePath: string; tauriJsPath: string };
-
 /** The build verb's full option surface — everything that changes the argv. */
-export type BuildArgvOptions = {
+export type BuildArgvOptions = BuildFlavor & {
   target: Target;
   simulator?: boolean | undefined;      // iOS only
   exportMethod?: AppleExportMethod | undefined;  // iOS device builds only
@@ -607,10 +592,10 @@ export type State = { dev: DevHandle | undefined };
 export type Api = {
   icon(opts: { source: string }): Promise<RunResult>;
   build(opts: BuildOptions): Promise<RunResult>;
-  mobileInit(opts: { target: "ios" | "android" }): Promise<RunResult>;
+  mobileInit(opts: { target: MobileTarget }): Promise<RunResult>;
   dev(opts: { target?: Target; onOutput?: (line: string) => void }): Promise<DevHandle>;
   version(): Promise<{ cliVersion: string } | null>;
-  runner(): Runner;
+  runner(): TauriRunner;
 };
 
 Behavior:
@@ -707,12 +692,11 @@ export type Api = {
   runAll(opts?: RunAllOptions): Promise<readonly BuildResult[]>;
 };
 
-/** Domain context (structural): global + log + emit<Events> + require. */
-export type BuildContext = {
+/** Domain context: core's PluginCtx + global + log + a require constrained to the deps. */
+export type BuildContext = PluginCtx<Record<string, never>, Record<string, never>, Events> & {
   readonly global: Readonly<GlobalConfig>;
   readonly log: LogApi;
-  readonly emit: EmitFn<Events>;
-  readonly require: RequireFn;
+  require<P extends typeof projectPlugin | typeof tauriPlugin>(plugin: P): P["_phantom"]["api"];
 };
 
 Phase semantics (pipeline.ts):
@@ -911,11 +895,11 @@ import {
   TauriError,
   // Shared types
   type AppleExportMethod, type AppleSigning, type CapabilityConfigMap, type Config,
-  type Events, type NativeCompleteEvent, type NativePhase, type NativePhaseEvent,
-  type PluginApiOf, type PluginLike, type RequireFn, type SigningConfig, type Target,
+  type BuildFlavor, type Events, type MobileTarget, type NativeCompleteEvent,
+  type NativePhase, type NativePhaseEvent, type SigningConfig, type Target, type TauriRunner,
   // Per-plugin TYPE-ONLY namespaces (`export type * as X`) — each is the plugin's types module
   type Project, type Tauri, type Build, type Doctor, type Cli
-  //   e.g. Project.Api, Project.RegistryRow, Project.MobileRunner, Tauri.DevHandle,
+  //   e.g. Project.Api, Project.RegistryRow, Project.PatchResult, Tauri.DevHandle,
   //        Tauri.SpawnFn, Build.BuildResult, Doctor.DoctorReport, Doctor.CheckResult, Cli.RenderFn
 } from "@moku-labs/native";
 
@@ -1185,9 +1169,9 @@ try {
     the sole emitter by convention — prefer plugin-prefixed custom events for your own domains.
 
 (f) House patterns worth copying from the source:
-    - Per-plugin domain context types are STRUCTURAL (global/config/state/log/env/emit/require
-      picked per need), not the kernel's full PluginContext; the shared PluginLike/RequireFn
-      types come from src/config.ts (N2), never re-derived per plugin.
+    - Per-plugin domain context types are core's `PluginCtx<Config, State, Events>` intersected
+      with what the plugin really uses (global/log/env/require); `require` is constrained to
+      that plugin's real dependencies, so nothing mirrors core's internal registry types.
     - Injectable seams (spawnImpl/probeImpl/renderImpl/confirmImpl) with `undefined` meaning
       "the real implementation" keep 90% coverage reachable without native toolchains.
     - State uses `undefined` for absence (never null), except where a union mirrors a Node
@@ -1204,8 +1188,9 @@ try {
   (process-group spawn, signal handlers, DevHandle.stop()). cli.dev awaits, never holds.
 - D-003: native:phase / native:complete are GLOBAL framework events declared in config.ts,
   emitted by build, hooked by cli; doctor:check stays per-plugin.
-- D-004: Shared types (Target, NativePhase, PHASE_ORDER, CapabilityConfigMap, AppleSigning,
-  PluginLike/RequireFn) live in src/config.ts; config.ts never imports from plugin directories.
+- D-004: Shared types (Target, MobileTarget, NativePhase, PHASE_ORDER, CapabilityConfigMap,
+  AppleSigning, TauriRunner, BuildFlavor) live in src/config.ts; config.ts never imports from
+  plugin directories.
 - D-005: The substantive config surface is GLOBAL Config; per-plugin configs are minimal knobs.
 - D-006: project owns clean (the generated tree's whole lifecycle); cli.clean is a thin,
   confirm-gated delegate.

@@ -53,7 +53,7 @@ function compact(
  * buildBundle({ global, target: "macos", capabilities: [] });
  * ```
  */
-function buildBundle(input: GeneratorInput): Record<string, unknown> {
+function buildBundle(input: GeneratorInput) {
   const { app, signing } = input.global;
   const apple = signing.apple ?? {};
 

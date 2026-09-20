@@ -6,6 +6,7 @@ import { TauriError } from "../../../tauri/errors";
 import { createCliApi, hostTarget } from "../../api";
 import { createCliState } from "../../state";
 import type { CliContext, Config } from "../../types";
+import { createMockRequire } from "./mock-require";
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -60,25 +61,6 @@ function createMockCtx(overrides?: {
   confirmImpl?: (question: string) => Promise<boolean>;
 }): { ctx: CliContext; mocks: Mocks } {
   const mocks = overrides?.mocks ?? createMocks();
-  const requireFn = vi.fn((plugin: { name: string }) => {
-    switch (plugin.name) {
-      case "project": {
-        return mocks.project;
-      }
-      case "tauri": {
-        return mocks.tauri;
-      }
-      case "build": {
-        return mocks.build;
-      }
-      case "doctor": {
-        return mocks.doctor;
-      }
-      default: {
-        throw new Error(`unexpected require: ${plugin.name}`);
-      }
-    }
-  });
 
   const config: Config = {
     renderImpl: overrides?.renderImpl,
@@ -88,9 +70,11 @@ function createMockCtx(overrides?: {
   const ctx: CliContext = {
     global: validGlobalConfig,
     config,
-    // The real state factory — the branded console is created ONCE there (N5).
+    // The real state factory — the branded console is created ONCE there.
     state: createCliState({ global: validGlobalConfig, config }),
-    require: requireFn as CliContext["require"]
+    // cli emits nothing of its own; the seam exists on every plugin ctx.
+    emit: vi.fn(),
+    require: createMockRequire(mocks)
   };
 
   return { ctx, mocks };

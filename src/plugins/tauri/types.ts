@@ -2,7 +2,15 @@
  * @file tauri plugin — type definitions (structural — never runtime-package namespace types).
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
-import type { AppleExportMethod, Config as GlobalConfig, Target } from "../../config";
+import type { PluginCtx } from "@moku-labs/core";
+import type {
+  AppleExportMethod,
+  BuildFlavor,
+  Config as GlobalConfig,
+  MobileTarget,
+  Target,
+  TauriRunner
+} from "../../config";
 
 /**
  * Structural spawn seam — injectable for tests (skeleton-conventions §3).
@@ -33,32 +41,21 @@ export type RunResult = { code: 0; stdout: string; stderr: string; durationMs: n
 export type CompileTick = { crate: string; index?: number; total?: number };
 
 /**
- * The resolved D-013 invocation prefix. Exposed on the Api so `project.patchMobile`
- * can write the SAME `node <tauri.js>` pair into the generated Xcode/Gradle scripts,
- * where tauri's own generator emits a bare `node tauri` that does not exist (B10).
+ * The build verb's full option surface — everything that changes the argv: the target, the
+ * shared {@link BuildFlavor} flags, and the iOS-only export method. A target that does not
+ * use an option ignores it rather than failing (the build plugin passes whatever the
+ * consumer configured, for every target).
  */
-export type Runner = { nodePath: string; tauriJsPath: string };
-
-/**
- * The build verb's full option surface — everything that changes the argv.
- * `simulator`/`exportMethod` are iOS-only, `aab` is Android-only; a target that
- * does not use an option ignores it rather than failing (the build plugin passes
- * whatever the consumer configured, for every target).
- */
-export type BuildArgvOptions = {
+export type BuildArgvOptions = BuildFlavor & {
   target: Target;
-  /** iOS: build for the host's simulator arch instead of a device. */
-  simulator?: boolean | undefined;
   /** iOS: `--export-method` for a device build; ignored for a simulator build. */
   exportMethod?: AppleExportMethod | undefined;
-  /** Android: emit a store bundle (`--aab`) instead of the default installable `--apk`. */
-  aab?: boolean | undefined;
 };
 
 /** Options for `Api.build` — the argv options plus the live output/progress callbacks. */
 export type BuildOptions = BuildArgvOptions & {
-  onTick?: (tick: CompileTick) => void;
-  onOutput?: (line: string) => void;
+  onTick?: ((tick: CompileTick) => void) | undefined;
+  onOutput?: ((line: string) => void) | undefined;
 };
 
 /** How a dev session ended. */
@@ -110,22 +107,22 @@ export type State = { dev: DevHandle | undefined };
 export type Api = {
   icon(opts: { source: string }): Promise<RunResult>;
   build(opts: BuildOptions): Promise<RunResult>;
-  mobileInit(opts: { target: "ios" | "android" }): Promise<RunResult>;
-  dev(opts: { target?: Target; onOutput?: (line: string) => void }): Promise<DevHandle>;
+  mobileInit(opts: { target: MobileTarget }): Promise<RunResult>;
+  dev(opts: {
+    target?: Target | undefined;
+    onOutput?: ((line: string) => void) | undefined;
+  }): Promise<DevHandle>;
   version(): Promise<{ cliVersion: string } | null>;
-  runner(): Runner;
+  runner(): TauriRunner;
 };
 
 /**
- * Domain context shared by every tauri domain file. Structural composition
- * (not the bare `PluginCtx` export) because this plugin needs `global`
- * (projectDir, web.devUrl) and the `log`/`env` core APIs alongside
- * `config`/`state` — see moku-testing's mock-context.md §Standard Factory.
+ * Domain context shared by every tauri domain file: core's `PluginCtx` over this plugin's
+ * own config/state (it declares no events) plus the three fields core composes in per
+ * framework — `global` (projectDir, web.devUrl) and the `log`/`env` core APIs (MC2/MC3).
  */
-export type TauriContext = {
+export type TauriContext = PluginCtx<Config, State> & {
   readonly global: Readonly<GlobalConfig>;
-  readonly config: Readonly<Config>;
-  state: State;
   readonly log: LogApi;
   readonly env: EnvApi;
 };

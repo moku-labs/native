@@ -2,10 +2,15 @@
  * @file project plugin — type definitions.
  */
 import type { LogApi } from "@moku-labs/common";
-import type { CapabilityConfigMap, Config, Target } from "../../config";
+import type { PluginCtx } from "@moku-labs/core";
+import type { CapabilityConfigMap, Config, MobileTarget, Target, TauriRunner } from "../../config";
 
 /** Result of a write-if-changed generation pass. */
-export type GenerateResult = { written: string[]; unchanged: string[]; skipped: string[] };
+export type GenerateResult = {
+  readonly written: readonly string[];
+  readonly unchanged: readonly string[];
+  readonly skipped: readonly string[];
+};
 
 /** Mobile gen/-tree gate — completeness (required-file set), not existence (S4 refinement). */
 export type CompletenessResult =
@@ -15,19 +20,15 @@ export type CompletenessResult =
   | { status: "complete" };
 
 /** Result of the idempotent mobile patch pass (Android signing + the mobile runner command). */
-export type PatchResult = { patched: string[]; unchanged: string[] };
-
-/**
- * The absolute Node + `tauri.js` pair that replaces Tauri's own `node tauri …` build-phase
- * command — that command does not exist, so an unpatched Xcode/Android Studio build fails.
- * Supplied by the `tauri` plugin's `runner()`.
- */
-export type MobileRunner = { nodePath: string; tauriJsPath: string };
+export type PatchResult = {
+  readonly patched: readonly string[];
+  readonly unchanged: readonly string[];
+};
 
 /** Options for one mobile patch pass. The runner patch is skipped when `runner` is absent. */
 export type PatchMobileOptions = {
-  target: "ios" | "android";
-  runner?: MobileRunner | undefined;
+  target: MobileTarget;
+  runner?: TauriRunner | undefined;
 };
 
 /** Result of a clean pass. */
@@ -76,12 +77,11 @@ export type ResolvedCapability = RegistryRow & {
 };
 
 /**
- * Domain context for the project plugin's API factory. This plugin has no per-plugin
- * config/state — it consumes global config only (D-005) — so this is deliberately
- * narrower than the kernel's full `PluginContext`: just `global` + the injected `log`
- * core API (MC2).
+ * Domain context for the project plugin's API factory: core's `PluginCtx` (this plugin
+ * declares neither config nor state nor events — D-005, it reads global config only) plus
+ * the two fields core composes in per framework, `global` and the `log` core API (MC2).
  */
-export type ProjectContext = {
+export type ProjectContext = PluginCtx<Record<string, never>, Record<string, never>> & {
   readonly global: Readonly<Config>;
   readonly log: LogApi;
 };
@@ -91,7 +91,7 @@ export type Api = {
   generate(opts: { target: Target }): Promise<GenerateResult>;
   completeness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
-  clean(opts?: { target?: Target }): Promise<CleanResult>;
+  clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;
   ensureIconSource(): Promise<string>;
   resolve<K extends keyof CapabilityConfigMap>(
     name: K,
@@ -99,5 +99,5 @@ export type Api = {
   ): ResolvedCapability;
   isKnownCapability(name: string): name is keyof CapabilityConfigMap;
   registryRows(): ReadonlyArray<RegistryRow>;
-  requiredFiles(platform: "ios" | "android"): readonly string[];
+  requiredFiles(platform: MobileTarget): readonly string[];
 };

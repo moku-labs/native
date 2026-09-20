@@ -155,7 +155,7 @@ export function createCliApi(ctx: CliContext): Api {
      * ```
      */
     async doctor(opts = {}) {
-      const report = await doctor.run(opts.target ? { target: opts.target } : {});
+      const report = await doctor.run({ target: opts.target });
       renderDoctorSummary(ui, report);
       return report.ok;
     },
@@ -180,7 +180,7 @@ export function createCliApi(ctx: CliContext): Api {
         );
         if (!ok) return;
       }
-      await project.clean(opts.target ? { target: opts.target } : {});
+      await project.clean({ target: opts.target });
     }
   };
 }

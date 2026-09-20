@@ -5,8 +5,8 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import type { SigningConfig } from "../../config";
-import type { MobileRunner, PatchMobileOptions, PatchResult } from "./types";
+import type { SigningConfig, TauriRunner } from "../../config";
+import type { PatchMobileOptions, PatchResult } from "./types";
 import { writeIfChanged } from "./writer";
 
 const SIGNING_START = "// MOKU-SIGNING-START";
@@ -175,7 +175,7 @@ function runnerLinePattern(verb: string): RegExp {
  */
 export function applyRunnerCommand(
   existing: string,
-  options: { runner: MobileRunner; verb: string; quote: string }
+  options: { runner: TauriRunner; verb: string; quote: string }
 ): string {
   const { runner, verb, quote } = options;
   const replacement = `${quote}${runner.nodePath}${quote} ${quote}${runner.tauriJsPath}${quote}`;
@@ -297,7 +297,7 @@ async function androidRunnerFiles(genDirectory: string): Promise<string[]> {
 async function patchRunner(
   projectDirectory: string,
   genDirectory: string,
-  opts: PatchMobileOptions & { runner: MobileRunner }
+  opts: PatchMobileOptions & { runner: TauriRunner }
 ): Promise<PatchResult> {
   const verb = opts.target === "ios" ? IOS_RUNNER_VERB : ANDROID_RUNNER_VERB;
   const files =
@@ -305,7 +305,8 @@ async function patchRunner(
       ? await iosRunnerFiles(genDirectory)
       : await androidRunnerFiles(genDirectory);
 
-  const result: PatchResult = { patched: [], unchanged: [] };
+  const patched: string[] = [];
+  const unchanged: string[] = [];
   for (const file of files) {
     const existing = await readFile(file, "utf8");
     const rewritten = applyRunnerCommand(existing, {
@@ -314,9 +315,9 @@ async function patchRunner(
       quote: quoteFor(file)
     });
     const action = await writeIfChanged(file, rewritten, projectDirectory);
-    (action === "written" ? result.patched : result.unchanged).push(file);
+    (action === "written" ? patched : unchanged).push(file);
   }
-  return result;
+  return { patched, unchanged };
 }
 
 /**
@@ -338,7 +339,8 @@ async function patchAndroidSigning(
   genDirectory: string,
   signing: NonNullable<SigningConfig["android"]>
 ): Promise<PatchResult> {
-  const result: PatchResult = { patched: [], unchanged: [] };
+  const patched: string[] = [];
+  const unchanged: string[] = [];
 
   const buildGradlePath = path.join(genDirectory, "app", "build.gradle.kts");
   const existingGradle = await readFile(buildGradlePath, "utf8");
@@ -347,16 +349,16 @@ async function patchAndroidSigning(
     applySigningBlock(existingGradle, signing),
     projectDirectory
   );
-  (action === "written" ? result.patched : result.unchanged).push(buildGradlePath);
+  (action === "written" ? patched : unchanged).push(buildGradlePath);
 
   // Single named file inside gen/android, never a recursive remove.
   const keystorePropertiesPath = path.join(genDirectory, "keystore.properties");
   if (!signing.keystorePath && existsSync(keystorePropertiesPath)) {
     await rm(keystorePropertiesPath, { force: true });
-    result.patched.push(keystorePropertiesPath);
+    patched.push(keystorePropertiesPath);
   }
 
-  return result;
+  return { patched, unchanged };
 }
 
 /**

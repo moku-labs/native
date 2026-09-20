@@ -5,7 +5,7 @@
 ## Core Concepts
 
 ### Three-layer Moku model
-- Layer 1 (`src/config.ts`): `createCoreConfig<Config, Events, [logPlugin, envPlugin]>("native", { config, plugins, pluginConfigs: { env: { providers: [workerSafeProcessEnv()] } } })` — global Config + Events types, shared constants (`TARGETS`, `PHASE_ORDER`), the `hostTargets()` helper, the shared `PluginLike`/`PluginApiOf`/`RequireFn` types, and the two `@moku-labs/common` core plugins so every plugin ctx carries `ctx.log` and `ctx.env`. The env provider is seeded HERE: without it `ctx.env.get("PATH")` is undefined and the tauri plugin cannot PATH-walk `node`.
+- Layer 1 (`src/config.ts`): `createCoreConfig<Config, Events, [logPlugin, envPlugin]>("native", { config, plugins, pluginConfigs: { env: { providers: [workerSafeProcessEnv()] } } })` — global Config + Events types, shared constants (`TARGETS`, `PHASE_ORDER`), the `hostTargets()` helper, the shared `MobileTarget`/`TauriRunner`/`BuildFlavor` types, and the two `@moku-labs/common` core plugins so every plugin ctx carries `ctx.log` and `ctx.env`. The env provider is seeded HERE: without it `ctx.env.get("PATH")` is undefined and the tauri plugin cannot PATH-walk `node`.
 - Layer 2 (`src/index.ts`): `createCore(coreConfig, { plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin] })` — the framework. NO pluginConfigs block: every plugin's defaults live in its own `src/plugins/<name>/index.ts`.
 - Layer 3 (consumer): `createApp({ config, plugins?, pluginConfigs? })` — a consumer app instance with `native.project/.tauri/.build/.doctor/.cli` APIs plus `native.start()`/`native.stop()`.
 
@@ -40,7 +40,7 @@ import {
   type Config, type Events, type Target, type NativePhase,
   type NativePhaseEvent, type NativeCompleteEvent,
   type CapabilityConfigMap, type SigningConfig, type AppleSigning, type AppleExportMethod,
-  type PluginLike, type PluginApiOf, type RequireFn,
+  type MobileTarget, type TauriRunner, type BuildFlavor,
   type Project, type Tauri, type Build, type Doctor, type Cli  // TYPE-ONLY namespaces
 } from "@moku-labs/native";
 
@@ -66,7 +66,7 @@ native.build.runAll(opts?: { targets?: readonly Target[]; simulator?: boolean; a
 // project (files only, never spawns)
 native.project.generate(opts: { target: Target }): Promise<{ written: string[]; unchanged: string[]; skipped: string[] }>;
 native.project.completeness(opts: { target: Target }): Project.CompletenessResult; // "not-applicable" | "not-initialized" | "incomplete" | "complete"
-native.project.patchMobile(opts: { target: "ios" | "android"; runner?: Project.MobileRunner }): Promise<{ patched: string[]; unchanged: string[] }>;
+native.project.patchMobile(opts: { target: MobileTarget; runner?: TauriRunner }): Promise<{ patched: readonly string[]; unchanged: readonly string[] }>;
 native.project.ensureIconSource(): Promise<string>;             // app.icon, else a generated placeholder PNG
 native.project.clean(opts?: { target?: Target }): Promise<{ removed: readonly string[] }>;
 native.project.resolve<K extends keyof CapabilityConfigMap>(name: K, config?: CapabilityConfigMap[K]): Project.ResolvedCapability;
@@ -183,7 +183,7 @@ Config holds identifiers and env-var NAMES. Secrets stay in the environment and 
 ```
 src/
   config.ts               # Layer 1: Config/Events types, TARGETS, PHASE_ORDER, hostTargets,
-                          #   CapabilityConfigMap, SigningConfig/AppleSigning, PluginLike/RequireFn,
+                          #   CapabilityConfigMap, SigningConfig/AppleSigning, MobileTarget/TauriRunner/BuildFlavor,
                           #   createCoreConfig("native") + the env provider seed
   index.ts                # Layer 2: createCore(...5 plugins) — no pluginConfigs; public exports:
                           #   createApp, createPlugin, constants, TauriError, types, plugin barrel

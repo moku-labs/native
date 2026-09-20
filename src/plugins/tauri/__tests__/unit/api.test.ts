@@ -15,6 +15,8 @@ import type { SpawnFn, State, TauriContext } from "../../types";
 function createMockCtx(overrides?: Partial<TauriContext>): TauriContext {
   const state: State = overrides?.state ?? { dev: undefined };
   return {
+    // tauri declares no events of its own; the seam exists because every plugin ctx carries it.
+    emit: overrides?.emit ?? vi.fn(),
     global: {
       app: { name: "MyApp", identifier: "com.example.myapp" },
       web: {

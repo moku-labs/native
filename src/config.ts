@@ -10,6 +10,32 @@ export const TARGETS = ["macos", "windows", "linux", "ios", "android"] as const;
 /** A native packaging target. */
 export type Target = (typeof TARGETS)[number];
 
+/**
+ * The two targets that own a `src-tauri/gen/<platform>` tree — the init/completeness/patch
+ * story is theirs alone, so every mobile-only signature takes this instead of `Target`.
+ */
+export type MobileTarget = Extract<Target, "ios" | "android">;
+
+/**
+ * The absolute `node` + `tauri.js` pair every Tauri invocation is spawned with. The `tauri`
+ * plugin resolves it, and `project` writes the SAME pair into the generated Xcode/Gradle
+ * build phases, where Tauri's own generator emits a bare `node tauri` that does not exist.
+ */
+export type TauriRunner = { nodePath: string; tauriJsPath: string };
+
+/**
+ * Which artifact flavour a mobile build produces. Shared verbatim by `tauri.build`,
+ * `build.run`/`build.runAll`, `cli.build` and the collect phase, so one flag set travels
+ * the whole pipeline instead of being re-declared per layer. A target that does not use a
+ * flag ignores it rather than failing.
+ */
+export type BuildFlavor = {
+  /** iOS: build the host's simulator slice instead of a signed device archive. */
+  simulator?: boolean | undefined;
+  /** Android: emit a store bundle (`.aab`) instead of the default installable `.apk`. */
+  aab?: boolean | undefined;
+};
+
 /** Host platform → the one desktop target that host can package locally. */
 const HOST_TARGET: Partial<Record<NodeJS.Platform, Target>> = {
   darwin: "macos",
@@ -163,42 +189,6 @@ export type Events = {
   "native:phase": NativePhaseEvent;
   "native:complete": NativeCompleteEvent;
 };
-
-/**
- * Structural mirror of `@moku-labs/core`'s unexported `PluginLike` — same field shape
- * (`name`/`spec`/`_phantom`), so a real plugin instance (e.g. `projectPlugin`) satisfies
- * it without importing a core-internal type. `PluginCtx`'s own JSDoc anticipates this:
- * "for advanced composition (e.g. adding require), use EmitFn<E> directly" — this is the
- * `require`-side equivalent, re-derived once HERE and shared by every plugin that needs
- * it (build, doctor, cli), since core intentionally exports only `PluginCtx`/`EmitFn`
- * for domain composition (moku-testing mock-context.md).
- */
-export type PluginLike = {
-  readonly name: string;
-  readonly spec: unknown;
-  readonly _phantom: {
-    readonly config: unknown;
-    readonly state: unknown;
-    readonly api: unknown;
-    readonly events?: Record<string, unknown>;
-  };
-};
-
-/**
- * Extracts a plugin-like value's API type from its phantom `api` slot — what
- * `ctx.require(plugin)` resolves to.
- */
-export type PluginApiOf<P extends PluginLike> = P extends {
-  readonly _phantom: { readonly api: infer A };
-}
-  ? A
-  : never;
-
-/**
- * The `ctx.require` signature a structural domain context declares when a plugin
- * resolves its dependencies' APIs (build, doctor, cli).
- */
-export type RequireFn = <P extends PluginLike>(plugin: P) => PluginApiOf<P>;
 
 const defaultConfig: Config = {
   app: { name: "", identifier: "" },

@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Config as GlobalConfig, RequireFn } from "../../../../config";
+import type { Config as GlobalConfig, TauriRunner } from "../../../../config";
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import type { CompletenessResult } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
-import type { BuildOptions, Runner, RunResult } from "../../../tauri/types";
+import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { bundleRoot } from "../../collect";
 import {
   runCodegen,
@@ -22,13 +22,13 @@ import {
 import type { BuildContext, BuildDeps } from "../../types";
 
 /** The resolved runner pair the tauri mock hands to `project.patchMobile` (B10). */
-const RUNNER: Runner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/tauri.js" };
+const RUNNER: TauriRunner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/tauri.js" };
 
 /** A successful one-shot verb result. */
 const okResult = (): RunResult => ({ code: 0, stdout: "", stderr: "", durationMs: 1 });
 
-/** The pipeline never calls `require` — both deps are resolved once in `createBuildApi` (N3). */
-const requireNever: RequireFn = plugin => {
+/** The pipeline never calls `require` — both deps are resolved once in `createBuildApi`. */
+const requireNever: BuildContext["require"] = plugin => {
   throw new Error(`ctx.require(${plugin.name}) is not used by the pipeline`);
 };
 
@@ -47,7 +47,7 @@ function createTauriMock() {
   return {
     mobileInit: vi.fn(async (): Promise<RunResult> => okResult()),
     icon: vi.fn(async (): Promise<RunResult> => okResult()),
-    runner: vi.fn((): Runner => RUNNER),
+    runner: vi.fn((): TauriRunner => RUNNER),
     build: vi.fn(async (opts: BuildOptions): Promise<RunResult> => {
       opts.onTick?.({ crate: "demo" });
       opts.onOutput?.("Bundling app.dmg");
@@ -111,6 +111,9 @@ function createMocks(overrides?: {
       reset: vi.fn(),
       clearSinks: vi.fn()
     },
+    // build declares neither config nor state — core hands every plugin the empty objects.
+    config: {},
+    state: {},
     emit,
     require: requireNever
   };

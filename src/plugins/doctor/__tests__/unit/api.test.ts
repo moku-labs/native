@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDoctorApi } from "../../api";
 import type { CheckResult, DoctorContext, ProbeFn } from "../../types";
 import { baseGlobalConfig, createEnv } from "./checks/fixtures";
+import { createMockRequire } from "./mock-require";
 
 /** A probe that never settles — the only way to make a check outrun `probeTimeoutMs`. */
 const probeNeverSettles: ProbeFn = () =>
@@ -58,12 +59,12 @@ function createContext(opts: { probeImpl: ProbeFn; probeTimeoutMs?: number }): {
     config: { probeImpl: opts.probeImpl, probeTimeoutMs: opts.probeTimeoutMs ?? 10_000 },
     log: createLog(),
     env: createEnv(),
-    emit: ((_name: "doctor:check", payload: CheckResult) => {
+    // doctor has no state of its own — core hands a stateless plugin the empty object.
+    state: {},
+    emit: (_name, payload) => {
       emitted.push(payload);
-    }) as unknown as DoctorContext["emit"],
-    require: vi.fn((plugin: { name: string }) =>
-      plugin.name === "tauri" ? tauriApi : projectApi
-    ) as unknown as DoctorContext["require"]
+    },
+    require: createMockRequire({ project: projectApi, tauri: tauriApi })
   };
   return { ctx, emitted };
 }

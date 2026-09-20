@@ -4,6 +4,7 @@ import type { CheckResult } from "../../../doctor/types";
 import { createCliHandlers } from "../../handlers";
 import { createCliState } from "../../state";
 import type { CliContext, Config } from "../../types";
+import { createMockRequire } from "./mock-require";
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -31,7 +32,9 @@ function createMockCtx(renderImpl: (line: string) => void = () => {}): CliContex
     config,
     // The real state factory — the branded console is created ONCE there (N5).
     state: createCliState({ global: validGlobalConfig, config }),
-    require: vi.fn() as CliContext["require"]
+    // handlers render only — they never emit and never resolve a dependency.
+    emit: vi.fn(),
+    require: createMockRequire({})
   };
 }
 

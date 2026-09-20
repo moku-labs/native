@@ -3,7 +3,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Target } from "../../config";
+import type { MobileTarget, Target } from "../../config";
 import type { CompletenessResult } from "./types";
 
 /**
@@ -11,7 +11,7 @@ import type { CompletenessResult } from "./types";
  * A partial init (tauri#13902) can leave some of these absent — `completeness` checks
  * the required-file SET, not mere directory existence.
  */
-const REQUIRED_FILES: Readonly<Record<"ios" | "android", readonly string[]>> = {
+const REQUIRED_FILES: Readonly<Record<MobileTarget, readonly string[]>> = {
   ios: ["project.yml", "Assets.xcassets", "Sources", "ExportOptions.plist"],
   android: [
     "build.gradle.kts",
@@ -32,7 +32,7 @@ const REQUIRED_FILES: Readonly<Record<"ios" | "android", readonly string[]>> = {
  * genPlatformDirectoryName("ios"); // "apple"
  * ```
  */
-function genPlatformDirectoryName(target: "ios" | "android"): "apple" | "android" {
+function genPlatformDirectoryName(target: MobileTarget): "apple" | "android" {
   return target === "ios" ? "apple" : "android";
 }
 
@@ -47,7 +47,7 @@ function genPlatformDirectoryName(target: "ios" | "android"): "apple" | "android
  * requiredFiles("android"); // ["build.gradle.kts", "settings.gradle.kts", ...]
  * ```
  */
-export function requiredFiles(platform: "ios" | "android"): readonly string[] {
+export function requiredFiles(platform: MobileTarget): readonly string[] {
   return REQUIRED_FILES[platform];
 }
 
