@@ -7,26 +7,16 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { Target } from "../../config";
+import { bundleLayout } from "./layout";
 import type { CleanResult } from "./types";
-
-/**
- * Tauri's bundle output directories are FORMAT-named, not target-named
- * (`bundle/dmg`, `bundle/nsis`, …) — one desktop target maps to several
- * format directories (same table spec 03-build's collect phase reads).
- */
-const DESKTOP_BUNDLE_FORMATS: Record<Exclude<Target, "ios" | "android">, readonly string[]> = {
-  macos: ["dmg", "macos"],
-  windows: ["nsis", "msi"],
-  linux: ["appimage", "deb", "rpm"]
-};
 
 /**
  * Computes the absolute path(s) a clean pass would delete for a given scope, without
  * touching the filesystem. Mobile targets scope to `gen/<platform>` only; desktop
  * targets scope to that target's bundle-FORMAT output directories under Cargo's
- * `target/` (Tauri names bundle dirs by format — dmg/nsis/appimage/… — never by
- * target); omitting `target` scopes to the whole project root (D-006: project owns
- * this destructive filesystem knowledge — `cli.clean` is a thin delegate).
+ * `target/` (both read from `layout.ts`, the one owner of that table); omitting `target`
+ * scopes to the whole project root (D-006: project owns this destructive filesystem
+ * knowledge — `cli.clean` is a thin delegate).
  *
  * @param projectDirectory - The Tauri project root.
  * @param target - The optional packaging target to scope the clean to.
@@ -40,13 +30,12 @@ const DESKTOP_BUNDLE_FORMATS: Record<Exclude<Target, "ios" | "android">, readonl
 export function cleanTargets(projectDirectory: string, target?: Target): string[] {
   const root = path.resolve(projectDirectory);
   if (!target) return [root];
-  if (target === "ios" || target === "android") {
-    const platform = target === "ios" ? "apple" : "android";
-    return [path.resolve(root, "src-tauri", "gen", platform)];
+
+  const layout = bundleLayout(target);
+  if (layout.genDirectory) {
+    return [path.resolve(root, layout.root, layout.genDirectory)];
   }
-  return DESKTOP_BUNDLE_FORMATS[target].map(format =>
-    path.resolve(root, "src-tauri", "target", "release", "bundle", format)
-  );
+  return layout.formats.map(format => path.resolve(root, layout.root, "bundle", format.directory));
 }
 
 /**

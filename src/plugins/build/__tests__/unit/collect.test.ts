@@ -5,34 +5,35 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { TARGETS } from "../../../../config";
-import { BUNDLE_LOCATIONS, bundleRoot, collectArtifacts } from "../../collect";
+import { bundleLayout } from "../../../project/layout";
+import { bundlePatterns, bundleRoot, collectArtifacts } from "../../collect";
 
-describe("BUNDLE_LOCATIONS", () => {
+describe("bundlePatterns", () => {
   it("has a non-empty glob pattern list for every target", () => {
     for (const target of TARGETS) {
-      expect(BUNDLE_LOCATIONS[target].length).toBeGreaterThan(0);
+      expect(bundlePatterns(bundleLayout(target), target).length).toBeGreaterThan(0);
     }
   });
 });
 
 describe("bundleRoot", () => {
   it("resolves desktop targets under src-tauri/target/release", () => {
-    expect(bundleRoot("/repo/.moku/tauri", "macos")).toBe(
+    expect(bundleRoot("/repo/.moku/tauri", bundleLayout("macos"))).toBe(
       path.join("/repo/.moku/tauri", "src-tauri", "target", "release")
     );
-    expect(bundleRoot("/repo/.moku/tauri", "windows")).toBe(
+    expect(bundleRoot("/repo/.moku/tauri", bundleLayout("windows"))).toBe(
       path.join("/repo/.moku/tauri", "src-tauri", "target", "release")
     );
-    expect(bundleRoot("/repo/.moku/tauri", "linux")).toBe(
+    expect(bundleRoot("/repo/.moku/tauri", bundleLayout("linux"))).toBe(
       path.join("/repo/.moku/tauri", "src-tauri", "target", "release")
     );
   });
 
   it("resolves mobile targets under src-tauri directly (the gen/<platform> tree)", () => {
-    expect(bundleRoot("/repo/.moku/tauri", "ios")).toBe(
+    expect(bundleRoot("/repo/.moku/tauri", bundleLayout("ios"))).toBe(
       path.join("/repo/.moku/tauri", "src-tauri")
     );
-    expect(bundleRoot("/repo/.moku/tauri", "android")).toBe(
+    expect(bundleRoot("/repo/.moku/tauri", bundleLayout("android"))).toBe(
       path.join("/repo/.moku/tauri", "src-tauri")
     );
   });
@@ -53,11 +54,11 @@ describe("collectArtifacts", () => {
   });
 
   it("copies a single matched installer to outDir/<target>/", async () => {
-    const dmgDir = path.join(bundleRoot(projectDir, "macos"), "bundle", "dmg");
+    const dmgDir = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
     await mkdir(dmgDir, { recursive: true });
     await writeFile(path.join(dmgDir, "MyApp_1.0.0_aarch64.dmg"), "dmg-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "macos", outDir);
+    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"));
 
     expect(result.outPath).toBe(path.join(outDir, "macos"));
     expect(result.artifacts).toEqual([path.join(outDir, "macos", "MyApp_1.0.0_aarch64.dmg")]);
@@ -65,11 +66,16 @@ describe("collectArtifacts", () => {
   });
 
   it("copies a directory bundle (.app) recursively", async () => {
-    const appDir = path.join(bundleRoot(projectDir, "macos"), "bundle", "macos", "MyApp.app");
+    const appDir = path.join(
+      bundleRoot(projectDir, bundleLayout("macos")),
+      "bundle",
+      "macos",
+      "MyApp.app"
+    );
     await mkdir(path.join(appDir, "Contents"), { recursive: true });
     await writeFile(path.join(appDir, "Contents", "Info.plist"), "plist-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "macos", outDir);
+    const result = await collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"));
 
     const copiedApp = path.join(outDir, "macos", "MyApp.app");
     expect(result.artifacts).toContain(copiedApp);
@@ -77,7 +83,7 @@ describe("collectArtifacts", () => {
   });
 
   it("copies every match across multiple glob patterns for a target", async () => {
-    const root = bundleRoot(projectDir, "linux");
+    const root = bundleRoot(projectDir, bundleLayout("linux"));
     await mkdir(path.join(root, "bundle", "appimage"), { recursive: true });
     await mkdir(path.join(root, "bundle", "deb"), { recursive: true });
     await mkdir(path.join(root, "bundle", "rpm"), { recursive: true });
@@ -85,7 +91,7 @@ describe("collectArtifacts", () => {
     await writeFile(path.join(root, "bundle", "deb", "app.deb"), "b", "utf8");
     await writeFile(path.join(root, "bundle", "rpm", "app.rpm"), "c", "utf8");
 
-    const result = await collectArtifacts(projectDir, "linux", outDir);
+    const result = await collectArtifacts(projectDir, "linux", outDir, bundleLayout("linux"));
 
     expect(result.artifacts.map(artifact => path.basename(artifact)).toSorted()).toEqual([
       "app.AppImage",
@@ -95,7 +101,7 @@ describe("collectArtifacts", () => {
   });
 
   it("matches mobile installers under the gen/<platform> tree", async () => {
-    const root = bundleRoot(projectDir, "android");
+    const root = bundleRoot(projectDir, bundleLayout("android"));
     const outputsDir = path.join(
       root,
       "gen",
@@ -109,13 +115,15 @@ describe("collectArtifacts", () => {
     await mkdir(outputsDir, { recursive: true });
     await writeFile(path.join(outputsDir, "app-release.apk"), "apk-bytes", "utf8");
 
-    const result = await collectArtifacts(projectDir, "android", outDir);
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"));
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
   });
 
   it("throws a [native]-formatted error naming the globbed roots when nothing matches", async () => {
-    await expect(collectArtifacts(projectDir, "macos", outDir)).rejects.toThrow(
+    await expect(
+      collectArtifacts(projectDir, "macos", outDir, bundleLayout("macos"))
+    ).rejects.toThrow(
       /^\[native\] No macos installer artifacts found\.\n {2}Checked .*bundle\/dmg\/\*\.dmg.*bundle\/macos\/\*\.app/
     );
   });
@@ -147,7 +155,9 @@ describe("collectArtifacts — android artifact flavour", () => {
   it("aab: collects the store bundle and never the apk", async () => {
     await seedBoth();
 
-    const result = await collectArtifacts(projectDir, "android", outDir, { aab: true });
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), {
+      aab: true
+    });
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.aab")]);
   });
@@ -155,15 +165,15 @@ describe("collectArtifacts — android artifact flavour", () => {
   it("default: collects the apk and never the store bundle", async () => {
     await seedBoth();
 
-    const result = await collectArtifacts(projectDir, "android", outDir);
+    const result = await collectArtifacts(projectDir, "android", outDir, bundleLayout("android"));
 
     expect(result.artifacts).toEqual([path.join(outDir, "android", "app-release.apk")]);
   });
 
   it("aab with nothing built: names the aab pattern in the [native] error", async () => {
-    await expect(collectArtifacts(projectDir, "android", outDir, { aab: true })).rejects.toThrow(
-      /Checked .*outputs\/\*\*\/\*\.aab/
-    );
+    await expect(
+      collectArtifacts(projectDir, "android", outDir, bundleLayout("android"), { aab: true })
+    ).rejects.toThrow(/Checked .*outputs\/\*\*\/\*\.aab/);
   });
 });
 
@@ -174,7 +184,7 @@ describe("collectArtifacts — iOS simulator vs device", () => {
   /** Seeds the simulator build output: a `.app` DIRECTORY whose name contains spaces. */
   async function seedSimulatorApp(): Promise<string> {
     const appDir = path.join(
-      bundleRoot(projectDir, "ios"),
+      bundleRoot(projectDir, bundleLayout("ios")),
       "gen",
       "apple",
       "build",
@@ -188,7 +198,13 @@ describe("collectArtifacts — iOS simulator vs device", () => {
 
   /** Seeds the device build output: a signed `.ipa` file. */
   async function seedDeviceIpa(): Promise<string> {
-    const ipaDir = path.join(bundleRoot(projectDir, "ios"), "gen", "apple", "build", "arm64");
+    const ipaDir = path.join(
+      bundleRoot(projectDir, bundleLayout("ios")),
+      "gen",
+      "apple",
+      "build",
+      "arm64"
+    );
     await mkdir(ipaDir, { recursive: true });
     const ipaPath = path.join(ipaDir, "My Test App.ipa");
     await writeFile(ipaPath, "ipa-bytes", "utf8");
@@ -208,7 +224,9 @@ describe("collectArtifacts — iOS simulator vs device", () => {
   it("simulator: copies the *-sim/*.app directory recursively, spaces and all", async () => {
     await seedSimulatorApp();
 
-    const result = await collectArtifacts(projectDir, "ios", outDir, { simulator: true });
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      simulator: true
+    });
 
     const copiedApp = path.join(outDir, "ios", "My Test App.app");
     expect(result.artifacts).toEqual([copiedApp]);
@@ -220,7 +238,9 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await seedSimulatorApp();
     await seedDeviceIpa();
 
-    const result = await collectArtifacts(projectDir, "ios", outDir, { simulator: true });
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      simulator: true
+    });
 
     expect(result.artifacts.map(artifact => path.basename(artifact))).toEqual(["My Test App.app"]);
   });
@@ -229,13 +249,15 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await seedSimulatorApp();
     await seedDeviceIpa();
 
-    const result = await collectArtifacts(projectDir, "ios", outDir);
+    const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"));
 
     expect(result.artifacts).toEqual([path.join(outDir, "ios", "My Test App.ipa")]);
   });
 
   it("simulator with nothing built: names the simulator pattern in the [native] error", async () => {
-    await expect(collectArtifacts(projectDir, "ios", outDir, { simulator: true })).rejects.toThrow(
+    await expect(
+      collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), { simulator: true })
+    ).rejects.toThrow(
       /^\[native\] No ios installer artifacts found\.\n {2}Checked .*gen\/apple\/build\/\*-sim\/\*\.app/
     );
   });

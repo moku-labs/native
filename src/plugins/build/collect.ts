@@ -1,59 +1,29 @@
 /**
- * @file build plugin — pure per-target bundle-location table + artifact collection.
+ * @file build plugin — artifact collection. The bundle-location knowledge itself belongs to
+ * the project plugin (`project.getBundleLayout`) and arrives here as a {@link BundleLayout};
+ * this file only turns it into globs and copies what they match.
  */
 import { cp, glob, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BuildFlavor, Target } from "../../config";
+import type { BundleLayout } from "../project/layout";
 
 /**
- * Per-target glob patterns locating Tauri's finished installer(s), relative to each
- * target's {@link bundleRoot}. Desktop patterns are relative to `src-tauri/target/release/`
- * (Cargo's release profile output); mobile patterns are relative to `src-tauri/` (the
- * `gen/<platform>` tree `tauri ios|android build` produces).
- */
-export const BUNDLE_LOCATIONS: Readonly<Record<Target, readonly string[]>> = {
-  macos: ["bundle/dmg/*.dmg", "bundle/macos/*.app"],
-  windows: ["bundle/nsis/*-setup.exe", "bundle/msi/*.msi"],
-  linux: ["bundle/appimage/*.AppImage", "bundle/deb/*.deb", "bundle/rpm/*.rpm"],
-  ios: ["gen/apple/build/**/*.ipa"],
-  android: ["gen/android/app/build/outputs/**/*.apk"]
-};
-
-/**
- * The Android STORE bundle pattern. `tauri android build --aab` writes an `.aab` next to
- * nothing else useful, and a stale `.apk` from an earlier run must never ship as the store
- * artifact — so a flavour picks one pattern set, never both.
- */
-export const ANDROID_BUNDLE_LOCATIONS: readonly string[] = [
-  "gen/android/app/build/outputs/**/*.aab"
-];
-
-/**
- * Resolves Tauri's per-target output root that {@link BUNDLE_LOCATIONS} globs are
- * relative to — desktop bundles land under Cargo's `target/release/`; mobile installers
- * land under the mobile `gen/<platform>/` tree. Both roots live inside `src-tauri/`.
+ * Resolves Tauri's per-target output root the layout's globs are relative to — desktop
+ * bundles land under Cargo's `target/release/`, mobile installers under the
+ * `gen/<platform>/` tree. Both roots live inside `src-tauri/`.
  *
  * @param projectDirectory - The generated Tauri project root (contains `src-tauri/`).
- * @param target - The packaging target.
- * @returns The absolute output root to glob {@link BUNDLE_LOCATIONS} patterns against.
+ * @param layout - The target's bundle layout, from `project.getBundleLayout`.
+ * @returns The absolute output root to glob against.
  * @example
  * ```ts
- * bundleRoot("/repo/.moku/tauri", "macos"); // "/repo/.moku/tauri/src-tauri/target/release"
+ * bundleRoot("/repo/.moku/tauri", layout); // "/repo/.moku/tauri/src-tauri/target/release"
  * ```
  */
-export function bundleRoot(projectDirectory: string, target: Target): string {
-  const srcTauriDirectory = path.join(projectDirectory, "src-tauri");
-  if (target === "ios" || target === "android") return srcTauriDirectory;
-  return path.join(srcTauriDirectory, "target", "release");
+export function bundleRoot(projectDirectory: string, layout: BundleLayout): string {
+  return path.join(projectDirectory, layout.root);
 }
-
-/**
- * The iOS SIMULATOR build's output pattern, relative to {@link bundleRoot}. A simulator
- * build is unsigned and never produces an `.ipa`: `tauri ios build --target <arch>-sim`
- * writes `gen/apple/build/<arch>-sim/<Product Name>.app`, a DIRECTORY whose name carries
- * the app's display name (spaces included) — hence the recursive copy.
- */
-export const IOS_SIMULATOR_LOCATIONS: readonly string[] = ["gen/apple/build/*-sim/*.app"];
 
 /** Result of a successful collect pass — where the shippable artifacts landed. */
 export type CollectResult = { outPath: string; artifacts: readonly string[] };
@@ -65,54 +35,67 @@ export type CollectResult = { outPath: string; artifacts: readonly string[] };
 export type CollectOptions = BuildFlavor;
 
 /**
- * Picks the glob patterns for one collect pass: an iOS simulator build delivers the unsigned
- * `.app` bundle, an Android store build the `.aab`, every other pass the target's
+ * Picks the glob patterns for one collect pass, relative to {@link bundleRoot}. An iOS
+ * simulator build delivers the unsigned `.app` DIRECTORY (`tauri ios build --target
+ * <arch>-sim` writes `gen/apple/build/<arch>-sim/<Product Name>.app`, display name and
+ * spaces included), an Android store build the `.aab`, every other pass the target's
  * installer(s). Never two flavours at once — a stale device `.ipa` must not ship as a
  * simulator build's artifact, and a stale `.apk` must not ship as a store bundle.
  *
+ * @param layout - The target's bundle layout, from `project.getBundleLayout`.
  * @param target - The packaging target being collected.
  * @param opts - Collect options (`simulator` and `aab` each switch a pattern set).
  * @returns The glob patterns to match against {@link bundleRoot}.
  * @example
  * ```ts
- * bundlePatterns("ios", { simulator: true }); // ["gen/apple/build/*-sim/*.app"]
- * bundlePatterns("android", { aab: true });   // ["gen/android/app/build/outputs/**\/*.aab"]
+ * bundlePatterns(layout, "ios", { simulator: true }); // ["gen/apple/build/*-sim/*.app"]
  * ```
  */
-export function bundlePatterns(target: Target, opts?: CollectOptions): readonly string[] {
-  if (target === "ios" && opts?.simulator === true) return IOS_SIMULATOR_LOCATIONS;
-  if (target === "android" && opts?.aab === true) return ANDROID_BUNDLE_LOCATIONS;
-  return BUNDLE_LOCATIONS[target];
+export function bundlePatterns(
+  layout: BundleLayout,
+  target: Target,
+  opts?: CollectOptions
+): readonly string[] {
+  const gen = layout.genDirectory;
+  if (target === "ios" && gen) {
+    return opts?.simulator === true ? [`${gen}/build/*-sim/*.app`] : [`${gen}/build/**/*.ipa`];
+  }
+  if (target === "android" && gen) {
+    return [`${gen}/app/build/outputs/**/*.${opts?.aab === true ? "aab" : "apk"}`];
+  }
+  return layout.formats.map(format => `bundle/${format.directory}/${format.pattern}`);
 }
 
 /**
- * Locates the finished installer(s) for `target` via {@link BUNDLE_LOCATIONS} and copies
- * them into `outDir/<target>/` — the stable delivery location `native:complete` reports.
- * Copies with `recursive: true` so a macOS `.app` bundle (a directory) and single-file
- * installers (`.dmg`/`.exe`/`.msi`/`.AppImage`/`.deb`/`.rpm`/`.ipa`/`.aab`/`.apk`) both
- * work through the same call. Zero matches is an error, never a silent empty success —
- * a shippable artifact is the whole point of this phase.
+ * Locates the finished installer(s) for `target` and copies them into `outDir/<target>/` —
+ * the stable delivery location `native:complete` reports. Copies with `recursive: true` so
+ * a macOS `.app` bundle (a directory) and single-file installers
+ * (`.dmg`/`.exe`/`.msi`/`.AppImage`/`.deb`/`.rpm`/`.ipa`/`.aab`/`.apk`) both work through
+ * the same call. Zero matches is an error, never a silent empty success — a shippable
+ * artifact is the whole point of this phase.
  *
  * @param projectDirectory - The generated Tauri project root (contains `src-tauri/`).
  * @param target - The packaging target being collected.
  * @param outputDirectory - The installer delivery root (`config.outDir`).
+ * @param layout - The target's bundle layout, from `project.getBundleLayout`.
  * @param opts - Collect options (`simulator` collects the iOS `.app` instead of an `.ipa`;
  *   `aab` collects the Android store bundle instead of the `.apk`).
  * @returns The delivery directory and the copied artifact paths.
  * @throws {Error} When no glob pattern for `target` matches any file.
  * @example
  * ```ts
- * const { outPath, artifacts } = await collectArtifacts("/repo/.moku/tauri", "macos", "dist-native");
+ * const { outPath } = await collectArtifacts(projectDir, "macos", "dist-native", layout);
  * ```
  */
 export async function collectArtifacts(
   projectDirectory: string,
   target: Target,
   outputDirectory: string,
+  layout: BundleLayout,
   opts?: CollectOptions
 ): Promise<CollectResult> {
-  const root = bundleRoot(projectDirectory, target);
-  const patterns = bundlePatterns(target, opts);
+  const root = bundleRoot(projectDirectory, layout);
+  const patterns = bundlePatterns(layout, target, opts);
 
   const matches: string[] = [];
   for (const pattern of patterns) {

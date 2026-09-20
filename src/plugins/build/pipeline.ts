@@ -427,10 +427,13 @@ export async function runPipeline(
   );
 
   const collect = await runPhase(ctx, target, "collect", () =>
-    collectArtifacts(ctx.global.projectDir, target, ctx.global.outDir, {
-      simulator: opts.simulator,
-      aab: opts.aab
-    })
+    collectArtifacts(
+      ctx.global.projectDir,
+      target,
+      ctx.global.outDir,
+      deps.project.getBundleLayout({ target }),
+      { simulator: opts.simulator, aab: opts.aab }
+    )
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });
 

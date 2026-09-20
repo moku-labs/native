@@ -190,13 +190,14 @@ src/
   plugins/
     index.ts              # barrel: plugin instances + TYPE-ONLY namespaces (Project, Tauri, Build, Doctor, Cli)
     project/              # Complex tier
-      index.ts types.ts api.ts registry.ts writer.ts completeness.ts patch.ts clean.ts icon.ts
+      index.ts types.ts api.ts validate.ts layout.ts registry.ts writer.ts clean.ts icon.ts
+      mobile/             # completeness.ts signing.ts runner.ts patch.ts (orchestration only)
       generators/         # tauri-conf.ts cargo.ts rust.ts capabilities.ts build-script.ts
                           #   entitlements.ts sidecar.ts paths.ts types.ts
     tauri/                # Standard tier
       index.ts types.ts api.ts argv.ts resolve.ts spawn.ts dev.ts stream.ts errors.ts scrub.ts state.ts
     build/                # Standard tier
-      index.ts types.ts api.ts pipeline.ts collect.ts
+      index.ts types.ts api.ts pipeline.ts collect.ts   # layout via project.getBundleLayout
     doctor/               # Complex tier
       index.ts types.ts api.ts report.ts
       checks/             # index.ts types.ts rustup.ts node.ts xcode.ts ios-tools.ts ios-platform.ts

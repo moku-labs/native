@@ -40,7 +40,7 @@ export type RunAllOptions = BuildFlavor & { targets?: readonly Target[] | undefi
 export type BuildDeps = {
   readonly project: Pick<
     ProjectApi,
-    "generate" | "getCompleteness" | "patchMobile" | "ensureIconSource"
+    "generate" | "getBundleLayout" | "getCompleteness" | "patchMobile" | "ensureIconSource"
   >;
   readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "getRunner">;
 };

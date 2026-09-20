@@ -12,6 +12,25 @@ Mobile permission codegen in v1 is conf-only (D-012): store, notification,
 clipboard-manager, and deep-link (custom-scheme-only, D-011) ship zero XML-patching
 code, and tray is desktop-only (filtered from every mobile target-set).
 
+## Files
+
+| File | Owns |
+|---|---|
+| `index.ts` | wiring only — the `api` factory plus the `onInit` config validation |
+| `types.ts` | shared types and the public `Api` surface |
+| `api.ts` | API factory: capability resolution + the generate/patch/clean/icon delegations |
+| `validate.ts` | composition-time global-config validation, called from `onInit` |
+| `layout.ts` | **the one owner of the output layout** — the desktop bundle-FORMAT table and the mobile `gen/<platform>` name, exposed as `getBundleLayout({ target })` |
+| `registry.ts` | the capability registry rows, the name guard, and `resolve()` |
+| `writer.ts` | write-if-changed (content hash) + the write-path guard |
+| `icon.ts` | the embedded 1024x1024 placeholder PNG |
+| `clean.ts` | target-scoped destructive cleanup behind the clean guards |
+| `generators/*.ts` | one generated artifact each (see the table below) |
+| `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
+| `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` |
+| `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
+| `mobile/patch.ts` | orchestration only — which patches a platform needs, and in which order |
+
 ## Generated artifacts
 
 | Path (under `projectDir`) | Generator | What it carries |
@@ -39,6 +58,9 @@ app.project.generate({ target: "macos" });
 app.project.getCompleteness({ target: "android" });
 // => { status: "not-applicable" | "not-initialized" | "incomplete" | "complete", missing?: string[] }
 
+app.project.getBundleLayout({ target: "macos" });
+// => { root: "src-tauri/target/release", formats: [{ directory, pattern }], genDirectory?: string }
+
 await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
 // => { patched: string[], unchanged: string[] }
 
@@ -60,8 +82,12 @@ app.project.getRequiredFiles({ target: "android" }); // => required gen/android 
   `projectDir` via write-if-changed. Desktop targets get the whole tree; mobile targets
   get the shared tree + conf (the `gen/` tree itself is created by `tauri android/ios
   init`, never by this plugin).
-- `completeness({ target })` — mobile `gen/<platform>` required-file-set gate. Desktop
+- `getCompleteness({ target })` — mobile `gen/<platform>` required-file-set gate. Desktop
   targets are `"not-applicable"`.
+- `getBundleLayout({ target })` — where that target's build output lands: the output root,
+  the desktop bundle-format directories with their artifact globs, and the mobile
+  `gen/<platform>` directory. `build`'s collect phase globs against this instead of keeping
+  its own copy of the table, so the layout has exactly one owner (`layout.ts`).
 - `patchMobile({ target, runner? })` — idempotent post-init patch pass, see below.
 - `ensureIconSource()` — returns `path.resolve(app.icon)` when configured, throwing a
   `[native]` error when that file is missing. When unset it writes the embedded
@@ -160,8 +186,8 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 `app`, `web`, `system`, `capabilities`, `targets`, `projectDir`, `outDir`, `signing`
 (all declared in the framework's `src/config.ts`).
 
-`onInit` validates the global config at composition time and throws `[native]`-prefixed
-errors for: a missing/empty `app.name`, a non-reverse-DNS `app.identifier`, missing
+`onInit` runs `validate.ts` over the global config at composition time and throws
+`[native]`-prefixed errors for: a missing/empty `app.name`, a non-reverse-DNS `app.identifier`, missing
 `web.build`/`web.devCommand`/`web.devUrl`/`web.dist`, any `config.system` entry the
 registry doesn't recognize, and a `"deep-link"` entry in `config.system` without a
 matching non-empty `capabilities["deep-link"].scheme`.

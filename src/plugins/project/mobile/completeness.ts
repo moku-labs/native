@@ -3,8 +3,9 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { MobileTarget, Target } from "../../config";
-import type { CompletenessResult } from "./types";
+import type { MobileTarget, Target } from "../../../config";
+import { bundleLayout } from "../layout";
+import type { CompletenessResult } from "../types";
 
 /**
  * Required top-level entries per mobile `gen/<platform>` tree (Tauri 2.9.x scaffolding).
@@ -21,20 +22,6 @@ const REQUIRED_FILES: Readonly<Record<MobileTarget, readonly string[]>> = {
     "app/src/main/AndroidManifest.xml"
   ]
 };
-
-/**
- * The `gen/<platform>` subdirectory name Tauri uses for a mobile target (`"apple"` for iOS).
- *
- * @param target - A mobile packaging target.
- * @returns The `gen/<platform>` directory name.
- * @example
- * ```ts
- * genPlatformDirectoryName("ios"); // "apple"
- * ```
- */
-function genPlatformDirectoryName(target: MobileTarget): "apple" | "android" {
-  return target === "ios" ? "apple" : "android";
-}
 
 /**
  * Returns the required-file set for a mobile platform — consumed by `doctor` and by
@@ -70,12 +57,8 @@ export function completeness(projectDirectory: string, target: Target): Complete
     return { status: "not-applicable" };
   }
 
-  const genDirectory = path.join(
-    projectDirectory,
-    "src-tauri",
-    "gen",
-    genPlatformDirectoryName(target)
-  );
+  const layout = bundleLayout(target);
+  const genDirectory = path.join(projectDirectory, layout.root, layout.genDirectory ?? "");
   if (!existsSync(genDirectory)) {
     return { status: "not-initialized" };
   }

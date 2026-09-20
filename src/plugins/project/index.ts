@@ -1,5 +1,6 @@
 import { createPlugin } from "../../config";
-import { createProjectApi, validateProjectConfig } from "./api";
+import { createProjectApi } from "./api";
+import { validateProjectConfig } from "./validate";
 
 /**
  * Complex tier — capability registry + generators/ + write-if-changed writer + the mobile/

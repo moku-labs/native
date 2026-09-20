@@ -4,7 +4,7 @@
 import { envPlugin, logPlugin, workerSafeProcessEnv } from "@moku-labs/common";
 import { createCoreConfig } from "@moku-labs/core";
 
-/** The five packaging targets (D1 — all five in v1). */
+/** The five packaging targets shipped in v1. */
 export const TARGETS = ["macos", "windows", "linux", "ios", "android"] as const;
 
 /** A native packaging target. */

@@ -1,13 +1,13 @@
 # build
 
-> Standard plugin — sequential per-target pipeline emitting global `native:phase`/`native:complete`; owns the collect phase (bundle-location table → `dist-native/<target>/`).
+> Standard plugin — sequential per-target pipeline emitting global `native:phase`/`native:complete`; owns the collect phase (`project.getBundleLayout` → globs → `dist-native/<target>/`).
 
 The per-target packaging orchestrator. Runs `scaffold → codegen → icons → compile → bundle →
 collect` for one target, delegating `scaffold`/`codegen` to `project` and `icons`/`compile`/
 `bundle` to `tauri` (`ctx.require`, D-007) — `build` never spawns a process itself (D-013). It
-owns exactly one phase directly: `collect`, a pure `Target → glob patterns` table that locates
-the finished installer(s) in Tauri's internal output layout and copies them to a stable
-`dist-native/<target>/` delivery location.
+owns exactly one phase directly: `collect`, which turns the layout it gets from
+`project.getBundleLayout({ target })` into globs, locates the finished installer(s) in Tauri's
+internal output layout, and copies them to a stable `dist-native/<target>/` delivery location.
 
 ## API
 
@@ -49,7 +49,7 @@ type BuildResult = {
 | `icons` | `project` + `tauri` | Source from `project.ensureIconSource()` (`config.app.icon`, or a generated 1024×1024 placeholder), then `tauri.icon({ source })`. Regeneration is skipped **only** when `src-tauri/icons/icon.png` is newer than the source AND this pass did not run `mobileInit` (a fresh `gen/` tree ships Tauri's default icons). Detail: `"up to date"`, `"generated"` or `"placeholder"`. |
 | `compile` | `tauri.build()` | One subprocess covers compile+bundle (D-013); `compile` carries the live `onTick` progress stream (`status: "progress"`, real crate counts, never a fake percentage). |
 | `bundle` | (same subprocess) | The transition is **live**: the first output line matching the bundling pattern closes `compile` and opens `bundle` while the subprocess is still running. No transition line: `compile` closes at exit and `bundle` is reported with a zero duration. A failure is attributed to whichever phase is open, so a bundling/signing error reads as `bundle`, not `compile`. |
-| `collect` | own (`collect.ts`) | Locates artifacts via the bundle-location table, copies them to `outDir/<target>/`. The artifact flavour picks ONE pattern set, never two: iOS collects the `*-sim/*.app` with `simulator` and the `.ipa` otherwise; Android collects `**/*.aab` with `aab` and `**/*.apk` otherwise — a stale artifact from the other flavour can never ship. **Zero matches is an error** — never a silent empty success. |
+| `collect` | own (`collect.ts`) | Locates artifacts via the layout from `project.getBundleLayout({ target })`, copies them to `outDir/<target>/`. The artifact flavour picks ONE pattern set, never two: iOS collects the `*-sim/*.app` with `simulator` and the `.ipa` otherwise; Android collects `**/*.aab` with `aab` and `**/*.apk` otherwise — a stale artifact from the other flavour can never ship. **Zero matches is an error** — never a silent empty success. |
 
 ## Events
 
@@ -69,11 +69,13 @@ artifact context).
 
 ## Design notes
 
-- **`collect.ts`'s `BUNDLE_LOCATIONS`** is a pure `Target → readonly glob[]` table, resolved
-  against a per-target `bundleRoot(projectDir, target)`: desktop patterns are relative to
-  `src-tauri/target/release/` (Cargo's release output); mobile patterns are relative to
-  `src-tauri/` (the `gen/<platform>/` tree). Copies use `fs.cp(..., { recursive: true })` so a
-  macOS `.app` bundle (a directory) and single-file installers copy through the same call.
+- **No bundle table of its own.** Where a target's output lands is the `project` plugin's
+  knowledge (`project/layout.ts`), and it arrives here through deps as a `BundleLayout`:
+  `bundleRoot(projectDir, layout)` resolves the root — desktop under `src-tauri/target/release/`
+  (Cargo's release output), mobile under `src-tauri/` (the `gen/<platform>/` tree) — and
+  `bundlePatterns(layout, target, opts)` turns the layout's format directories into globs.
+  Copies use `fs.cp(..., { recursive: true })` so a macOS `.app` bundle (a directory) and
+  single-file installers copy through the same call.
 - **Simulator vs device** — `collectArtifacts(..., { simulator: true })` matches
   `gen/apple/build/*-sim/*.app` and **never** a device `.ipa`; a plain iOS pass matches
   `gen/apple/build/**/*.ipa` and never the simulator bundle. A simulator build is unsigned and
@@ -87,5 +89,6 @@ artifact context).
   inputs are validated per-run instead.
 - **Domain files**: `pipeline.ts` (phase sequencing, timing, `native:phase` emission, the mobile
   init/completeness gate, the icons freshness rule, the live compile→bundle split), `collect.ts`
-  (bundle-location table + `bundleRoot()` + `bundlePatterns()` + `collectArtifacts()` — pure
-  locate/copy), `api.ts` (`prepare`/`run`/`runAll` composition).
+  (`bundleRoot()` + `bundlePatterns()` + `collectArtifacts()` — pure locate/copy over a
+  `BundleLayout` it is handed), `api.ts` (`prepare`/`run`/`runAll` composition), `types.ts`
+  (`BuildDeps` — the exact `project`/`tauri` slices the pipeline calls).

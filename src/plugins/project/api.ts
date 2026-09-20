@@ -1,11 +1,11 @@
 /**
- * @file project plugin — API factory + config validation + capability resolution orchestration.
+ * @file project plugin — API factory: capability resolution, generation, and the mobile
+ * patch/completeness/clean delegations. Composition-time validation lives in `validate.ts`.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Config, MobileTarget, Target } from "../../config";
 import { clean } from "./clean";
-import { completeness, requiredFiles } from "./completeness";
 import { generateBuildScript } from "./generators/build-script";
 import { generateCapabilities } from "./generators/capabilities";
 import { generateCargo } from "./generators/cargo";
@@ -15,14 +15,11 @@ import { generateSidecar } from "./generators/sidecar";
 import { generateTauriConf } from "./generators/tauri-conf";
 import type { GeneratorInput } from "./generators/types";
 import { placeholderIconPng } from "./icon";
-import { patchMobile } from "./patch";
-import {
-  assertKnownCapabilities,
-  isKnownCapability,
-  registryRows,
-  resolve,
-  unknownCapabilityError
-} from "./registry";
+import type { BundleLayout } from "./layout";
+import { bundleLayout } from "./layout";
+import { completeness, requiredFiles } from "./mobile/completeness";
+import { patchMobile } from "./mobile/patch";
+import { isKnownCapability, registryRows, resolve, unknownCapabilityError } from "./registry";
 import type {
   Api,
   GenerateResult,
@@ -31,66 +28,6 @@ import type {
   ResolvedCapability
 } from "./types";
 import { writeIfChanged } from "./writer";
-
-const IDENTIFIER_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/i;
-
-/**
- * Validates the global config at composition time — throws `[native]`-formatted errors
- * for missing app identity, missing web wiring, unknown `config.system` names, or a
- * `deep-link` composition missing its required scheme.
- *
- * @param global - Frozen global framework config.
- * @throws {Error} When app identity, web wiring, system names, or deep-link config are invalid.
- * @example
- * ```ts
- * validateProjectConfig(ctx.global);
- * ```
- */
-export function validateProjectConfig(global: Readonly<Config>): void {
-  // Stanza 1 — identity and web wiring. Every field below lands verbatim in
-  // tauri.conf.json, where a missing value fails deep inside `tauri build` instead.
-  if (!global.app.name) {
-    throw new Error(
-      "[native] app.name is required.\n  Set config.app.name to your app's display name."
-    );
-  }
-  if (!IDENTIFIER_PATTERN.test(global.app.identifier)) {
-    throw new Error(
-      `[native] app.identifier "${global.app.identifier}" is not a valid reverse-DNS identifier.\n  Use a reverse-DNS identifier such as "com.example.myapp".`
-    );
-  }
-  if (!global.web.build) {
-    throw new Error(
-      "[native] web.build is required.\n  Set config.web.build to the command that builds your web assets."
-    );
-  }
-  if (!global.web.devCommand) {
-    throw new Error(
-      "[native] web.devCommand is required.\n  Set config.web.devCommand to the command that starts your dev server."
-    );
-  }
-  if (!global.web.devUrl) {
-    throw new Error(
-      "[native] web.devUrl is required.\n  Set config.web.devUrl to your dev server's URL."
-    );
-  }
-  if (!global.web.dist) {
-    throw new Error(
-      "[native] web.dist is required.\n  Set config.web.dist to your web build's output directory."
-    );
-  }
-
-  // Stanza 2 — the composed capability set. Names are validated against the registry, and
-  // deep-link is the one row that cannot be packaged from its defaults alone.
-  assertKnownCapabilities(global.system);
-
-  const usesDeepLink = global.system.some(entry => entry.name === "deep-link");
-  if (usesDeepLink && !global.capabilities["deep-link"]?.scheme) {
-    throw new Error(
-      '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is missing.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
-    );
-  }
-}
 
 /**
  * Resolves every capability configured on `config.system` against the registry, scoped
@@ -135,6 +72,22 @@ function resolveConfiguredCapabilities(
  */
 function getRequiredFiles(opts: { target: MobileTarget }): readonly string[] {
   return requiredFiles(opts.target);
+}
+
+/**
+ * Returns where one target's build output lands inside the generated project — read from
+ * `layout.ts`, the single owner of that table, so build's collect phase never keeps a copy.
+ *
+ * @param opts - The lookup options.
+ * @param opts.target - The packaging target.
+ * @returns The output root, bundle formats, and mobile `gen/` directory for that target.
+ * @example
+ * ```ts
+ * getBundleLayout({ target: "macos" });
+ * ```
+ */
+function getBundleLayout(opts: { target: Target }): BundleLayout {
+  return bundleLayout(opts.target);
 }
 
 /**
@@ -279,6 +232,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
 
   return {
     generate: generateArtifacts,
+    getBundleLayout,
     getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
     clean: runClean,

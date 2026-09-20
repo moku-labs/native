@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Config as GlobalConfig, TauriRunner } from "../../../../config";
+import type { Config as GlobalConfig, Target, TauriRunner } from "../../../../config";
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
+import { bundleLayout } from "../../../project/layout";
 import type { CompletenessResult } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
@@ -31,6 +32,7 @@ const okResult = (): RunResult => ({ code: 0, stdout: "", stderr: "", durationMs
 function createProjectMock(iconSource: string) {
   return {
     generate: vi.fn(async () => ({ written: [], unchanged: [], skipped: [] })),
+    getBundleLayout: vi.fn((opts: { target: Target }) => bundleLayout(opts.target)),
     getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
     ensureIconSource: vi.fn(async () => iconSource)
@@ -425,7 +427,7 @@ describe("runPipeline", () => {
   });
 
   it("runs every phase in PHASE_ORDER, records six timings, and emits native:complete", async () => {
-    const dmgDir = path.join(bundleRoot(projectDir, "macos"), "bundle", "dmg");
+    const dmgDir = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
     await mkdir(dmgDir, { recursive: true });
     await writeFile(path.join(dmgDir, "App.dmg"), "bytes", "utf8");
 
@@ -451,7 +453,7 @@ describe("runPipeline", () => {
 
   it("a simulator run collects the simulator .app instead of a device .ipa", async () => {
     const simulatorApp = path.join(
-      bundleRoot(projectDir, "ios"),
+      bundleRoot(projectDir, bundleLayout("ios")),
       "gen",
       "apple",
       "build",

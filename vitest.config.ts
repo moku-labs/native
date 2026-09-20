@@ -19,7 +19,7 @@ export default defineConfig({
         }
       },
       {
-        // Real-toolchain proof (A13). Opt-in only: `bun run test:smoke`, never `bun run test`
+        // Real-toolchain proof. Opt-in only: `bun run test:smoke`, never `bun run test`
         // — it drives a real `tauri build` (cargo compiles from scratch on a cold cache),
         // so the budget is 30 minutes and the files run one at a time to keep a single
         // Cargo target/ lock uncontended.

@@ -4,6 +4,7 @@
 import type { LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { CapabilityConfigMap, Config, MobileTarget, Target, TauriRunner } from "../../config";
+import type { BundleLayout } from "./layout";
 
 /** Result of a write-if-changed generation pass. */
 export type GenerateResult = {
@@ -89,6 +90,7 @@ export type ProjectContext = PluginCtx<Record<string, never>, Record<string, nev
 /** Public API of the project plugin. */
 export type Api = {
   generate(opts: { target: Target }): Promise<GenerateResult>;
+  getBundleLayout(opts: { target: Target }): BundleLayout;
   getCompleteness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;

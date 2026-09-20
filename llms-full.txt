@@ -61,7 +61,7 @@ Shared cross-plugin types: `MobileTarget`, `TauriRunner` and `BuildFlavor` are d
 2. GLOBAL CONFIG + EVENTS (src/config.ts — verbatim)
 ====================================================================
 
-/** The five packaging targets (D1 — all five in v1). */
+/** The five packaging targets shipped in v1. */
 export const TARGETS = ["macos", "windows", "linux", "ios", "android"] as const;
 
 /** A native packaging target. */
@@ -333,8 +333,17 @@ Responsibility: owns the generated Tauri project as FILES — capability registr
 all generators for projectDir, the write-if-changed content-hash writer, the mobile
 completeness gate, the mobile patch pass (Android signing + the runner rewrite), the
 placeholder icon, and clean. It NEVER spawns subprocesses. Files: index.ts, types.ts,
-api.ts, registry.ts, writer.ts, completeness.ts, patch.ts, clean.ts, icon.ts,
+api.ts, validate.ts, layout.ts, registry.ts, writer.ts, clean.ts, icon.ts,
+mobile/{completeness,signing,runner,patch}.ts,
 generators/{tauri-conf,cargo,rust,capabilities,build-script,entitlements,sidecar,paths,types}.ts.
+
+layout.ts is the ONE owner of the generated tree's output layout — the desktop
+bundle-FORMAT table and the mobile gen/<platform> directory name. clean.ts, the
+completeness gate, the mobile patch pass and (through project.getBundleLayout) build's
+collect phase all read it from there; nobody keeps a second copy.
+mobile/patch.ts is orchestration only: it decides WHICH patches a platform needs and in
+which order, while mobile/signing.ts owns the Android Gradle signing block and
+mobile/runner.ts owns the Xcode/Android-Studio runner-command rewrite.
 
 Generated artifacts (all through write-if-changed):
 | Path (under projectDir) | Generator | Carries |
@@ -414,9 +423,18 @@ export type ProjectContext = {
   readonly log: LogApi;
 };
 
+/** Where one target's build output lives inside the generated project (layout.ts). */
+export type BundleFormat = { readonly directory: string; readonly pattern: string };
+export type BundleLayout = {
+  readonly root: string;                          // relative to projectDir
+  readonly formats: readonly BundleFormat[];      // desktop bundle/<format>/ — empty for mobile
+  readonly genDirectory: string | undefined;      // gen/<platform> — undefined for desktop
+};
+
 /** Public API of the project plugin. */
 export type Api = {
   generate(opts: { target: Target }): Promise<GenerateResult>;
+  getBundleLayout(opts: { target: Target }): BundleLayout;
   getCompleteness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target }): Promise<CleanResult>;
@@ -452,7 +470,10 @@ Behavior:
   bundle.macOS.entitlements) are rebased onto src-tauri in POSIX form, because that is where
   Tauri resolves them from; beforeDevCommand/beforeBuildCommand use the OBJECT form with
   an explicit cwd = path.resolve(web.cwd ?? ".").
-- completeness({ target }): mobile gen/<platform> required-file-set gate. Desktop => "not-applicable".
+- getCompleteness({ target }): mobile gen/<platform> required-file-set gate. Desktop => "not-applicable".
+- getBundleLayout({ target }): the target's output root, its desktop bundle-format directories
+  with their artifact globs, and its mobile gen/<platform> directory — straight from layout.ts.
+  build's collect phase globs against this instead of keeping its own table.
 - patchMobile({ target, runner? }): idempotent post-init patch.
     * iOS: rewrites the runner command in gen/apple/project.yml (YAML scalar quoting) and in
       every gen/apple/*.xcodeproj/project.pbxproj (escaped \" quoting, because the value sits
@@ -480,7 +501,7 @@ Behavior:
 - resolve(name, config?): typed registry lookup; throws when name isn't in the registry, or
   when resolving "deep-link" without a non-empty scheme.
 - getRegistryRows(): fresh COPIES — a caller can never mutate the registry.
-- onInit: validateProjectConfig(ctx.global) — see section 12.
+- onInit: validateProjectConfig(ctx.global) from validate.ts — see section 12.
 
 Writer safety: assertWritablePath refuses writes into target/, .gradle/, DerivedData or Pods,
 scanning ONLY the path BELOW projectDir — a repository checked out under a directory
@@ -652,7 +673,8 @@ Responsibility: the per-target packaging orchestrator. Runs scaffold -> codegen 
 compile -> bundle -> collect for one target, delegating scaffold/codegen to project and
 icons/compile/bundle to tauri — build never spawns a process itself. Owns exactly one phase
 directly: collect. depends: [projectPlugin, tauriPlugin]. No config, no state, no onInit.
-Files: index.ts, types.ts, api.ts, pipeline.ts, collect.ts.
+Files: index.ts, types.ts, api.ts, pipeline.ts, collect.ts (no bundle table of its own — the
+layout arrives through deps from project.getBundleLayout).
 
 Types (src/plugins/build/types.ts — verbatim):
 
@@ -681,8 +703,11 @@ export type RunAllOptions = {
 
 /** The dependency API slices the pipeline calls, resolved ONCE in createBuildApi. */
 export type BuildDeps = {
-  readonly project: Pick<ProjectApi, "generate" | "completeness" | "patchMobile" | "ensureIconSource">;
-  readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "runner">;
+  readonly project: Pick<
+    ProjectApi,
+    "generate" | "getBundleLayout" | "getCompleteness" | "patchMobile" | "ensureIconSource"
+  >;
+  readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "getRunner">;
 };
 
 /** Public API of the build plugin — the per-target pipeline orchestrator. */
@@ -707,20 +732,23 @@ Phase semantics (pipeline.ts):
 | icons | project + tauri | source = await project.ensureIconSource(); regeneration is skipped ONLY when src-tauri/icons/icon.png is newer than the source AND this pass did not run mobileInit (a fresh gen/ tree ships Tauri's default icons). Else tauri.icon({ source }). detail: "up to date" / "generated" / "placeholder". |
 | compile | tauri.build() | ONE subprocess covers compile+bundle. compile carries the live onTick progress stream. |
 | bundle | (same subprocess) | LIVE transition on the first /bundling/i output line; zero-duration fallback when absent; a failure is attributed to the OPEN phase. |
-| collect | own (collect.ts) | Locates artifacts via the glob table, copies to outDir/<target>/. ZERO matches is an error — never a silent empty success. |
+| collect | own (collect.ts) | Locates artifacts via the layout from project.getBundleLayout({ target }), copies to outDir/<target>/. ZERO matches is an error — never a silent empty success. |
 
 prepare({ target }) runs scaffold -> codegen -> icons and stops: everything that makes the
 generated project buildable, without invoking the build verb. cli.dev calls it first.
 
-BUNDLE_LOCATIONS (collect.ts) — per-target glob patterns, resolved against bundleRoot():
+collect.ts keeps NO bundle table of its own. The layout comes from project (layout.ts) through
+deps as a BundleLayout; bundleRoot(projectDir, layout) resolves the root and
+bundlePatterns(layout, target, opts) turns it into globs:
   macos:   ["bundle/dmg/*.dmg", "bundle/macos/*.app"]        (root: src-tauri/target/release/)
   windows: ["bundle/nsis/*-setup.exe", "bundle/msi/*.msi"]   (root: src-tauri/target/release/)
   linux:   ["bundle/appimage/*.AppImage", "bundle/deb/*.deb", "bundle/rpm/*.rpm"]
   ios:     ["gen/apple/build/**/*.ipa"]                      (root: src-tauri/)
-  android: ["gen/android/app/build/outputs/**/*.{aab,apk}"]  (root: src-tauri/)
-IOS_SIMULATOR_LOCATIONS = ["gen/apple/build/*-sim/*.app"] — collectArtifacts(..., { simulator:
-true }) uses these INSTEAD, never both: a simulator build is unsigned and produces a .app
-DIRECTORY whose name carries the display name, spaces included. Copies use
+  android: ["gen/android/app/build/outputs/**/*.apk"]        (root: src-tauri/)
+One flavour at a time, never two: { simulator: true } matches ["gen/apple/build/*-sim/*.app"]
+INSTEAD of the .ipa (a simulator build is unsigned and produces a .app DIRECTORY whose name
+carries the display name, spaces included), and { aab: true } matches
+["gen/android/app/build/outputs/**/*.aab"] INSTEAD of the .apk. Copies use
 fs.cp(..., { recursive: true }) so a .app bundle and single-file installers share one call.
 
 runAll({ targets?, simulator?, aab? }): sequential for every target (default
