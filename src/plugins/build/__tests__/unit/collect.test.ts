@@ -22,6 +22,13 @@ describe("bundlePatterns", () => {
       expect(bundlePatterns(bundleLayout(target), target).length).toBeGreaterThan(0);
     }
   });
+
+  it("covers both simulator directory layouts for an ios simulator build", () => {
+    expect(bundlePatterns(bundleLayout("ios"), "ios", { simulator: true })).toEqual([
+      "gen/apple/build/*-sim/*.app",
+      "gen/apple/build/x86_64/*.app"
+    ]);
+  });
 });
 
 describe("bundleRoot", () => {
@@ -359,14 +366,17 @@ describe("collectArtifacts — iOS simulator vs device", () => {
   let projectDir: string;
   let outDir: string;
 
-  /** Seeds the simulator build output: a `.app` DIRECTORY whose name contains spaces. */
-  async function seedSimulatorApp(): Promise<string> {
+  /**
+   * Seeds the simulator build output: a `.app` DIRECTORY whose name contains spaces, under
+   * the arch directory tauri names after the `--target` it was given.
+   */
+  async function seedSimulatorApp(archDirectory = "arm64-sim"): Promise<string> {
     const appDir = path.join(
       bundleRoot(projectDir, bundleLayout("ios")),
       "gen",
       "apple",
       "build",
-      "arm64-sim",
+      archDirectory,
       "My Test App.app"
     );
     await mkdir(path.join(appDir, "Frameworks"), { recursive: true });
@@ -399,8 +409,13 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     await rm(outDir, { recursive: true, force: true });
   });
 
-  it("simulator: copies the *-sim/*.app directory recursively, spaces and all", async () => {
-    await seedSimulatorApp();
+  // Both simulator directory names tauri produces: `<arch>-sim` everywhere, and a bare
+  // `x86_64` on an Intel host, where the simulator target carries no `-sim` suffix.
+  it.each([
+    "arm64-sim",
+    "x86_64"
+  ])("simulator: copies the %s/*.app directory recursively, spaces and all", async archDirectory => {
+    await seedSimulatorApp(archDirectory);
 
     const result = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
       simulator: true,
@@ -488,14 +503,19 @@ describe("collectArtifacts — iOS simulator vs device", () => {
     expect(await readFile(result.artifacts[0] as string, "utf8")).toBe("second-arch-bytes");
   });
 
-  it("simulator with nothing built: names the simulator pattern in the [native] error", async () => {
-    await expect(
-      collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
-        simulator: true,
-        resolvePath
-      })
-    ).rejects.toThrow(
+  it("simulator with nothing built: names both simulator patterns in the [native] error", async () => {
+    // One rejection, asserted twice: the message must name BOTH simulator directory layouts.
+    const message = await collectArtifacts(projectDir, "ios", outDir, bundleLayout("ios"), {
+      simulator: true,
+      resolvePath
+    }).then(
+      () => "collect unexpectedly succeeded",
+      (error: Error) => error.message
+    );
+
+    expect(message).toMatch(
       /^\[native\] No ios installer artifacts found\.\n {2}Checked .*gen\/apple\/build\/\*-sim\/\*\.app/
     );
+    expect(message).toMatch(/gen\/apple\/build\/x86_64\/\*\.app/);
   });
 });

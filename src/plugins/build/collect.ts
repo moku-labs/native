@@ -20,8 +20,13 @@ const ANDROID_APK_PATTERN = "app/build/outputs/apk/**/*elease*/*.apk";
 /** The store-bundle equivalent of {@link ANDROID_APK_PATTERN}. */
 const ANDROID_AAB_PATTERN = "app/build/outputs/bundle/**/*elease*/*.aab";
 
-/** The unsigned simulator `.app` DIRECTORY `tauri ios build --target <arch>-sim` writes. */
-const IOS_SIMULATOR_PATTERN = "build/*-sim/*.app";
+/**
+ * The unsigned simulator `.app` DIRECTORIES `tauri ios build --target <simulator slice>`
+ * writes — one pattern per directory name that slice can have. Tauri names the Intel
+ * simulator target `x86_64`, with no `-sim` suffix, so an x64 host's build output is invisible
+ * to the suffixed glob alone.
+ */
+const IOS_SIMULATOR_PATTERNS = ["build/*-sim/*.app", "build/x86_64/*.app"] as const;
 
 /** The signed device archive — one per arch directory, stale ones included (deduplicated). */
 const IOS_DEVICE_PATTERN = "build/**/*.ipa";
@@ -62,11 +67,12 @@ export type CollectInput = CollectOptions & { resolvePath: PathResolver };
 
 /**
  * Picks the glob patterns for one collect pass, relative to {@link bundleRoot}. An iOS
- * simulator build delivers the unsigned `.app` DIRECTORY (`tauri ios build --target
- * <arch>-sim` writes `gen/apple/build/<arch>-sim/<Product Name>.app`, display name and
- * spaces included), an Android store build the `.aab`, every other pass the target's
- * installer(s). Never two flavours at once — a stale device `.ipa` must not ship as a
- * simulator build's artifact, and a stale `.apk` must not ship as a store bundle.
+ * simulator build delivers the unsigned `.app` DIRECTORY (`tauri ios build --target <slice>`
+ * writes `gen/apple/build/<slice>/<Product Name>.app`, display name and spaces included, and
+ * the Intel slice is named `x86_64` rather than `<arch>-sim`), an Android store build the
+ * `.aab`, every other pass the target's installer(s). Never two flavours at once — a stale
+ * device `.ipa` must not ship as a simulator build's artifact, and a stale `.apk` must not
+ * ship as a store bundle.
  *
  * @param layout - The target's bundle layout, from `project.getBundleLayout`.
  * @param target - The packaging target being collected.
@@ -74,7 +80,8 @@ export type CollectInput = CollectOptions & { resolvePath: PathResolver };
  * @returns The glob patterns to match against {@link bundleRoot}.
  * @example
  * ```ts
- * bundlePatterns(layout, "ios", { simulator: true }); // ["gen/apple/build/*-sim/*.app"]
+ * bundlePatterns(layout, "ios", { simulator: true });
+ * // ["gen/apple/build/*-sim/*.app", "gen/apple/build/x86_64/*.app"]
  * ```
  */
 export function bundlePatterns(
@@ -84,7 +91,8 @@ export function bundlePatterns(
 ): readonly string[] {
   const gen = layout.genDirectory;
   if (target === "ios" && gen) {
-    return [`${gen}/${opts?.simulator === true ? IOS_SIMULATOR_PATTERN : IOS_DEVICE_PATTERN}`];
+    const patterns = opts?.simulator === true ? IOS_SIMULATOR_PATTERNS : [IOS_DEVICE_PATTERN];
+    return patterns.map(pattern => `${gen}/${pattern}`);
   }
   if (target === "android" && gen) {
     return [`${gen}/${opts?.aab === true ? ANDROID_AAB_PATTERN : ANDROID_APK_PATTERN}`];

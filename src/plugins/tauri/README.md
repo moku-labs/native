@@ -130,6 +130,7 @@ pluginConfigs: {
   tauri: {
     spawnImpl?: SpawnFn;          // test seam — default: real detached-process-group spawn
     nodePath?: string;            // explicit override — default: PATH-walk resolution
+    arch?: NodeJS.Architecture;   // host arch for the simulator slice — default: process.arch
     readiness: {                  // devUrl readiness poll (dev() only)
       intervalMs: number;         // default: 250
       timeoutMs: number;          // default: 60_000
@@ -141,6 +142,12 @@ pluginConfigs: {
 `spawnImpl` and `nodePath` are test/override seams only — production behavior always resolves a
 real `node` binary and spawns through `@tauri-apps/cli/tauri.js`. Everything else this plugin
 needs (`projectDir`, `web.devUrl`, `signing`) comes from the framework's global `Config`.
+
+`arch` is the one knob that changes emitted argv: it decides which iOS simulator slice
+`build({ simulator: true })` pins — `x64` → `--target x86_64`, anything else →
+`--target <arch>-sim`. Left `undefined` it reads `process.arch`, which is the right answer in
+production and the wrong one in a test: a suite that asserts the simulator argv must pin `arch`
+so it says the same thing on an arm64 laptop and an x64 CI runner.
 
 ## Design notes
 

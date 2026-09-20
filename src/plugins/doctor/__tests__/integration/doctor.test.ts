@@ -130,9 +130,6 @@ describe("doctor plugin integration", () => {
     expect(ids).toContain("rustup-targets");
     expect(ids).toContain("signing-ios");
     expect(ids).toContain("gen-completeness-ios");
-    if (process.platform === "darwin") {
-      expect(ids).toContain("xcode-toolchain");
-    }
     // No android/host-only checks leak into a single-target run.
     expect(ids).not.toContain("android-toolchain");
     expect(ids).not.toContain("node-binary");
@@ -140,6 +137,21 @@ describe("doctor plugin integration", () => {
     // and every applicable ios check is pass/warn under the always-ok probe fake.
     expect(report.ok).toBe(true);
   });
+
+  // The Apple toolchain checks gate on the REAL host (`appliesTo` reads `process.platform`,
+  // which is the production behaviour: there is no Xcode to diagnose elsewhere). Their
+  // per-platform logic is covered host-independently in the checks' own unit tests; this one
+  // proves the gate lets them through the orchestrator, so it only runs on macOS.
+  it.skipIf(process.platform !== "darwin")(
+    "includes the macOS-host-only Apple toolchain checks in an ios run",
+    async () => {
+      const { app } = createTestApp();
+
+      const report = await app.doctor.run({ target: "ios" });
+
+      expect(report.checks.map(result => result.id)).toContain("xcode-toolchain");
+    }
+  );
 
   it("run() with no target covers every configured target plus host checks once", async () => {
     const { app, emitted } = createTestApp({ targets: ["macos"] });

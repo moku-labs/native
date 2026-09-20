@@ -24,6 +24,15 @@ const spawnSigningFailure: SpawnFn = async () => ({
   stderr: "error: codesign failed: no identity found in keychain"
 });
 
+/**
+ * The two simulator hosts, pinned so no assertion reads the real `process.arch`: Tauri
+ * names the Intel simulator slice `x86_64` and every other one `<arch>-sim`.
+ */
+const SIMULATOR_HOSTS = [
+  { arch: "arm64", rustTarget: "aarch64-sim" },
+  { arch: "x64", rustTarget: "x86_64" }
+] as const;
+
 /** Fake dev-verb spawn: resolves with a synthetic SIGTERM exit once the caller aborts. */
 const spawnAbortsToSigterm: SpawnFn = opts =>
   new Promise(resolve => {
@@ -67,21 +76,25 @@ describe("tauri plugin integration", () => {
     await app.stop();
   });
 
-  it("build() carries the simulator option through to the spawned argv", async () => {
+  it.each(
+    SIMULATOR_HOSTS
+  )("build() carries the simulator option and the injected $arch arch through to the spawned argv", async ({
+    arch,
+    rustTarget
+  }) => {
     const calls: Array<readonly string[]> = [];
     const spawnRecording: SpawnFn = async opts => {
       calls.push(opts.cmd);
       return { code: 0, signal: null, stdout: "built", stderr: "" };
     };
     const app = createApp({
-      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node" } }
+      pluginConfigs: { tauri: { spawnImpl: spawnRecording, nodePath: "/usr/bin/node", arch } }
     });
     await app.start();
 
     await app.tauri.build({ target: "ios", simulator: true });
 
-    const expectedArch = process.arch === "x64" ? "x86_64" : "aarch64-sim";
-    expect(calls[0]?.slice(2)).toEqual(["ios", "build", "--ci", "--target", expectedArch]);
+    expect(calls[0]?.slice(2)).toEqual(["ios", "build", "--ci", "--target", rustTarget]);
 
     await app.stop();
   });

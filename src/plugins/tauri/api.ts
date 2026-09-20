@@ -161,7 +161,8 @@ export function createTauriApi(ctx: TauriContext): Api {
      */
     async build(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
-      return run(buildArgv(nodePath, tauriJsPath, opts), {
+      // `config.arch` is the injectable host arch: undefined lets buildArgv read process.arch.
+      return run(buildArgv(nodePath, tauriJsPath, opts, ctx.config.arch), {
         onOutput: opts.onOutput,
         onTick: opts.onTick
       });

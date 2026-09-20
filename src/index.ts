@@ -39,6 +39,7 @@
  * |---|---|---|---|
  * | `tauri` | `spawnImpl` | `undefined` | injectable spawn; real = detached process-group spawn |
  * | `tauri` | `nodePath` | `undefined` | explicit `node` path; real = PATH walk (never `process.execPath`, which is bun here) |
+ * | `tauri` | `arch` | `undefined` | host arch the iOS simulator slice is derived from; real = `process.arch` (`x64` → `x86_64`, else `<arch>-sim`) |
  * | `tauri` | `readiness` | `{ intervalMs: 250, timeoutMs: 60_000 }` | `dev()`'s devUrl poll cadence (no stdout ready marker exists — tauri#4740) |
  * | `doctor` | `probeImpl` | `undefined` | injectable probe runner; real = `which`/`--version` subprocesses |
  * | `doctor` | `probeTimeoutMs` | `10_000` | per-check budget; a check that outruns it yields a `warn` |

@@ -173,6 +173,7 @@ Per-plugin knobs, overridable via `createApp({ pluginConfigs })`:
 | Plugin | Knob | Default | Purpose |
 |---|---|---|---|
 | `tauri` | `spawnImpl` / `nodePath` | `undefined` / `undefined` | Test seam / explicit `node` path (default: real process-group spawn, PATH-walked node). |
+| `tauri` | `arch` | `undefined` | Host arch the iOS simulator slice is derived from (default: `process.arch`). `x64` → `--target x86_64`, anything else → `--target <arch>-sim`. Pin it in tests so an argv assertion does not depend on the machine running it. |
 | `tauri` | `readiness` | `{ intervalMs: 250, timeoutMs: 60_000 }` | `dev()`'s devUrl readiness poll — there is no stdout "ready" marker. |
 | `doctor` | `probeImpl` | `undefined` | Test seam for binary probes (default: real `which`/`--version` subprocesses). |
 | `doctor` | `probeTimeoutMs` | `10_000` | Per-check budget. A check that outruns it becomes a `warn`, never a `fail`. |
@@ -246,7 +247,7 @@ await native.cli.build({ target: "ios", simulator: true });
 // unsigned <Product Name>.app -> dist-native/ios/
 ```
 
-`simulator: true` builds `--target aarch64-sim` (`x86_64-sim` on an Intel host), never exports an archive, and collects the `.app` **directory** instead of an `.ipa`. Prerequisites, all checked by `native doctor`:
+`simulator: true` builds `--target aarch64-sim` (`x86_64` on an Intel host — Tauri's Intel simulator slice carries no `-sim` suffix), never exports an archive, and collects the `.app` **directory** instead of an `.ipa`, from `gen/apple/build/*-sim/` or `gen/apple/build/x86_64/`. Prerequisites, all checked by `native doctor`:
 
 | Need | Install | Doctor check |
 |---|---|---|

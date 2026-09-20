@@ -35,6 +35,16 @@ type RecordedEvent =
   | { name: "native:complete"; payload: NativeCompleteEvent };
 
 /**
+ * The two simulator hosts, pinned so no assertion reads the real `process.arch`: Tauri
+ * names the Intel simulator slice `x86_64` and every other one `<arch>-sim`, and writes the
+ * `.app` under a `build/<that name>/` directory.
+ */
+const SIMULATOR_HOSTS = [
+  { arch: "arm64", rustTarget: "aarch64-sim" },
+  { arch: "x64", rustTarget: "x86_64" }
+] as const;
+
+/**
  * A fake `tauri` subprocess: emits a compile-tick line then a bundling-transition line
  * before resolving successfully — for every verb, including `icon`.
  */
@@ -60,8 +70,15 @@ describe("build plugin integration", () => {
     await rm(outDir, { recursive: true, force: true });
   });
 
-  /** Composes a scoped app with a recorder hook plugin capturing every native:* event. */
-  const createTestApp = (spawnImpl: SpawnFn, recordedEvents: RecordedEvent[]) => {
+  /**
+   * Composes a scoped app with a recorder hook plugin capturing every native:* event.
+   * `arch` pins the host architecture the simulator argv is derived from.
+   */
+  const createTestApp = (
+    spawnImpl: SpawnFn,
+    recordedEvents: RecordedEvent[],
+    arch: NodeJS.Architecture = "arm64"
+  ) => {
     const recordingSpawn: SpawnFn = spawnOpts => {
       spawnCalls.push(spawnOpts.cmd);
       return spawnImpl(spawnOpts);
@@ -81,7 +98,7 @@ describe("build plugin integration", () => {
     });
     return framework.createApp({
       config: { ...validAppConfig, projectDir, outDir },
-      pluginConfigs: { tauri: { spawnImpl: recordingSpawn, nodePath: "/usr/bin/node" } }
+      pluginConfigs: { tauri: { spawnImpl: recordingSpawn, nodePath: "/usr/bin/node", arch } }
     });
   };
 
@@ -194,7 +211,12 @@ describe("build plugin integration", () => {
   });
 
   describe("ios simulator", () => {
-    it("initializes gen/apple after codegen, patches the runner, and collects the .app directory", async () => {
+    it.each(
+      SIMULATOR_HOSTS
+    )("on an $arch host: initializes gen/apple after codegen, patches the runner, and collects the .app directory", async ({
+      arch,
+      rustTarget
+    }) => {
       const genAppleDir = path.join(projectDir, "src-tauri", "gen", "apple");
 
       const iosSpawn: SpawnFn = async opts => {
@@ -217,7 +239,8 @@ describe("build plugin integration", () => {
         }
 
         if (verb[0] === "ios" && verb[1] === "build") {
-          const simulatorDir = path.join(genAppleDir, "build", "arm64-sim", "Test App.app");
+          // Tauri writes the `.app` under the very arch directory it was told to target.
+          const simulatorDir = path.join(genAppleDir, "build", rustTarget, "Test App.app");
           await mkdir(simulatorDir, { recursive: true });
           await writeFile(path.join(simulatorDir, "Info.plist"), "<plist/>\n", "utf8");
           opts.onLine?.("Bundling application (Test App.app)");
@@ -228,7 +251,7 @@ describe("build plugin integration", () => {
       };
 
       const recordedEvents: RecordedEvent[] = [];
-      const app = createTestApp(iosSpawn, recordedEvents);
+      const app = createTestApp(iosSpawn, recordedEvents, arch);
 
       const result = await app.build.run({ target: "ios", simulator: true });
 
@@ -239,10 +262,9 @@ describe("build plugin integration", () => {
         "ios build"
       ]);
 
-      // The build verb targets the host simulator arch.
+      // The build verb targets the INJECTED host's simulator slice, not the runner's.
       const buildVerb = spawnVerbs().at(-1) ?? [];
-      expect(buildVerb.includes("--target")).toBe(true);
-      expect(buildVerb.at(-1)).toMatch(/-sim$/);
+      expect(buildVerb.slice(-2)).toEqual(["--target", rustTarget]);
 
       // patchMobile received tauri.runner(): the bare `node tauri` command is gone.
       const projectYml = await readFile(path.join(genAppleDir, "project.yml"), "utf8");

@@ -260,6 +260,7 @@ tauri (src/plugins/tauri/types.ts):
 |---|---|---|---|
 | spawnImpl | SpawnFn \| undefined | undefined | Injectable spawn for tests; undefined => real detached process-group spawn. |
 | nodePath | string \| undefined | undefined | Explicit node binary path; undefined => PATH-walk resolution over `ctx.env.get("PATH")` (never process.execPath, which is bun). |
+| arch | NodeJS.Architecture \| undefined | undefined | Host arch the iOS simulator slice is derived from (x64 => `x86_64`, else `<arch>-sim`); undefined => process.arch. Pin it in tests so an argv assertion is host-independent. |
 | readiness | { intervalMs: number; timeoutMs: number } | { intervalMs: 250, timeoutMs: 60_000 } | dev()'s devUrl poll cadence — no stdout "ready" marker exists (tauri#4740). |
 
 doctor (src/plugins/doctor/types.ts):
@@ -607,6 +608,7 @@ export type SpawnFn = (opts: {
 export type Config = {
   spawnImpl?: SpawnFn | undefined;
   nodePath?: string | undefined;
+  arch?: NodeJS.Architecture | undefined;
   readiness: { intervalMs: number; timeoutMs: number };
 };
 
@@ -679,8 +681,9 @@ Behavior:
   Without the explicit --output the CLI writes relative to its own cwd, which is not the
   generated project. Called by build's icons phase.
 - build(opts): runs `tauri build` / `tauri ios build` / `tauri android build`, always with
-  --ci. argv rules (buildArgv): ios + simulator => `--target aarch64-sim` (x86_64-sim on
-  an Intel host) and NO --export-method; ios without simulator => `--export-method <m>` when
+  --ci. argv rules (buildArgv): ios + simulator => `--target aarch64-sim` (`x86_64`, no -sim
+  suffix, on an x64 host; the arch comes from config.arch, defaulting to process.arch, so a
+  test can pin it) and NO --export-method; ios without simulator => `--export-method <m>` when
   configured; android => `--aab` when aab, else `--apk`; desktop unchanged. An option a target
   does not use is ignored, never an error. Every output line is scrubbed before reaching
   onOutput or a log; onTick receives parsed compile progress. Throws a classified TauriError
@@ -824,8 +827,9 @@ bundlePatterns(layout, target, opts) turns it into globs:
   linux:   ["bundle/appimage/*.AppImage", "bundle/deb/*.deb", "bundle/rpm/*.rpm"]
   ios:     ["gen/apple/build/**/*.ipa"]                      (root: src-tauri/)
   android: ["gen/android/app/build/outputs/apk/**/*elease*/*.apk"] (root: src-tauri/)
-One flavour at a time, never two: { simulator: true } matches ["gen/apple/build/*-sim/*.app"]
-INSTEAD of the .ipa (a simulator build is unsigned and produces a .app DIRECTORY whose name
+One flavour at a time, never two: { simulator: true } matches
+["gen/apple/build/*-sim/*.app", "gen/apple/build/x86_64/*.app"] — both directory names Tauri
+can write a simulator slice under — INSTEAD of the .ipa (a simulator build is unsigned and produces a .app DIRECTORY whose name
 carries the display name, spaces included), and { aab: true } matches
 ["gen/android/app/build/outputs/bundle/**/*elease*/*.aab"] INSTEAD of the .apk. The release
 flavour is pinned in the glob: Gradle writes every build type side by side, so an unpinned
@@ -1405,8 +1409,8 @@ signing check is warn-only: a missing credential never fails a build and never f
 
 iOS simulator builds:
   await native.cli.build({ target: "ios", simulator: true });
-  // -> tauri ios build --target aarch64-sim --ci   (x86_64-sim on an Intel host)
-  // -> unsigned gen/apple/build/<arch>-sim/<Product Name>.app, collected to dist-native/ios/
+  // -> tauri ios build --target aarch64-sim --ci   (x86_64 on an Intel host)
+  // -> unsigned gen/apple/build/<slice>/<Product Name>.app, collected to dist-native/ios/
 Prerequisites (all diagnosed by `native doctor`, ios scope):
   - rust targets: rustup target add aarch64-apple-ios aarch64-apple-ios-sim   [ios-tools, fail]
   - xcodegen:     brew install xcodegen                                       [ios-tools, fail]

@@ -94,17 +94,12 @@ describe("buildArgv", () => {
     expect(buildArgv(NODE, TAURI_JS, opts, arch)).toEqual([NODE, TAURI_JS, ...tail]);
   });
 
-  it("defaults the simulator arch to the host arch", () => {
-    const expected = process.arch === "x64" ? "x86_64" : "aarch64-sim";
-    expect(buildArgv(NODE, TAURI_JS, { target: "ios", simulator: true })).toEqual([
-      NODE,
-      TAURI_JS,
-      "ios",
-      "build",
-      "--ci",
-      "--target",
-      expected
-    ]);
+  it("falls back to the host arch when none is injected", () => {
+    // Host-independent by construction: the expectation is built from the same host value
+    // the parameter defaults to, so an x64 CI runner and an arm64 dev machine agree.
+    expect(buildArgv(NODE, TAURI_JS, { target: "ios", simulator: true })).toEqual(
+      buildArgv(NODE, TAURI_JS, { target: "ios", simulator: true }, process.arch)
+    );
   });
 });
 

@@ -6,6 +6,7 @@ import type { Config } from "./types";
 const defaultConfig: Config = {
   spawnImpl: undefined,
   nodePath: undefined,
+  arch: undefined,
   readiness: { intervalMs: 250, timeoutMs: 60_000 }
 };
 

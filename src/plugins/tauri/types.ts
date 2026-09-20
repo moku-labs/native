@@ -31,6 +31,11 @@ export type SpawnFn = (opts: {
 export type Config = {
   spawnImpl?: SpawnFn | undefined;
   nodePath?: string | undefined;
+  /**
+   * Host architecture the iOS simulator rust target is derived from. `undefined` reads the
+   * real `process.arch`; pinning it keeps an assertion off the machine the suite runs on.
+   */
+  arch?: NodeJS.Architecture | undefined;
   readiness: { intervalMs: number; timeoutMs: number };
 };
 
