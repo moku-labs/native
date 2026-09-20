@@ -224,6 +224,9 @@ export async function runIcons(
 /** Matches a tauri build output line signalling the compile→bundle transition. */
 const BUNDLING_TRANSITION_PATTERN = /bundling/i;
 
+/** Compile-phase detail reported when a previous build's output had to be removed first. */
+const CLEARED_BUILD_OUTPUT_DETAIL = "cleared previous build output";
+
 /**
  * Formats a compile tick into the `native:phase` "progress" detail string — real crate
  * counts, never a fake percentage.
@@ -284,6 +287,12 @@ function emitPhase(
  * transition line ever appears, `compile` closes at exit and `bundle` is reported as a
  * zero-duration pass. A failure is attributed to whichever phase is open.
  *
+ * iOS opens with one extra step: the previous build's output is removed before the
+ * compiler starts. `tauri ios build` renames its fresh `.app` into the existing
+ * `gen/apple/build` archive and fails the SECOND build of the same tree with
+ * `Directory not empty`. Removing it is part of compile, so a refusal from the guarded
+ * remove surfaces as a compile error rather than an unattributed throw.
+ *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
  * @param opts - The target plus the platform build flags to forward.
@@ -305,6 +314,13 @@ export async function runCompileAndBundle(
 
   emitPhase(ctx, target, "compile", "start");
   try {
+    if (target === "ios") {
+      const cleared = await deps.project.clearMobileBuildOutput({ target });
+      if (cleared.removed.length > 0) {
+        emitPhase(ctx, target, "compile", "progress", { detail: CLEARED_BUILD_OUTPUT_DETAIL });
+      }
+    }
+
     await deps.tauri.build({
       target,
       simulator: opts.simulator,
