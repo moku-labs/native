@@ -23,12 +23,15 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
   keeps no second table). `simulator` (iOS: build for the host's simulator arch) and `aab`
   (Android: emit a store bundle instead of an apk) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
-  hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` is framed in a
-  branded `box` above the `[native]` error line (each tail line is truncated with an ellipsis
-  to the branded console's own width minus the box chrome, floor 40, so the whole box fits
-  the terminal instead of wrapping into noise — the width comes from `ui.width`, which
-  `terminalWidth()` bound to `process.stdout.columns`, clamped to 60–160 and falling back to
-  66 when the stream has no columns), then the error rethrows unchanged.
+  hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` prints above the
+  `[native]` error line, then the error rethrows unchanged. One pure decision,
+  `tailLineBound(process.stdout.columns)`, settles both how wide a tail line may be and
+  whether it is framed at all:
+
+  | stdout | tail | why |
+  |---|---|---|
+  | a terminal, 120 columns | a branded `box`, each line cut to 114 (`terminalWidth()` clamps 60–160, minus the box chrome, floor 40) | a single Rust/xcodebuild diagnostic runs thousands of characters and would wrap the box into noise |
+  | no columns (CI, `native build > build.log`, any pipe) | no box — every line printed plainly and whole, in order | nothing wraps against a file, truncating deletes the only copy of the toolchain's own error text, and a box pads every line to the widest one, so one 5000-character diagnostic would bloat the whole log |
 - **`dev`** — awaits `build.prepare({ target })` first, so `tauri dev` never meets a
   half-generated tree; the target defaults to the host target and a host with no
   desktop target throws the `[native]` fix-it error. Then it runs the dev loop

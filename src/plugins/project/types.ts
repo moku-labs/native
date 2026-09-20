@@ -99,6 +99,7 @@ export type Api = {
   getCompleteness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;
+  clearMobileBuildOutput(opts: { target: MobileTarget }): Promise<CleanResult>;
   resolveDerivedPath(target: string): string;
   ensureIconSource(): Promise<string>;
   resolve<K extends keyof CapabilityConfigMap>(

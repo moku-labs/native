@@ -287,57 +287,84 @@ const BOX_CHROME_COLUMNS = 6;
 const MIN_TAIL_LINE_LENGTH = 40;
 
 /**
- * Widest tail line the failure box keeps, derived from the branded console's own width —
- * which {@link terminalWidth} bound to the terminal, so the box follows the real terminal
- * instead of a fixed guess. A single Rust/xcodebuild diagnostic can run thousands of
- * characters; unbounded, it wraps the branded box into unreadable noise, and a fixed bound
- * wide enough to matter (160) wrapped every ordinary 80-column terminal just the same.
+ * Decides how wide a tail line may be — or that it may be any width at all.
  *
- * @param consoleWidth - The branded console's width (`ui.width`).
- * @returns The maximum tail line length for that width.
+ * With a terminal attached, the bound follows the real terminal ({@link terminalWidth}
+ * clamps it) minus the box chrome: a single Rust/xcodebuild diagnostic can run thousands of
+ * characters and would wrap the branded box into unreadable noise.
+ *
+ * With no terminal — CI, `native build > build.log`, a piped run — there is nothing to wrap
+ * against, and the output is READ afterwards: truncating there deletes the one copy of the
+ * toolchain's own error text. So a stream without columns gets no bound at all.
+ *
+ * @param columns - The stream's column count (`process.stdout.columns`), undefined when piped.
+ * @returns The maximum tail line length, or undefined when lines must be kept whole.
  * @example
  * ```ts
- * maxTailLineLength(66);  // 60
- * maxTailLineLength(120); // 114
+ * tailLineBound(120);       // 114
+ * tailLineBound(40);        // 54 — clamped up to 60, minus the chrome
+ * tailLineBound(undefined); // undefined — piped: keep the full line
  * ```
  */
-function maxTailLineLength(consoleWidth: number): number {
-  return Math.max(MIN_TAIL_LINE_LENGTH, consoleWidth - BOX_CHROME_COLUMNS);
+export function tailLineBound(columns: number | undefined): number | undefined {
+  if (columns === undefined) return undefined;
+  return Math.max(MIN_TAIL_LINE_LENGTH, terminalWidth(columns) - BOX_CHROME_COLUMNS);
 }
 
 /**
- * Truncates one tail line to `budget`, marking the cut with an ellipsis.
+ * Truncates one tail line to `budget`, marking the cut with an ellipsis. An undefined
+ * budget keeps the line whole.
  *
  * @param line - One line of the scrubbed stderr tail.
- * @param budget - The maximum length, from {@link maxTailLineLength}.
+ * @param budget - The maximum length, from {@link tailLineBound}.
  * @returns The line, at most `budget` characters long.
  * @example
  * ```ts
  * truncateLine("error: " + "x".repeat(400), 60); // "error: xxx…"
  * ```
  */
-function truncateLine(line: string, budget: number): string {
-  if (line.length <= budget) return line;
+function truncateLine(line: string, budget: number | undefined): string {
+  if (budget === undefined || line.length <= budget) return line;
   return `${line.slice(0, budget - 1)}…`;
 }
 
 /**
- * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail framed
- * in a branded box, then the `[native]` error line. Cause first, verdict second —
- * the tail is the only place the real toolchain diagnostic survives. A non-`TauriError`
- * failure (or an empty tail) prints the error line alone.
+ * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail first,
+ * then the `[native]` error line. Cause first, verdict second — the tail is the only place
+ * the real toolchain diagnostic survives. A non-`TauriError` failure (or an empty tail)
+ * prints the error line alone.
+ *
+ * How the tail is framed follows the stream, for the same reason its lines are (or are not)
+ * truncated ({@link tailLineBound}). With a terminal attached it is a branded box, cut to
+ * the terminal's width. With none — CI, `native build > build.log`, a pipe — every line is
+ * printed plainly, in order: the box pads each line to the widest one, so a single
+ * 5000-character Rust diagnostic would pad the entire tail to 5000 columns and bloat the
+ * very log the lines were kept whole for.
  *
  * @param ui - The branded console to render through.
  * @param error - The failure thrown by `build.run`/`build.runAll`.
+ * @param columns - The stream's column count (default: `process.stdout.columns`).
  * @example
  * ```ts
  * try { await build.run({ target: "macos" }); } catch (error) { renderBuildFailure(ui, error); throw error; }
  * ```
  */
-export function renderBuildFailure(ui: BrandConsole, error: unknown): void {
+export function renderBuildFailure(
+  ui: BrandConsole,
+  error: unknown,
+  columns: number | undefined = process.stdout.columns
+): void {
   const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
-  const budget = maxTailLineLength(ui.width);
+  const budget = tailLineBound(columns);
 
-  if (stderrTail) ui.box(stderrTail.split(/\r?\n/).map(line => truncateLine(line, budget)));
+  if (stderrTail) {
+    const tailLines = stderrTail.split(/\r?\n/);
+    if (budget === undefined) {
+      for (const line of tailLines) ui.line(line);
+    } else {
+      ui.box(tailLines.map(line => truncateLine(line, budget)));
+    }
+  }
+
   ui.error(error instanceof Error ? error.message : String(error));
 }

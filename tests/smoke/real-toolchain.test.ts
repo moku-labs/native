@@ -301,7 +301,7 @@ describe("real toolchain — macOS desktop", () => {
 });
 
 describe("real toolchain — iOS simulator", () => {
-  it("builds an unsigned simulator .app and runs the patched Xcode runner", async ctx => {
+  it("builds an unsigned simulator .app TWICE in the same project directory", async ctx => {
     ctx.skip(!IS_MACOS, "an iOS build can only run on a macOS host");
     const { app, outDir, projectDir } = requireSmoke();
 
@@ -311,9 +311,33 @@ describe("real toolchain — iOS simulator", () => {
 
     await app.cli.build({ target: "ios", simulator: true });
 
+    // The REBUILD is the proof: the first build leaves an entitlements file its build
+    // script rewrites and a full `gen/apple/build` tree behind, and an unpatched project
+    // fails the second build on both. Same tree, same config, no clean in between.
+    await app.cli.build({ target: "ios", simulator: true });
+
     const bundle = await findAppBundle(path.join(outDir, "ios"));
     const bundleStats = await stat(bundle);
     expect(bundleStats.isDirectory()).toBe(true);
+
+    // The setting that makes the rebuild possible is in the generated Xcode project, in
+    // every settings block, and exactly once per block.
+    const appleDirectory = path.join(projectDir, "src-tauri", "gen", "apple");
+    const appleEntries = await readdir(appleDirectory);
+    const xcodeproj = appleEntries.find(entry => entry.endsWith(".xcodeproj"));
+    expect(xcodeproj, `no *.xcodeproj in ${appleDirectory}`).toBeDefined();
+    const pbxproj = await readFile(
+      path.join(appleDirectory, xcodeproj ?? "", "project.pbxproj"),
+      "utf8"
+    );
+    const settingLines = pbxproj
+      .split(/\r?\n/)
+      .filter(line => line.includes("CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION"));
+    const settingsBlocks = pbxproj
+      .split(/\r?\n/)
+      .filter(line => line.includes("buildSettings = {"));
+    expect(settingLines).toHaveLength(settingsBlocks.length);
+    expect(settingLines.every(line => line.trim().endsWith("= YES;"))).toBe(true);
 
     // The build only got this far because the baked-in `<runner> tauri ios xcode-script`
     // build phase was rewritten to the absolute pair this framework spawns with.

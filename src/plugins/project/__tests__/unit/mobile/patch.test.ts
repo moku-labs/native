@@ -48,10 +48,50 @@ describe("patchMobile", () => {
     return genDir;
   };
 
-  it("is a no-op for ios when no runner is supplied", async () => {
-    await seedApple();
+  it("skips the runner rewrite for ios when no runner is supplied", async () => {
+    const genDir = await seedApple();
+
     const result = await patchMobile(dir, { target: "ios" }, {});
-    expect(result).toEqual({ patched: [], unchanged: [] });
+
+    // The Xcode-settings patch still runs; this fixture carries no settings block, so it
+    // reports both generated files unchanged instead of rewriting the runner command.
+    expect(result.patched).toEqual([]);
+    expect(result.unchanged.toSorted()).toEqual(
+      [
+        path.join(genDir, "project.yml"),
+        path.join(genDir, "MyApp.xcodeproj", "project.pbxproj")
+      ].toSorted()
+    );
+    expect(await readFile(path.join(genDir, "project.yml"), "utf8")).toContain("node tauri");
+  });
+
+  it("adds the entitlements-modification setting to every buildSettings block", async () => {
+    const genDir = await seedApple();
+    const pbxprojPath = path.join(genDir, "MyApp.xcodeproj", "project.pbxproj");
+    const withSettings = [
+      pbxprojFor("node tauri"),
+      "\t\t2551BCC2 /* release */ = {",
+      "\t\t\tbuildSettings = {",
+      "\t\t\t\tENABLE_BITCODE = NO;",
+      "\t\t\t};",
+      "\t\t};",
+      ""
+    ].join("\n");
+    await writeFile(pbxprojPath, withSettings, "utf8");
+
+    const first = await patchMobile(dir, { target: "ios", runner: RUNNER }, {});
+
+    expect(first.patched).toContain(pbxprojPath);
+    // One file, patched by both iOS passes — reported once, and never as "unchanged".
+    expect(first.unchanged).not.toContain(pbxprojPath);
+    const patched = await readFile(pbxprojPath, "utf8");
+    expect(patched).toContain("\t\t\t\tCODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;");
+    expect(patched).toContain(`shellScript = "${LITERAL_RUNNER} ios xcode-script`);
+
+    const second = await patchMobile(dir, { target: "ios", runner: RUNNER }, {});
+
+    expect(second.patched).toEqual([]);
+    expect(second.unchanged).toContain(pbxprojPath);
   });
 
   it("is a no-op for ios when the gen/ tree has not been initialized yet", async () => {

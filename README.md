@@ -258,9 +258,18 @@ await native.cli.build({ target: "ios", simulator: true });
 
 The first iOS build also runs `tauri ios init` once, then rewrites the build phase Tauri baked into the generated Xcode project: it calls whichever runner Tauri *detected* (`node tauri`, `bun tauri`, …), and none of those resolve inside Xcode. `project.patchMobile({ target, runner: tauri.getRunner() })` replaces it with the absolute `<node> <tauri.js>` pair this framework spawns with. The pass is idempotent.
 
+**Rebuilds.** Building the same tree a second time — no clean in between — used to fail twice over, and both failures belong to the generated project, so the packager handles both:
+
+| Failure | Fix |
+|---|---|
+| `error: Entitlements file "<app>_iOS.entitlements" was modified during the build, which is not supported` — a capability plugin's build script rewrites it while Xcode compiles | `patchMobile` writes `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION` into every `buildSettings` block of `gen/apple/*.xcodeproj/project.pbxproj` and into each target's `settings.base` in `gen/apple/project.yml`, so an xcodegen regeneration keeps it |
+| `failed to rename app …/gen/apple/build/<app>_iOS.xcarchive/…/<Name>.app: Directory not empty (os error 66)` | the compile phase calls `project.clearMobileBuildOutput({ target: "ios" })` first, removing `gen/apple/build` behind the same derived-path guard `clean()` uses (a `build` symlink pointing outside `projectDir` is refused, never followed) |
+
+Android needs neither: Gradle manages its own `build` tree.
+
 ## When a build fails
 
-A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it in a branded box above the error line, each line truncated to the branded console's width minus the box chrome). Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
+A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it above the error line). In a terminal it is a branded box and each tail line is cut to the terminal's width minus the box chrome; with no terminal — CI, or `native build > build.log` — there is no box and nothing is cut, so a piped log keeps the full toolchain diagnostic on plain, unpadded lines. Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
 
 | `kind` | Means |
 |---|---|

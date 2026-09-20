@@ -456,6 +456,7 @@ export type Api = {
   getCompleteness(opts: { target: Target }): CompletenessResult;
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target }): Promise<CleanResult>;
+  clearMobileBuildOutput(opts: { target: MobileTarget }): Promise<CleanResult>;
   ensureIconSource(): Promise<string>;
   resolve<K extends keyof CapabilityConfigMap>(
     name: K,
@@ -510,6 +511,18 @@ Behavior:
       pluginConfigs.tauri.nodePath, or report the runner line Tauri generated.' rather than
       being reported unchanged — reporting success there ships a tree that fails on its first
       build phase. A file that never mentions the verb stays unchanged.
+      iOS ALSO gets the rebuild patch, with or without a `runner`: every `buildSettings = {`
+      block of each gen/apple/*.xcodeproj/project.pbxproj carries
+      `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;` exactly once, at its siblings'
+      indentation, and each target's settings.base in gen/apple/project.yml carries
+      `CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: true` (so an xcodegen regeneration keeps
+      it; a settingGroups base block is never touched). Without it the SECOND build of a tree
+      fails: a capability plugin's build script rewrites <app>_iOS.entitlements mid-build and
+      Xcode refuses ("Entitlements file … was modified during the build"). Both transforms are
+      pure text — CRLF, indentation and neighbouring lines survive byte for byte, a block that
+      already carries the setting is left alone, a block that set it to NO is rewritten to YES,
+      and a second pass reports every file unchanged. A file touched by both iOS patches is
+      reported once, as patched.
     * Android: the same rewrite for " android android-studio-script" across
       gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts, PLUS a
       sentinel-delimited `// MOKU-SIGNING-START … // MOKU-SIGNING-END` block in
@@ -532,6 +545,20 @@ Behavior:
   home directory, nor be a filesystem root. "~/Documents" is refused for the same reason "/"
   is: it is not derived state. Every surviving candidate path is validated against projectDir
   by assertWithinRoot before deletion.
+- clearMobileBuildOutput({ target }): removes the PREVIOUS build output of a mobile target so
+  the next compile writes into an empty tree — ios => <projectDir>/src-tauri/gen/apple/build
+  (the path comes from layout.ts), android => nothing removed at all, because Gradle owns and
+  correctly reuses its own build tree. Without it the SECOND `tauri ios build` of a tree dies
+  with 'failed to rename app …/gen/apple/build/<app>_iOS.xcarchive/…/<Name>.app: Directory not
+  empty (os error 66)'. A missing directory is fine ({ removed: [] }). Being a second
+  recursive delete, it is gated twice: assertCleanableRoot(projectDir) — the same derived-path
+  rule clean() uses — and the pure predicate isClearableBuildOutput(root, candidate,
+  boundaries), which requires the REAL path of the build directory (symlinks resolved) to sit
+  STRICTLY inside the real projectDir. A `build` symlink pointing elsewhere is refused, never
+  followed: '[native] Refusing to remove build output outside projectDir: <real path>.\n
+  Remove that link by hand — "<path>" must be a real directory inside <projectDir>.' The
+  predicate is pure and is tested as one; the destructive function is only ever run against a
+  fresh mkdtemp workspace.
   containmentAnchor(cwd, home, platform, probe): the nearest ancestor of the cwd (cwd
   included) carrying a .git entry or a package.json with a "workspaces" field, walking up but
   stopping BEFORE $HOME and before a filesystem root; no marker anywhere => the cwd stands.
@@ -787,7 +814,13 @@ export type RunAllOptions = {
 export type BuildDeps = {
   readonly project: Pick<
     ProjectApi,
-    "generate" | "getBundleLayout" | "getCompleteness" | "patchMobile" | "ensureIconSource"
+    | "generate"
+    | "getBundleLayout"
+    | "getCompleteness"
+    | "patchMobile"
+    | "clearMobileBuildOutput"
+    | "ensureIconSource"
+    | "resolveDerivedPath"
   >;
   readonly tauri: Pick<TauriApi, "build" | "mobileInit" | "icon" | "getRunner">;
 };
@@ -812,7 +845,7 @@ Phase semantics (pipeline.ts):
 | scaffold | own | mkdir -p projectDir. Nothing else: the mobile gen/ tree is initialized in codegen, because `tauri ios\|android init --ci` refuses to run before tauri.conf.json exists. |
 | codegen | project + tauri | project.generate() first. Mobile then: tauri.mobileInit({ target }) when project.getCompleteness() is "not-initialized", the completeness gate ("incomplete" FAILS FAST with a [native] fix-it pointing at `native doctor` / `native clean --target <t>` — a partial tree is never silently re-initialized), then the idempotent project.patchMobile({ target, runner: tauri.getRunner() }). |
 | icons | project + tauri | source = await project.ensureIconSource(); regeneration is skipped ONLY when src-tauri/icons/icon.png exists, the stamp file src-tauri/icons/.source (absolute source path + size + mtime) still matches the current source, AND this pass did not run mobileInit (a fresh gen/ tree ships Tauri's default icons) — an mtime comparison alone would miss app.icon switching to an OLDER file. Else tauri.icon({ source }). detail: "up to date" / "generated" / "placeholder". |
-| compile | tauri.build() | ONE subprocess covers compile+bundle. compile carries the live onTick progress stream. |
+| compile | project + tauri.build() | ios FIRST: project.clearMobileBuildOutput({ target }) removes gen/apple/build (a second `tauri ios build` otherwise fails renaming its .app into the previous archive). It runs INSIDE the compile phase, so a refusal is a compile error and tauri.build never starts; something removed => one compile `progress` event with detail "cleared previous build output", nothing removed => silence. Desktop/android skip it. Then ONE subprocess covers compile+bundle. compile carries the live onTick progress stream. |
 | bundle | (same subprocess) | LIVE transition on the first /bundling/i output line; zero-duration fallback when absent; a failure is attributed to the OPEN phase. |
 | collect | own (collect.ts) | Locates artifacts via the layout from project.getBundleLayout({ target }), copies to outDir/<target>/, REMOVING each destination first (fs.cp merges into an existing .app and would keep stale files inside the bundle) after asserting — on REAL paths, through project.resolveDerivedPath threaded in as CollectInput.resolvePath — that the destination is strictly inside <outDir>/<target> and that directory strictly inside outDir; a lexical guard reads a symlinked <outDir>/<target> as contained and the next statement deletes the tree it points at. Matches are deduplicated by destination name, keeping the NEWEST by mtime (a mobile build leaves one directory per arch and never prunes the ones it did not rebuild, so "whichever the glob yielded last" could ship yesterday's binary). ZERO matches is an error — never a silent empty success. |
 
@@ -974,10 +1007,14 @@ Behavior (api.ts):
   platform throws a [native] error) or every configured target with { all: true } (ignores
   target). simulator/aab pass straight through to build.run/build.runAll. On failure the
   classified TauriError's scrubbed stderrTail is framed in a branded box ABOVE the [native]
-  error line — each tail line truncated with an ellipsis to max(40, ui.width - 6), the
-  branded console's own width minus the box chrome, so the whole box fits the terminal the
-  kit aligns to (a fixed 160 wrapped every 80-column terminal); the width comes from
-  ui.width, never a raw process.stdout read — then the error rethrows unchanged.
+  error line — then the error rethrows unchanged. How wide a tail line may be is the pure
+  decision tailLineBound(columns): a stream WITH columns gets max(40, terminalWidth(columns)
+  - 6) — the clamped terminal width minus the box chrome, so the whole box fits the terminal
+  the kit aligns to (a fixed 160 wrapped every 80-column terminal) — and a stream with NO
+  columns (CI, `native build > build.log`, any pipe) gets no bound at all: nothing wraps
+  against a file, and truncating there would delete the only copy of the toolchain's own
+  error text. renderBuildFailure(ui, error, columns = process.stdout.columns) takes the
+  column count as an argument, so tests never depend on the terminal they run in.
 - dev(opts?): awaits build.prepare({ target }) FIRST, so `tauri dev` never meets a
   half-generated tree; then tauri.dev(...) and the handle's `ready` then `exited`, forwarding
   scrubbed output lines to the render seam. It NEVER stores the handle and NEVER calls stop()
@@ -1142,7 +1179,8 @@ const app = createApp({
 });
 // `bun run test` (unit + integration) runs with NO native toolchain installed.
 // `bun run test:smoke` is the opt-in real-toolchain proof: it packages a real macOS .app and
-// a real iOS simulator .app inside a fresh mkdtemp workspace, driven purely by web.cwd and
+// a real iOS simulator .app — the iOS case builds TWICE in the same project dir, which is the
+// rebuild proof — inside a fresh mkdtemp workspace, driven purely by web.cwd and
 // absolute projectDir/outDir paths (it never chdir's), and skips the iOS case when doctor's
 // ios-tools / ios-platform checks do not pass. It composes ALL FIVE capabilities and then
 // LAUNCHES the macOS binary for 4s, asserting it is still alive with no panic on stderr
@@ -1250,6 +1288,12 @@ indented actionable second line ("  <fix-it / next command>").
   - cli.clean() with no target additionally requires a styled confirm.
   - project.clean validates every candidate path against projectDir before deletion; the
     android keystore.properties removal is a single named file, never a recursive remove.
+  - project.clearMobileBuildOutput (the other recursive delete) passes assertCleanableRoot
+    AND the pure predicate isClearableBuildOutput: the REAL path of gen/apple/build must sit
+    strictly inside the real projectDir, so a symlinked build directory is refused with
+    '[native] Refusing to remove build output outside projectDir: <real path>.' and never
+    followed. Refusals are tested through the predicate on plain strings; the destructive
+    function only ever runs against a fresh mkdtemp workspace.
   - build's collect phase REMOVES each destination before copying (fs.cp merges into an
     existing .app), and only after artifactDestination() proved the destination strictly
     inside <outDir>/<target> and that directory strictly inside outDir; otherwise
@@ -1421,6 +1465,15 @@ rewrites the baked-in runner command in gen/apple/project.yml and every
 gen/apple/*.xcodeproj/project.pbxproj to the absolute `"<node>" "<tauri.js>"` pair. Without
 that rewrite the Xcode "Build Rust Code" phase fails immediately (kind: xcode-script-failed),
 because the runner Tauri detected (`node tauri`, `bun tauri`, …) does not resolve inside Xcode.
+Rebuilding the SAME tree (no clean in between) needs two more things, both automatic:
+  - patchMobile writes CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION into every buildSettings
+    block of the pbxproj and each target's settings.base in project.yml — a capability
+    plugin's build script rewrites <app>_iOS.entitlements mid-build, which Xcode otherwise
+    refuses ("Entitlements file … was modified during the build").
+  - the compile phase clears gen/apple/build first — Tauri renames its fresh .app into the
+    previous archive and fails with "Directory not empty (os error 66)".
+Android needs neither: Gradle owns and reuses its own build tree.
+The smoke suite proves it: the iOS case builds the simulator app TWICE in one project dir.
 
 ====================================================================
 16. BREAKING CHANGES IN THIS RELEASE

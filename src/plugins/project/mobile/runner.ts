@@ -5,12 +5,11 @@
  * so an unpatched tree fails on its first build phase. Every occurrence becomes the
  * absolute `<node> <tauri.js>` pair the tauri plugin itself spawns with.
  */
-import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { MobileTarget, TauriRunner } from "../../../config";
 import type { PatchResult } from "../types";
 import { writeIfChanged } from "../writer";
+import { androidPatchFiles, iosPatchFiles } from "./files";
 
 /** `tauri ios init` bakes `<detected-runner> ios xcode-script …` into the Xcode project. */
 const IOS_RUNNER_VERB = "ios xcode-script";
@@ -18,14 +17,8 @@ const IOS_RUNNER_VERB = "ios xcode-script";
 /** The Android equivalent, written into buildSrc/gradle sources by `tauri android init`. */
 const ANDROID_RUNNER_VERB = "android android-studio-script";
 
-/** Source extensions that can carry the Android runner command. */
-const ANDROID_RUNNER_EXTENSIONS = new Set([".kt", ".kts", ".gradle"]);
-
 /** A quote inside a pbxproj/Kotlin/Gradle string literal is backslash-escaped. */
 const ESCAPED_QUOTE = String.raw`\"`;
-
-/** Derived directories a runner-command scan never descends into. */
-const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
 
 /**
  * One quoted shell word, with or without the backslash a source string literal escapes its
@@ -214,85 +207,6 @@ function quoteFor(filePath: string): string {
 }
 
 /**
- * Lists the iOS files that carry the runner command: `project.yml` plus the
- * `project.pbxproj` of every generated Xcode project.
- *
- * @param genDirectory - The `src-tauri/gen/apple` directory.
- * @returns The existing files to patch.
- * @example
- * ```ts
- * await iosRunnerFiles("/repo/.moku/tauri/src-tauri/gen/apple");
- * ```
- */
-async function iosRunnerFiles(genDirectory: string): Promise<string[]> {
-  const files: string[] = [];
-
-  const projectYml = path.join(genDirectory, "project.yml");
-  if (existsSync(projectYml)) files.push(projectYml);
-
-  for (const entry of await readdir(genDirectory, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.endsWith(".xcodeproj")) continue;
-    const pbxproj = path.join(genDirectory, entry.name, "project.pbxproj");
-    if (existsSync(pbxproj)) files.push(pbxproj);
-  }
-
-  return files;
-}
-
-/**
- * Walks a directory tree collecting accepted files, skipping derived build output.
- *
- * @param directory - The directory to walk (a missing directory yields nothing).
- * @param accept - Predicate over the file name.
- * @returns Every accepted file path below `directory`.
- * @example
- * ```ts
- * await collectFiles(buildSrcDirectory, name => name.endsWith(".kt"));
- * ```
- */
-async function collectFiles(
-  directory: string,
-  accept: (name: string) => boolean
-): Promise<string[]> {
-  if (!existsSync(directory)) return [];
-
-  const found: string[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
-      found.push(...(await collectFiles(full, accept)));
-      continue;
-    }
-    if (accept(entry.name)) found.push(full);
-  }
-  return found;
-}
-
-/**
- * Lists the Android files that can carry the runner command: every Kotlin/Gradle source
- * under `buildSrc`, plus the two top-level Gradle build files.
- *
- * @param genDirectory - The `src-tauri/gen/android` directory.
- * @returns The existing files to patch.
- * @example
- * ```ts
- * await androidRunnerFiles("/repo/.moku/tauri/src-tauri/gen/android");
- * ```
- */
-async function androidRunnerFiles(genDirectory: string): Promise<string[]> {
-  const buildSource = await collectFiles(path.join(genDirectory, "buildSrc"), name =>
-    ANDROID_RUNNER_EXTENSIONS.has(path.extname(name))
-  );
-  const gradleFiles = [
-    path.join(genDirectory, "build.gradle.kts"),
-    path.join(genDirectory, "app", "build.gradle.kts")
-  ].filter(file => existsSync(file));
-
-  return [...buildSource, ...gradleFiles];
-}
-
-/**
  * Applies the runner rewrite to every candidate file for a platform, reporting which
  * files actually changed. A second pass rewrites the absolute pair onto itself and
  * reports everything unchanged.
@@ -323,8 +237,8 @@ export async function patchRunner(
   const verb = opts.target === "ios" ? IOS_RUNNER_VERB : ANDROID_RUNNER_VERB;
   const files =
     opts.target === "ios"
-      ? await iosRunnerFiles(genDirectory)
-      : await androidRunnerFiles(genDirectory);
+      ? await iosPatchFiles(genDirectory)
+      : await androidPatchFiles(genDirectory);
 
   const patched: string[] = [];
   const unchanged: string[] = [];

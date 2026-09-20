@@ -37,6 +37,7 @@ function createProjectMock(iconSource: string) {
     getBundleLayout: vi.fn((opts: { target: Target }) => bundleLayout(opts.target)),
     getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
+    clearMobileBuildOutput: vi.fn(async () => ({ removed: [] as readonly string[] })),
     ensureIconSource: vi.fn(async () => iconSource),
     resolveDerivedPath: vi.fn((target: string) => comparableRealPath(target))
   };
@@ -433,6 +434,63 @@ describe("runCompileAndBundle", () => {
       "[native] tauri compile failed"
     );
     expect(phaseKeys(emit)).toEqual(["compile:start", "compile:error"]);
+  });
+
+  it("clears the previous iOS build output BEFORE tauri.build runs", async () => {
+    const { ctx, deps, project, tauri } = createMocks();
+
+    await runCompileAndBundle(ctx, deps, { target: "ios", simulator: true });
+
+    expect(project.clearMobileBuildOutput).toHaveBeenCalledWith({ target: "ios" });
+    const clearedAt = project.clearMobileBuildOutput.mock.invocationCallOrder[0] ?? 0;
+    const builtAt = tauri.build.mock.invocationCallOrder[0] ?? 0;
+    expect(clearedAt).toBeLessThan(builtAt);
+  });
+
+  it("reports the clear as compile progress only when something was removed", async () => {
+    const { ctx, deps, emit, project } = createMocks();
+    project.clearMobileBuildOutput.mockResolvedValue({ removed: ["/p/gen/apple/build"] });
+
+    await runCompileAndBundle(ctx, deps, { target: "ios" });
+
+    expect(emit).toHaveBeenCalledWith("native:phase", {
+      target: "ios",
+      phase: "compile",
+      status: "progress",
+      detail: "cleared previous build output"
+    });
+  });
+
+  it("stays silent when there was no previous iOS build output", async () => {
+    const { ctx, deps, emit } = createMocks();
+
+    await runCompileAndBundle(ctx, deps, { target: "ios" });
+
+    expect(emit).not.toHaveBeenCalledWith(
+      "native:phase",
+      expect.objectContaining({ detail: "cleared previous build output" })
+    );
+  });
+
+  it("never clears build output for a desktop target", async () => {
+    const { ctx, deps, project } = createMocks();
+
+    await runCompileAndBundle(ctx, deps, { target: "macos" });
+
+    expect(project.clearMobileBuildOutput).not.toHaveBeenCalled();
+  });
+
+  it("attributes a failing clear to the compile phase, and never starts tauri.build", async () => {
+    const { ctx, deps, emit, project, tauri } = createMocks();
+    project.clearMobileBuildOutput.mockRejectedValue(
+      new Error("[native] Refusing to remove build output outside projectDir: /elsewhere.")
+    );
+
+    await expect(runCompileAndBundle(ctx, deps, { target: "ios" })).rejects.toThrow(
+      "[native] Refusing to remove build output outside projectDir"
+    );
+    expect(phaseKeys(emit)).toEqual(["compile:start", "compile:error"]);
+    expect(tauri.build).not.toHaveBeenCalled();
   });
 
   it("a failure after the transition is reported on the open bundle phase", async () => {

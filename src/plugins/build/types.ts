@@ -51,6 +51,7 @@ export type BuildDeps = {
     | "getBundleLayout"
     | "getCompleteness"
     | "patchMobile"
+    | "clearMobileBuildOutput"
     | "ensureIconSource"
     | "resolveDerivedPath"
   >;

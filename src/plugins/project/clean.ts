@@ -1,15 +1,20 @@
 /**
  * @file project plugin — target-scoped destructive cleanup (pure path computation + guarded rm).
  */
+import type { Stats } from "node:fs";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import type { Target } from "../../config";
-import { bundleLayout } from "./layout";
-import { isDerivedPath, realResolve } from "./paths";
+import type { MobileTarget, Target } from "../../config";
+import { bundleLayout, genDirectoryPath } from "./layout";
+import type { PathBoundaries } from "./paths";
+import { isDerivedPath, isStrictlyInside, realResolve } from "./paths";
 import type { CleanResult } from "./types";
+
+/** Directory `xcodebuild` writes an iOS build into, below `gen/apple`. */
+const IOS_BUILD_OUTPUT_DIRECTORY = "build";
 
 /**
  * Computes the absolute path(s) a clean pass would delete for a given scope, without
@@ -131,4 +136,150 @@ export async function clean(projectDirectory: string, target?: Target): Promise<
   }
 
   return { removed };
+}
+
+/**
+ * Computes the directory one mobile target's PREVIOUS build output sits in, without
+ * touching the filesystem. iOS builds into `gen/apple/build` (`xcodebuild`'s own output
+ * root, read from `layout.ts`); Android has no such path here, because Gradle manages its
+ * `app/build` tree itself and reuses it correctly across builds.
+ *
+ * @param projectDirectory - The Tauri project root.
+ * @param target - The mobile packaging target.
+ * @returns The absolute build-output directory, or undefined when the platform has none.
+ * @example
+ * ```ts
+ * mobileBuildOutputPath("/repo/.moku/tauri", "ios"); // ".../src-tauri/gen/apple/build"
+ * ```
+ */
+export function mobileBuildOutputPath(
+  projectDirectory: string,
+  target: MobileTarget
+): string | undefined {
+  if (target !== "ios") return undefined;
+  return path.join(genDirectoryPath(projectDirectory, target), IOS_BUILD_OUTPUT_DIRECTORY);
+}
+
+/**
+ * Decides whether a build-output directory may be removed — the pure predicate in front of
+ * the only other recursive delete in this plugin. Two conditions, both borrowed from the
+ * guards that already exist: `root` must be derived state this app owns
+ * ({@link isDerivedPath}, the same rule {@link assertCleanableRoot} applies), and the
+ * candidate's REAL path must sit strictly inside `root`'s real path. Symlinks are resolved
+ * first, so a `build` link pointing at somebody else's directory is refused rather than
+ * followed.
+ *
+ * Pure by design — it is tested by calling it with unsafe paths directly, never by letting
+ * {@link clearMobileBuildOutput} loose on one.
+ *
+ * @param root - The configured `projectDir`.
+ * @param candidate - The build-output directory a clear pass wants to remove.
+ * @param boundaries - Overrides for cwd/home/tmp/platform/anchor; each defaults to the real value.
+ * @returns Whether the candidate may be removed.
+ * @example
+ * ```ts
+ * isClearableBuildOutput("/repo/.moku/tauri", "/repo/.moku/tauri/src-tauri/gen/apple/build"); // true
+ * ```
+ */
+export function isClearableBuildOutput(
+  root: string,
+  candidate: string,
+  boundaries: Partial<PathBoundaries> = {}
+): boolean {
+  if (!isDerivedPath(root, boundaries)) return false;
+
+  const platform = boundaries.platform ?? process.platform;
+  return isStrictlyInside(realResolve(root), realResolve(candidate), platform);
+}
+
+/**
+ * Refuses to remove anything but a build-output directory nested inside a derived
+ * `projectDir` — the last gate before the recursive delete.
+ *
+ * @param root - The configured `projectDir`.
+ * @param candidate - The build-output directory a clear pass wants to remove.
+ * @param isRealDirectory - Whether the candidate is a real directory rather than a link or a
+ *   file (default `true` — callers that have not looked at the entry assert containment only).
+ * @throws {Error} When `projectDir` is not derived state, when the candidate is not a real
+ *   directory, or when its real path is not strictly inside `projectDir`.
+ * @example
+ * ```ts
+ * assertClearableBuildOutput("/repo/.moku/tauri", "/repo/.moku/tauri/src-tauri/gen/apple/build");
+ * ```
+ */
+export function assertClearableBuildOutput(
+  root: string,
+  candidate: string,
+  isRealDirectory = true
+): void {
+  assertCleanableRoot(root);
+  if (isRealDirectory && isClearableBuildOutput(root, candidate)) return;
+
+  throw new Error(
+    `[native] Refusing to remove build output outside projectDir: ${realResolve(candidate)}.\n  Remove that link by hand — "${candidate}" must be a real directory inside ${realResolve(root)}.`
+  );
+}
+
+/**
+ * Reads a directory entry WITHOUT following it — the link itself, never its target — and
+ * reports an absent path as "no entry" rather than as a failure.
+ *
+ * `existsSync` and every other stat that follows links answers "no" for a DANGLING link, so
+ * a `build` symlink whose target is gone would look like a missing directory and skip the
+ * guard that exists to refuse it. `lstat` sees the link.
+ *
+ * @param target - The path to inspect.
+ * @returns The entry's own stats, or undefined when nothing is there.
+ * @example
+ * ```ts
+ * (await lstatSafe("/repo/.moku/tauri/src-tauri/gen/apple/build"))?.isDirectory();
+ * ```
+ */
+async function lstatSafe(target: string): Promise<Stats | undefined> {
+  try {
+    return await lstat(target);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Removes a mobile target's PREVIOUS build output, so the next build writes into an empty
+ * tree. iOS needs it: `tauri ios build` renames its freshly built `.app` into the existing
+ * `gen/apple/build/<app>.xcarchive`, and a second build fails there with
+ * `Directory not empty (os error 66)`. Android removes nothing — Gradle owns its `build`
+ * tree and reuses it correctly.
+ *
+ * A missing directory is fine (nothing removed). Everything that IS there goes through
+ * {@link assertClearableBuildOutput} first, so a symlinked `build` is refused instead of
+ * followed out of the project. The entry is read with {@link lstatSafe}: a dangling link is
+ * an entry like any other here, and reaches the guard rather than passing for a missing
+ * directory.
+ *
+ * @param projectDirectory - The Tauri project root.
+ * @param target - The mobile packaging target.
+ * @returns The paths actually removed — empty when there was nothing to remove.
+ * @throws {Error} When `projectDir` is not derived state, or the build output resolves
+ *   outside it.
+ * @example
+ * ```ts
+ * await clearMobileBuildOutput("/repo/.moku/tauri", "ios");
+ * ```
+ */
+export async function clearMobileBuildOutput(
+  projectDirectory: string,
+  target: MobileTarget
+): Promise<CleanResult> {
+  const root = path.resolve(projectDirectory);
+  const buildOutput = mobileBuildOutputPath(root, target);
+  if (!buildOutput) return { removed: [] };
+
+  const entry = await lstatSafe(buildOutput);
+  if (!entry) return { removed: [] };
+
+  assertClearableBuildOutput(root, buildOutput, entry.isDirectory());
+
+  await rm(buildOutput, { recursive: true, force: true });
+  return { removed: [buildOutput] };
 }
