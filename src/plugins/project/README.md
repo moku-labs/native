@@ -269,15 +269,23 @@ reported before anything is generated, not at clean time.
 
 ### Capability registry (5 rows)
 
-| Capability | Platforms | Backed by | Confidence |
-|---|---|---|---|
-| `store` | all 5 | crate + npm package + Rust init | high |
-| `notification` | all 5 | crate + npm package + Rust init | high |
-| `clipboard-manager` | all 5 | crate + npm package + Rust init | high |
-| `tray` | desktop only (macos/windows/linux) | **cargo feature `tray-icon`** — no crate, no npm package, no Rust init | low |
-| `deep-link` | all 5 (custom-scheme-only, D-011) | crate + npm package + Rust init | high |
+| Capability | Platforms | Backed by | Permissions | Confidence |
+|---|---|---|---|---|
+| `store` | all 5 | crate + npm package + Rust init | `store:default` | high |
+| `notification` | all 5 | crate + npm package + Rust init | `notification:default` | high |
+| `clipboard-manager` | all 5 | crate + npm package + Rust init | `clipboard-manager:allow-read-text`, `clipboard-manager:allow-write-text` | high |
+| `tray` | desktop only (macos/windows/linux) | **cargo feature `tray-icon`** — no crate, no npm package, no Rust init | `core:tray:default`, `core:menu:default`, `core:image:default`, `core:resources:default`, `core:app:allow-default-window-icon` | low |
+| `deep-link` | all 5 (custom-scheme-only, D-011) | crate + npm package + Rust init | `deep-link:default` | high |
 
-`tray` is the reason every plugin-shaped field on `RegistryRow` is optional while
+`tray` names five permissions because a tray is not just the tray: the icon goes through
+`Image`, the menu through `Menu`, and `@moku-labs/system` defaults the icon to
+`defaultWindowIcon()`. That last call is the one `core:default` does **not** cover — without
+`core:app:allow-default-window-icon` a real macOS shell fails at startup with
+`Command plugin:app|default_window_icon not allowed by ACL`. The menu, image and resources
+ids are already inside `core:default`; the row lists them anyway so it documents the whole
+surface tray touches instead of relying on the baseline set.
+
+`tray` is also the reason every plugin-shaped field on `RegistryRow` is optional while
 `cargoFeatures` is required: it is a core Tauri feature flag, not a plugin. Consumers of
 `getRegistryRows()` (doctor) null-check `npmPackage`/`crate` before use. `getRegistryRows()`
 returns fresh copies, so a caller can never mutate the registry.

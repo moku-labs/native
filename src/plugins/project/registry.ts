@@ -52,7 +52,19 @@ const REGISTRY: readonly RegistryRow[] = [
     name: "tray",
     // No crate, no npm package, no Rust init: tray is a core Tauri cargo FEATURE.
     cargoFeatures: ["tray-icon"],
-    permissions: ["core:tray:default"],
+    // A tray needs more than `core:tray:default`: building the icon calls `Image`, the
+    // menu calls `Menu`, and `@moku-labs/system` defaults the icon to `defaultWindowIcon()`,
+    // whose command `plugin:app|default_window_icon` is NOT in `core:default` — without the
+    // explicit grant a real shell rejects it with "not allowed by ACL". The menu, image and
+    // resources ids are already inside `core:default`; they are spelled out anyway so the
+    // row documents the whole surface tray actually touches.
+    permissions: [
+      "core:tray:default",
+      "core:menu:default",
+      "core:image:default",
+      "core:resources:default",
+      "core:app:allow-default-window-icon"
+    ],
     // Desktop-only (spike a) — tray has no mobile packaging artifact, so it is filtered
     // out of every mobile target-set purely by this platforms list.
     platforms: ["macos", "windows", "linux"],

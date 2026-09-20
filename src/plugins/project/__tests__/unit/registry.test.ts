@@ -131,6 +131,22 @@ describe("resolve", () => {
     expect(resolved.platforms).not.toContain("ios");
   });
 
+  it("tray names every core permission its icon, menu and image calls need", () => {
+    const tray = registryRows().find(row => row.name === "tray");
+    expect(tray?.permissions).toEqual([
+      "core:tray:default",
+      "core:menu:default",
+      "core:image:default",
+      "core:resources:default",
+      "core:app:allow-default-window-icon"
+    ]);
+  });
+
+  it("tray grants the default-window-icon command core:default leaves out", () => {
+    const resolved = resolve("tray");
+    expect(resolved.permissions).toContain("core:app:allow-default-window-icon");
+  });
+
   it("threads the deep-link scheme into both the desktop and the mobile conf shape", () => {
     const resolved = resolve("deep-link", { mode: "scheme", scheme: "myapp" });
     expect(resolved.conf).toEqual({

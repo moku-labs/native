@@ -42,4 +42,49 @@ describe("generateCapabilities", () => {
     const doc = JSON.parse(artifact?.content ?? "{}");
     expect(doc.permissions).toContain("core:tray:default");
   });
+
+  it("writes the exact macOS permission list, tray's core grants included", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("macos"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+
+    expect(doc).toEqual({
+      identifier: "default",
+      description: "Auto-generated capability set for the composed system plugins.",
+      windows: ["main"],
+      platforms: ["macOS"],
+      permissions: [
+        "core:default",
+        "store:default",
+        "notification:default",
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-write-text",
+        "core:tray:default",
+        "core:menu:default",
+        "core:image:default",
+        "core:resources:default",
+        "core:app:allow-default-window-icon",
+        "deep-link:default"
+      ]
+    });
+  });
+
+  it("writes the exact iOS permission list, with no tray grant at all", () => {
+    const [artifact] = generateCapabilities(generatorInputFor("ios"));
+    const doc = JSON.parse(artifact?.content ?? "{}");
+
+    expect(doc).toEqual({
+      identifier: "default",
+      description: "Auto-generated capability set for the composed system plugins.",
+      windows: ["main"],
+      platforms: ["iOS"],
+      permissions: [
+        "core:default",
+        "store:default",
+        "notification:default",
+        "clipboard-manager:allow-read-text",
+        "clipboard-manager:allow-write-text",
+        "deep-link:default"
+      ]
+    });
+  });
 });

@@ -555,13 +555,21 @@ scanning ONLY the path BELOW projectDir — a repository checked out under a dir
 called "target" is a normal checkout, not a violation.
 
 Capability registry rows (registry.ts):
-| name | backing | platforms | confidence |
-|---|---|---|---|
-| store | crate + @tauri-apps/plugin-store + rust init | all five | high |
-| notification | crate + @tauri-apps/plugin-notification + rust init | all five | high |
-| clipboard-manager | crate + @tauri-apps/plugin-clipboard-manager + rust init | all five | high |
-| tray | CARGO FEATURE "tray-icon" only — no crate, no npm package, no rust init | macos, windows, linux | low |
-| deep-link | crate + @tauri-apps/plugin-deep-link + rust init | all five (custom-scheme-only, D-011) | high |
+| name | backing | platforms | permissions | confidence |
+|---|---|---|---|---|
+| store | crate + @tauri-apps/plugin-store + rust init | all five | store:default | high |
+| notification | crate + @tauri-apps/plugin-notification + rust init | all five | notification:default | high |
+| clipboard-manager | crate + @tauri-apps/plugin-clipboard-manager + rust init | all five | clipboard-manager:allow-read-text, clipboard-manager:allow-write-text | high |
+| tray | CARGO FEATURE "tray-icon" only — no crate, no npm package, no rust init | macos, windows, linux | core:tray:default, core:menu:default, core:image:default, core:resources:default, core:app:allow-default-window-icon | low |
+| deep-link | crate + @tauri-apps/plugin-deep-link + rust init | all five (custom-scheme-only, D-011) | deep-link:default | high |
+
+tray lists five permissions on purpose. @moku-labs/system defaults the tray icon to
+defaultWindowIcon() from @tauri-apps/api/app, and core:default does NOT grant that command:
+a real macOS shell fails at startup with
+  Command plugin:app|default_window_icon not allowed by ACL
+core:app:allow-default-window-icon is the grant. The menu, image and resources ids are
+already covered by core:default and are spelled out anyway, so the row documents every
+core surface tray actually touches instead of leaning on the baseline set.
 
 deep-link resolves to the plugin's real two-sided conf shape:
   { "desktop": { "schemes": ["myapp"] },
