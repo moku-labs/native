@@ -45,11 +45,12 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * ```
      */
     "native:phase"(payload) {
-      if (payload.status === "start") ctx.state.progress = { startedAt: Date.now() };
+      // A performance.now() reading: the spinner's elapsed time never goes negative on a
+      // wall-clock step (NTP).
+      if (payload.status === "start") ctx.state.progress = { startedAt: performance.now() };
 
-      const elapsedMs = ctx.state.progress.startedAt
-        ? Date.now() - ctx.state.progress.startedAt
-        : 0;
+      const { startedAt } = ctx.state.progress;
+      const elapsedMs = startedAt === undefined ? 0 : Math.round(performance.now() - startedAt);
       renderPhaseEvent(ui, payload, elapsedMs);
 
       if (payload.status === "done" || payload.status === "error") {
