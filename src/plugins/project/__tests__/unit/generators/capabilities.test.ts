@@ -1,7 +1,26 @@
 import { describe, expect, it } from "vitest";
 
+import type { Target } from "../../../../../config";
 import { generateCapabilities } from "../../../generators/capabilities";
-import { generatorInputFor } from "./fixtures";
+import { resolve } from "../../../registry";
+import { generatorInputComposing, generatorInputFor } from "./fixtures";
+
+/** The haptics row's four commands — the plugin ships no default permission set. */
+const HAPTICS_PERMISSIONS = [
+  "haptics:allow-impact-feedback",
+  "haptics:allow-notification-feedback",
+  "haptics:allow-selection-feedback",
+  "haptics:allow-vibrate"
+];
+
+/** The permission list for `back` + `haptics`, platform-filtered the way `api.ts` resolves them. */
+const backAndHapticsPermissionsFor = (target: Target): string[] => {
+  const capabilities = [resolve("back"), resolve("haptics")].filter(capability =>
+    capability.platforms.includes(target)
+  );
+  const [artifact] = generateCapabilities(generatorInputComposing(target, capabilities));
+  return JSON.parse(artifact?.content ?? "{}").permissions;
+};
 
 describe("generateCapabilities", () => {
   it("writes a single src-tauri/capabilities/default.json artifact", () => {
@@ -86,5 +105,25 @@ describe("generateCapabilities", () => {
         "deep-link:default"
       ]
     });
+  });
+
+  it("grants back's exit and haptics' four commands on android", () => {
+    expect(backAndHapticsPermissionsFor("android")).toEqual([
+      "core:default",
+      "core:app:allow-exit",
+      ...HAPTICS_PERMISSIONS
+    ]);
+  });
+
+  it("grants haptics' four commands but no exit on ios — back is Android-only", () => {
+    expect(backAndHapticsPermissionsFor("ios")).toEqual(["core:default", ...HAPTICS_PERMISSIONS]);
+  });
+
+  it.each([
+    "macos",
+    "windows",
+    "linux"
+  ] as const)("grants neither on %s — both rows are mobile-only", target => {
+    expect(backAndHapticsPermissionsFor(target)).toEqual(["core:default"]);
   });
 });

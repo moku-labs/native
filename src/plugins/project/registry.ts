@@ -1,15 +1,16 @@
 /**
- * @file project plugin — capability registry (5 rows) + typed resolve/isKnownCapability.
+ * @file project plugin — capability registry (7 rows) + typed resolve/isKnownCapability.
  */
 import type { CapabilityConfigMap } from "../../config";
 import type { RegistryRow, ResolvedCapability, TauriConfFragment } from "./types";
 
 /**
- * The five v1 capability registry rows (spike (a), Tauri 2.9.x source-verified 2026-07-03).
- * Four rows are backed by a real official Tauri plugin (crate + npm package + Rust init);
- * `tray` is a core Tauri CARGO FEATURE — it carries no crate, no npm package and no Rust
- * init, only `cargoFeatures: ["tray-icon"]`, and its `confidence: "low"` flags that
- * divergence from the other four.
+ * The seven capability registry rows (the first five spike (a), Tauri 2.9.x
+ * source-verified 2026-07-03; `back` and `haptics` against Tauri 2.12.1). Five rows are
+ * backed by a real official Tauri plugin (crate + npm package + Rust init). `tray` is a
+ * core Tauri CARGO FEATURE — it carries no crate, no npm package and no Rust init, only
+ * `cargoFeatures: ["tray-icon"]`, and its `confidence: "low"` flags that divergence.
+ * `back` is core permissions alone: its whole API ships in `@tauri-apps/api/app`.
  */
 const REGISTRY: readonly RegistryRow[] = [
   {
@@ -80,6 +81,37 @@ const REGISTRY: readonly RegistryRow[] = [
     cargoFeatures: [],
     permissions: ["deep-link:default"],
     platforms: ["macos", "windows", "linux", "ios", "android"],
+    confidence: "high"
+  },
+  {
+    name: "back",
+    // No crate, no npm package, no Rust init: `onBackButtonPress` and `exit` ship in
+    // `@tauri-apps/api/app` itself. The press listener's permissions are already inside
+    // `core:default`; `exit` is not even in `core:app:default`, so it is granted here.
+    cargoFeatures: [],
+    permissions: ["core:app:allow-exit"],
+    // Android-only: the hardware back button exists only there, so the row is filtered out
+    // of every other target-set purely by this platforms list (as tray is from mobile).
+    platforms: ["android"],
+    confidence: "high"
+  },
+  {
+    name: "haptics",
+    npmPackage: "@tauri-apps/plugin-haptics",
+    crate: "tauri-plugin-haptics",
+    crateRange: "^2",
+    npmRange: "^2",
+    rustInit: "tauri_plugin_haptics::init()",
+    cargoFeatures: [],
+    // The plugin ships no default permission set, so each command is granted by name.
+    // No manifest entry either: the plugin merges `android.permission.VIBRATE` itself.
+    permissions: [
+      "haptics:allow-impact-feedback",
+      "haptics:allow-notification-feedback",
+      "haptics:allow-selection-feedback",
+      "haptics:allow-vibrate"
+    ],
+    platforms: ["ios", "android"],
     confidence: "high"
   }
 ];
@@ -171,8 +203,8 @@ function buildConfFragment(
 
 /**
  * Typed registry lookup — resolves a capability row against optional consumer config,
- * producing the full packaging contribution (conf fragment + the future-mechanism
- * sidecar/manifest seams, both empty for every v1 row).
+ * producing the full packaging contribution (conf fragment + the sidecar/manifest seams,
+ * both empty for every row today).
  *
  * @param name - A capability name known at compile time (`keyof CapabilityConfigMap`).
  * @param config - Optional per-capability packaging parameters.
@@ -204,7 +236,8 @@ export function resolve<K extends keyof CapabilityConfigMap>(
  * @returns A fresh copy of every registry row — callers can never mutate the registry.
  * @example
  * ```ts
- * registryRows().map(row => row.name); // ["store", "notification", ...]
+ * registryRows().map(row => row.name);
+ * // ["store", "notification", "clipboard-manager", "tray", "deep-link", "back", "haptics"]
  * ```
  */
 export function registryRows(): ReadonlyArray<RegistryRow> {

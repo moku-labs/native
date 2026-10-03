@@ -39,11 +39,23 @@ const ABSOLUTE_RUNNER_PAIR = `${QUOTED_RUNNER_WORD}${WORD_SEPARATOR}${QUOTED_RUN
 const RUNNER_BINARIES = "node|bunx|bun|npx|yarn|pnpm|cargo";
 
 /**
+ * The optional directory a detected runner is path-qualified with (`/opt/homebrew/bin/`).
+ * It never contains a quote or a backslash: those belong to the string literal around the
+ * command (`shellScript = "…`, a Kotlin `"…"`), and eating the opening quote leaves a
+ * pbxproj Xcode refuses to open.
+ */
+const RUNNER_PATH_PREFIX = String.raw`(?:[^\s"\\]*/)?`;
+
+/**
  * Every runner shape `tauri ios|android init` bakes in: `<binary> tauri`, npm's
  * `npm run tauri --` form, or a bare `tauri` — each optionally path-qualified. Longest
  * alternative first, so `npm run tauri --` is never truncated to its trailing `tauri`.
  */
-const PACKAGE_RUNNER = String.raw`(?:\S*/)?npm run tauri --|(?:\S*/)?(?:${RUNNER_BINARIES}) tauri|(?:\S*/)?tauri`;
+const PACKAGE_RUNNER = [
+  `${RUNNER_PATH_PREFIX}npm run tauri --`,
+  `${RUNNER_PATH_PREFIX}(?:${RUNNER_BINARIES}) tauri`,
+  `${RUNNER_PATH_PREFIX}tauri`
+].join("|");
 
 /** Characters that would break out of the double-quoted shell word a runner path lands in. */
 const SHELL_METACHARACTER_PATTERN = /[\\"$`]/g;

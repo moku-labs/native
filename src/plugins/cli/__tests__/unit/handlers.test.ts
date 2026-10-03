@@ -2,8 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../../../config";
 import type { CheckResult } from "../../../doctor/types";
 import { createCliHandlers } from "../../handlers";
+import { renderPhaseEvent } from "../../render";
 import { createCliState } from "../../state";
 import type { CliContext, Config } from "../../types";
+
+// Call-through spy: every test still renders for real, and the elapsed-time argument the
+// handler passes to the renderer stays observable.
+vi.mock("../../render", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../render")>();
+  return { ...actual, renderPhaseEvent: vi.fn(actual.renderPhaseEvent) };
+});
 
 /** Minimal fixture-valid global config, shared by every mock ctx below (never touches disk). */
 const validGlobalConfig = {
@@ -130,5 +138,37 @@ describe("createCliHandlers — rendering", () => {
 
     const occurrences = lines.filter(line => line.includes("node-binary"));
     expect(occurrences).toHaveLength(1);
+  });
+});
+
+describe("createCliHandlers — elapsed time", () => {
+  it("passes a >= 0 integer elapsed to the renderer when the wall clock steps back", () => {
+    // An NTP correction moves Date.now backwards between start and done: -50ms per call.
+    let now = 1_000_000;
+    const wallClock = vi.spyOn(Date, "now").mockImplementation(() => {
+      now -= 50;
+      return now;
+    });
+    vi.mocked(renderPhaseEvent).mockClear();
+    const handlers = createCliHandlers(createMockCtx());
+
+    try {
+      handlers["native:phase"]({ target: "macos", phase: "compile", status: "start" });
+      handlers["native:phase"]({
+        target: "macos",
+        phase: "compile",
+        status: "done",
+        durationMs: 5
+      });
+    } finally {
+      wallClock.mockRestore();
+    }
+
+    const elapsed = vi.mocked(renderPhaseEvent).mock.calls.map(call => call[2]);
+    expect(elapsed).toHaveLength(2);
+    for (const elapsedMs of elapsed) {
+      expect(elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(Number.isInteger(elapsedMs)).toBe(true);
+    }
   });
 });

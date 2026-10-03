@@ -181,4 +181,17 @@ describe("generateTauriConf", () => {
     const conf = confFor("ios");
     expect(conf.plugins).toEqual({ "deep-link": deepLinkConf });
   });
+
+  it("writes the first window with its title only when no background colour is set", () => {
+    expect(confFor("ios").app.windows).toEqual([{ title: "My Cool App" }]);
+  });
+
+  it("paints the first window with app.backgroundColor when it is set", () => {
+    const input = generatorInputWith("ios", {
+      app: { name: "My Cool App", identifier: "com.example.mycoolapp", backgroundColor: "#10161d" }
+    });
+    const conf = JSON.parse(generateTauriConf(input)[0]?.content ?? "{}");
+
+    expect(conf.app.windows).toEqual([{ title: "My Cool App", backgroundColor: "#10161d" }]);
+  });
 });

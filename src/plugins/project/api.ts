@@ -19,11 +19,13 @@ import type { BundleLayout } from "./layout";
 import { bundleLayout } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
 import { patchMobile } from "./mobile/patch";
+import { orientationManifest } from "./orientation";
 import { comparableRealPath } from "./paths";
 import { isKnownCapability, registryRows, resolve, unknownCapabilityError } from "./registry";
 import type {
   Api,
   GenerateResult,
+  ManifestEntry,
   PatchMobileOptions,
   ProjectContext,
   ResolvedCapability
@@ -57,6 +59,29 @@ function resolveConfiguredCapabilities(
     }
   }
   return resolved;
+}
+
+/**
+ * Collects what the Android main activity must carry: the `activity-attribute` entries of
+ * every capability resolved for android, then the orientation lock. Orientation comes
+ * last so it wins a clash, the same order the iOS sidecar merges in. It is always present:
+ * an unset orientation asks for `android:screenOrientation` to be absent, which removes a
+ * lock a previous build left in the gen/ tree.
+ *
+ * @param global - Frozen global framework config.
+ * @returns The manifest entries for `patchMobile`'s Android pass.
+ * @example
+ * ```ts
+ * // `config` is any full native Config; no registry row carries a manifest entry today
+ * androidManifestEntries({ ...config, app: { name: "Demo", identifier: "com.acme.demo", orientation: "portrait" } });
+ * // [{ kind: "activity-attribute", name: "android:screenOrientation", value: "portrait" }]
+ * ```
+ */
+function androidManifestEntries(global: Readonly<Config>): ManifestEntry[] {
+  const fromCapabilities = resolveConfiguredCapabilities(global, "android")
+    .flatMap(capability => capability.manifest)
+    .filter(entry => entry.kind === "activity-attribute");
+  return [...fromCapabilities, ...orientationManifest(global.app.orientation)];
 }
 
 /**
@@ -185,20 +210,18 @@ export function createProjectApi(ctx: ProjectContext): Api {
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Runs the idempotent mobile post-init patch pass — Android release signing, plus the
-   * Xcode/Android-Studio runner-command rewrite when a `runner` is supplied.
+   * Implements {@link Api.patchMobile}: hands Android its manifest entries, then logs.
    *
-   * @param opts - The patch options.
-   * @param opts.target - The mobile platform to patch.
-   * @param opts.runner - The absolute Node/`tauri.js` pair from `tauri.runner()`.
-   * @returns The paths patched vs. left unchanged.
+   * @param opts - See {@link Api.patchMobile}.
+   * @returns See {@link Api.patchMobile}.
    * @example
    * ```ts
-   * await runPatchMobile({ target: "ios", runner: tauri.runner() });
+   * await runPatchMobile({ target: "ios" }); // { patched: [], unchanged: [] } before `tauri ios init`
    * ```
    */
   const runPatchMobile = async (opts: PatchMobileOptions) => {
-    const result = await patchMobile(ctx.global.projectDir, opts, ctx.global.signing);
+    const manifest = opts.target === "android" ? androidManifestEntries(ctx.global) : [];
+    const result = await patchMobile(ctx.global.projectDir, opts, ctx.global.signing, manifest);
     ctx.log.info("project:patchMobile", { target: opts.target, patched: result.patched.length });
     return result;
   };

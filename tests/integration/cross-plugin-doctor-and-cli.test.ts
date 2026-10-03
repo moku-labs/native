@@ -263,8 +263,8 @@ describe("S09 — doctor warn-only semantics + registry/env consumption", () => 
     expect(crossRepo.status).toBe("warn");
     expect(crossRepo.message).toContain("tauri://localhost");
 
-    // The registry the versions check consumed — 5 pinned rows.
-    expect(testApp.app.project.getRegistryRows()).toHaveLength(5);
+    // The registry the versions check consumed — 7 pinned rows.
+    expect(testApp.app.project.getRegistryRows()).toHaveLength(7);
   });
 
   it("reports signing env-var PRESENCE by name only — never a value", async () => {

@@ -87,7 +87,21 @@ export type CapabilityConfigMap = {
   "clipboard-manager": Record<string, never>;
   tray: Record<string, never>;
   "deep-link": { mode: "scheme"; scheme: string };
+  back: Record<string, never>;
+  haptics: Record<string, never>;
 };
+
+/**
+ * Which way up a mobile app runs. Build time only: it picks the iOS `Info.plist`
+ * orientation keys and the Android main activity's `android:screenOrientation`, and
+ * nothing locks the screen at runtime. `"any"` keeps the Tauri template's default.
+ *
+ * @example
+ * ```ts
+ * createApp({ config: { app: { name: "Demo", identifier: "com.acme.demo", orientation: "portrait" } } });
+ * ```
+ */
+export type Orientation = "portrait" | "landscape" | "any";
 
 /** How `tauri ios build` exports the signed archive (`--export-method`). */
 export type AppleExportMethod = "app-store-connect" | "release-testing" | "debugging";
@@ -136,10 +150,12 @@ export type SigningConfig = {
  */
 export type Config = {
   /**
-   * App identity and store metadata — project.onInit validates name/identifier are
-   * non-empty (reverse-DNS identifier). `icon` is a 1024x1024 PNG relative to cwd
-   * (a placeholder is generated when unset); `category` maps to `bundle.category`;
-   * `buildNumber` maps to the iOS/macOS `bundleVersion`.
+   * App identity, store metadata and presentation — project.onInit validates
+   * name/identifier are non-empty (reverse-DNS identifier). `icon` is a 1024x1024 PNG
+   * relative to cwd (a placeholder is generated when unset); `category` maps to
+   * `bundle.category`; `buildNumber` maps to the iOS/macOS `bundleVersion`;
+   * `orientation` locks the mobile screen at build time; `backgroundColor` paints the
+   * native window behind the page.
    */
   app: {
     name: string;
@@ -148,6 +164,18 @@ export type Config = {
     icon?: string;
     category?: string;
     buildNumber?: string;
+    /**
+     * Build-time mobile orientation lock → the iOS `Info.plist` keys and the Android
+     * main activity's `android:screenOrientation`. There is no runtime lock. Unset
+     * behaves as `"any"`.
+     */
+    orientation?: Orientation;
+    /**
+     * Hex window colour (`"#10161d"`, or `"#10161dff"` with alpha) →
+     * `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page
+     * does not cover. Unset leaves the platform default (white in light mode).
+     */
+    backgroundColor?: string;
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };

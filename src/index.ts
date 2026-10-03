@@ -23,10 +23,10 @@
  *
  * | Field | Type | Default |
  * |---|---|---|
- * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition |
+ * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour |
  * | `web` | `{ build; devCommand; devUrl; dist; cwd? }` | `"bun run build"`, `"bun run dev"`, `"http://localhost:5173"`, `"dist"` |
  * | `system` | `ReadonlyArray<{ name: string }>` | `[]` — the composed `@moku-labs/system` plugins |
- * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` |
+ * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` — keys: `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics` |
  * | `targets` | `readonly Target[]` | `hostTargets(process.platform)` — one desktop target, mobile is opt-in |
  * | `projectDir` | `string` | `".moku/tauri"` — generated Tauri project (gitignored build output) |
  * | `outDir` | `string` | `"dist-native"` — installer delivery root |
@@ -119,6 +119,7 @@ export type {
   NativeCompleteEvent,
   NativePhase,
   NativePhaseEvent,
+  Orientation,
   SigningConfig,
   Target,
   TauriRunner

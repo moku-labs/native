@@ -6,15 +6,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { patchMobile } from "../../../mobile/patch";
 import { applySigningBlock } from "../../../mobile/signing";
+import { orientationManifest } from "../../../orientation";
 import {
+  androidManifest,
   LITERAL_RUNNER,
   pbxprojFor,
   projectYmlFor,
   RUNNER,
   SIGNING,
   SIGNING_BLOCK,
+  screenOrientationLine,
+  TEMPLATE_ACTIVITY_ATTRIBUTES,
   YML_RUNNER
 } from "./fixtures";
+
+/** Writes the template AndroidManifest.xml into a seeded gen/android tree. */
+const seedAndroidManifest = async (genDir: string) => {
+  const manifestPath = path.join(genDir, "app", "src", "main", "AndroidManifest.xml");
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+  await writeFile(manifestPath, androidManifest(), "utf8");
+  return manifestPath;
+};
 
 describe("patchMobile", () => {
   let dir: string;
@@ -207,5 +219,74 @@ describe("patchMobile", () => {
     expect(await readFile(taskPath, "utf8")).toBe(
       `val command = "${LITERAL_RUNNER} android android-studio-script"\n`
     );
+  });
+
+  it("android runs signing, then the manifest patch, then the runner patch — one report", async () => {
+    const genDir = await seedAndroid();
+    const gradlePath = path.join(genDir, "app", "build.gradle.kts");
+    const manifestPath = await seedAndroidManifest(genDir);
+    const buildSrcDir = path.join(genDir, "buildSrc", "src", "main", "java");
+    await mkdir(buildSrcDir, { recursive: true });
+    const taskPath = path.join(buildSrcDir, "BuildTask.kt");
+    await writeFile(taskPath, 'val command = "node tauri android android-studio-script"\n', "utf8");
+    const portrait = orientationManifest("portrait");
+
+    const first = await patchMobile(
+      dir,
+      { target: "android", runner: RUNNER },
+      { android: SIGNING },
+      portrait
+    );
+
+    expect(first).toEqual({ patched: [gradlePath, manifestPath, taskPath], unchanged: [] });
+    expect(await readFile(manifestPath, "utf8")).toBe(
+      androidManifest([screenOrientationLine("portrait"), ...TEMPLATE_ACTIVITY_ATTRIBUTES])
+    );
+
+    const second = await patchMobile(
+      dir,
+      { target: "android", runner: RUNNER },
+      { android: SIGNING },
+      portrait
+    );
+
+    expect(second).toEqual({ patched: [], unchanged: [gradlePath, manifestPath, taskPath] });
+  });
+
+  it("android still patches the manifest when no runner is supplied", async () => {
+    const genDir = await seedAndroid();
+    const manifestPath = await seedAndroidManifest(genDir);
+
+    const result = await patchMobile(
+      dir,
+      { target: "android" },
+      {},
+      orientationManifest("landscape")
+    );
+
+    expect(result).toEqual({
+      patched: [manifestPath],
+      unchanged: [path.join(genDir, "app", "build.gradle.kts")]
+    });
+    expect(await readFile(manifestPath, "utf8")).toContain(
+      screenOrientationLine("sensorLandscape")
+    );
+  });
+
+  it("android fails with a fix-it when manifest entries meet a missing manifest", async () => {
+    await seedAndroid();
+
+    await expect(
+      patchMobile(dir, { target: "android" }, {}, orientationManifest("portrait"))
+    ).rejects.toThrow("[native] AndroidManifest.xml not found at");
+  });
+
+  it("ios ignores manifest entries", async () => {
+    const genDir = await seedApple();
+
+    const result = await patchMobile(dir, { target: "ios" }, {}, orientationManifest("portrait"));
+
+    expect(result.patched).toEqual([]);
+    expect(existsSync(path.join(genDir, "app"))).toBe(false);
   });
 });

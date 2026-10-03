@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Config as GlobalConfig, Target, TauriRunner } from "../../../../config";
+import type {
+  Config as GlobalConfig,
+  NativeCompleteEvent,
+  NativePhaseEvent,
+  Target,
+  TauriRunner
+} from "../../../../config";
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import { bundleLayout } from "../../../project/layout";
@@ -124,7 +130,7 @@ function createMocks(overrides?: {
 /** Projects the spy emit's calls into `"phase:status"` keys, in emission order. */
 function phaseKeys(emit: ReturnType<typeof vi.fn>): string[] {
   return emit.mock.calls.map(call => {
-    const payload = call[1] as { phase: string; status: string };
+    const payload = call[1] as NativePhaseEvent;
     return `${payload.phase}:${payload.status}`;
   });
 }
@@ -652,6 +658,125 @@ describe("runPipeline", () => {
       "codegen:start",
       "codegen:error"
     ]);
+  });
+});
+
+/**
+ * Makes `Date.now` step backwards on every call (1_000_000, then -50 each call), the way
+ * an NTP correction moves the wall clock under a running build.
+ */
+function spyBackwardsWallClock() {
+  let now = 1_000_000;
+  return vi.spyOn(Date, "now").mockImplementation(() => {
+    now -= 50;
+    return now;
+  });
+}
+
+/** Every `durationMs` the spy emit carried on a `native:phase` or `native:complete` event. */
+function emittedDurations(emit: ReturnType<typeof vi.fn>): number[] {
+  return emit.mock.calls.flatMap(call => {
+    const payload = call[1] as Partial<NativePhaseEvent | NativeCompleteEvent>;
+    return payload.durationMs === undefined ? [] : [payload.durationMs];
+  });
+}
+
+/** Asserts each duration is a whole, non-negative number of milliseconds. */
+function expectMonotonicDurations(durations: readonly number[]): void {
+  expect(durations.length).toBeGreaterThan(0);
+  for (const durationMs of durations) {
+    expect(durationMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(durationMs)).toBe(true);
+  }
+}
+
+describe("durations stay monotonic when the wall clock steps back", () => {
+  let projectDir: string;
+  let outDir: string;
+  let wallClock: ReturnType<typeof spyBackwardsWallClock>;
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-clock-"));
+    outDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-clock-out-"));
+    wallClock = spyBackwardsWallClock();
+  });
+
+  afterEach(async () => {
+    wallClock.mockRestore();
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it("runPipeline: every phase timing, the total and every emitted duration are >= 0 integers", async () => {
+    const dmgDir = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
+    await mkdir(dmgDir, { recursive: true });
+    await writeFile(path.join(dmgDir, "App.dmg"), "bytes", "utf8");
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+
+    const result = await runPipeline(ctx, deps, { target: "macos" });
+
+    expectMonotonicDurations(result.phases.map(phase => phase.durationMs));
+    expectMonotonicDurations([result.durationMs]);
+    expectMonotonicDurations(emittedDurations(emit));
+  });
+
+  it("runPrepare: a phase duration is the delta of two performance.now readings", async () => {
+    const monotonicClock = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1042.4);
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+
+    try {
+      const phases = await runPrepare(ctx, deps, "macos");
+
+      expect(phases[0]).toEqual({ phase: "scaffold", durationMs: 42 });
+      expect(emit).toHaveBeenCalledWith(
+        "native:phase",
+        expect.objectContaining<Partial<NativePhaseEvent>>({
+          phase: "scaffold",
+          status: "done",
+          durationMs: 42
+        })
+      );
+    } finally {
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it("runCompileAndBundle without a transition line: compile duration is a >= 0 integer", async () => {
+    const tauri = createTauriMock();
+    tauri.build.mockImplementation(async () => okResult());
+    const { ctx, deps, emit } = createMocks({ tauri });
+
+    const result = await runCompileAndBundle(ctx, deps, { target: "macos" });
+
+    expectMonotonicDurations([result.compileDurationMs, result.bundleDurationMs]);
+    expectMonotonicDurations(emittedDurations(emit));
+  });
+
+  it("a failing phase reports a >= 0 integer duration on its error event", async () => {
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.generate.mockRejectedValue(new Error("[native] codegen exploded"));
+
+    await expect(runPipeline(ctx, deps, { target: "macos" })).rejects.toThrow(
+      "[native] codegen exploded"
+    );
+    expectMonotonicDurations(emittedDurations(emit));
+  });
+
+  it("a failing bundle reports a >= 0 integer duration on its error event", async () => {
+    const tauri = createTauriMock();
+    tauri.build.mockImplementation(async opts => {
+      opts.onOutput?.("Bundling application (App.dmg)");
+      throw new Error("[native] tauri bundling failed");
+    });
+    const { ctx, deps, emit } = createMocks({ tauri });
+
+    await expect(runCompileAndBundle(ctx, deps, { target: "macos" })).rejects.toThrow(
+      "[native] tauri bundling failed"
+    );
+    expectMonotonicDurations(emittedDurations(emit));
   });
 });
 

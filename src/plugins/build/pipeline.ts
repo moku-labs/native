@@ -309,7 +309,8 @@ export async function runCompileAndBundle(
   opts: RunOptions
 ): Promise<{ compileDurationMs: number; bundleDurationMs: number }> {
   const { target } = opts;
-  const startedAt = Date.now();
+  // Monotonic readings: a wall-clock step (NTP) must never yield a negative duration.
+  const startedAt = performance.now();
   let transitionAt: number | undefined;
 
   emitPhase(ctx, target, "compile", "start");
@@ -353,8 +354,10 @@ export async function runCompileAndBundle(
       onOutput: line => {
         if (transitionAt !== undefined) return;
         if (!BUNDLING_TRANSITION_PATTERN.test(line)) return;
-        transitionAt = Date.now();
-        emitPhase(ctx, target, "compile", "done", { durationMs: transitionAt - startedAt });
+        transitionAt = performance.now();
+        emitPhase(ctx, target, "compile", "done", {
+          durationMs: Math.round(transitionAt - startedAt)
+        });
         emitPhase(ctx, target, "bundle", "start");
       }
     });
@@ -363,30 +366,31 @@ export async function runCompileAndBundle(
     const openPhase: NativePhase = transitionAt === undefined ? "compile" : "bundle";
     const detail = error instanceof Error ? error.message : String(error);
     emitPhase(ctx, target, openPhase, "error", {
-      durationMs: Date.now() - (transitionAt ?? startedAt),
+      durationMs: Math.round(performance.now() - (transitionAt ?? startedAt)),
       detail
     });
     throw error;
   }
 
-  const endedAt = Date.now();
+  const endedAt = performance.now();
   if (transitionAt === undefined) {
-    const compileDurationMs = endedAt - startedAt;
+    const compileDurationMs = Math.round(endedAt - startedAt);
     emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
     emitPhase(ctx, target, "bundle", "start");
     emitPhase(ctx, target, "bundle", "done", { durationMs: 0 });
     return { compileDurationMs, bundleDurationMs: 0 };
   }
 
-  const bundleDurationMs = endedAt - transitionAt;
+  const bundleDurationMs = Math.round(endedAt - transitionAt);
   emitPhase(ctx, target, "bundle", "done", { durationMs: bundleDurationMs });
-  return { compileDurationMs: transitionAt - startedAt, bundleDurationMs };
+  return { compileDurationMs: Math.round(transitionAt - startedAt), bundleDurationMs };
 }
 
 /**
  * Runs one phase generically: emits `native:phase` start/done/error and measures
- * duration, rethrowing on failure so the caller stops the pipeline (no partial-continue,
- * v1) — the phase after a failing one is never started.
+ * duration (monotonic clock, whole milliseconds), rethrowing on failure so the caller
+ * stops the pipeline (no partial-continue, v1) — the phase after a failing one is never
+ * started.
  *
  * @param ctx - The build pipeline's domain context.
  * @param target - The packaging target the phase runs for.
@@ -407,11 +411,11 @@ async function runPhase<T>(
   run: () => Promise<T>,
   detailOf?: (result: T) => string | undefined
 ): Promise<{ durationMs: number; result: T }> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   emitPhase(ctx, target, phase, "start");
   try {
     const result = await run();
-    const durationMs = Date.now() - startedAt;
+    const durationMs = Math.round(performance.now() - startedAt);
     const detail = detailOf?.(result);
     emitPhase(
       ctx,
@@ -422,7 +426,7 @@ async function runPhase<T>(
     );
     return { durationMs, result };
   } catch (error) {
-    const durationMs = Date.now() - startedAt;
+    const durationMs = Math.round(performance.now() - startedAt);
     const detail = error instanceof Error ? error.message : String(error);
     emitPhase(ctx, target, phase, "error", { durationMs, detail });
     throw error;
@@ -487,7 +491,7 @@ export async function runPipeline(
   opts: RunOptions
 ): Promise<BuildResult> {
   const { target } = opts;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
 
   const phases: PhaseTiming[] = [...(await runPrepare(ctx, deps, target))];
 
@@ -512,7 +516,7 @@ export async function runPipeline(
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });
 
-  const durationMs = Date.now() - startedAt;
+  const durationMs = Math.round(performance.now() - startedAt);
   const { outPath, artifacts } = collect.result;
   ctx.emit("native:complete", { target, outPath, artifacts, durationMs });
 

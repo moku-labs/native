@@ -99,7 +99,16 @@ export type CapabilityConfigMap = {
   "clipboard-manager": Record<string, never>;
   tray: Record<string, never>;
   "deep-link": { mode: "scheme"; scheme: string };
+  back: Record<string, never>;
+  haptics: Record<string, never>;
 };
+
+/**
+ * Which way up a mobile app runs. Build time only: it picks the iOS `Info.plist`
+ * orientation keys and the Android main activity's `android:screenOrientation`, and
+ * nothing locks the screen at runtime. `"any"` keeps the Tauri template's default.
+ */
+export type Orientation = "portrait" | "landscape" | "any";
 
 /** How `tauri ios build` exports the signed archive (`--export-method`). */
 export type AppleExportMethod = "app-store-connect" | "release-testing" | "debugging";
@@ -136,10 +145,12 @@ export type SigningConfig = {
 /** Global configuration shape for the framework. Read by every plugin via `ctx.global`. */
 export type Config = {
   /**
-   * App identity and store metadata — project.onInit validates name/identifier are
-   * non-empty (reverse-DNS identifier). `icon` is a 1024x1024 PNG relative to cwd
-   * (a placeholder is generated when unset); `category` maps to `bundle.category`;
-   * `buildNumber` maps to the iOS/macOS `bundleVersion`.
+   * App identity, store metadata and presentation — project.onInit validates
+   * name/identifier are non-empty (reverse-DNS identifier). `icon` is a 1024x1024 PNG
+   * relative to cwd (a placeholder is generated when unset); `category` maps to
+   * `bundle.category`; `buildNumber` maps to the iOS/macOS `bundleVersion`;
+   * `orientation` locks the mobile screen at build time; `backgroundColor` paints the
+   * native window behind the page.
    */
   app: {
     name: string;
@@ -148,6 +159,8 @@ export type Config = {
     icon?: string;
     category?: string;
     buildNumber?: string;
+    orientation?: Orientation;      // build-time mobile lock; unset behaves as "any"
+    backgroundColor?: string;       // "#rrggbb" | "#rrggbbaa" -> app.windows[0].backgroundColor
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
@@ -229,13 +242,15 @@ GLOBAL Config (D-005 — the substantive surface; every plugin reads it via ctx.
 | app.icon | string? | (absent) | Path to a 1024x1024 PNG, relative to cwd. Absent => a placeholder PNG is generated into projectDir. |
 | app.category | string? | (absent) | Store category -> bundle.category. Key is ABSENT from the JSON when unset. |
 | app.buildNumber | string? | (absent) | Store build number -> bundle.iOS.bundleVersion + bundle.macOS.bundleVersion. |
+| app.orientation | "portrait" \| "landscape" \| "any" | (absent = "any") | Build-time mobile orientation lock. iOS: UISupportedInterfaceOrientations (+ ~ipad, + UIRequiresFullScreen) in src-tauri/Info.ios.plist. Android: android:screenOrientation on the main activity ("portrait" / "sensorLandscape"; removed for "any"). No runtime lock. Validated against the three values. |
+| app.backgroundColor | string? | (absent) | Hex window colour "#rrggbb" or "#rrggbbaa" -> app.windows[0].backgroundColor. Shows during launch and behind any gap the page does not cover. Validated against /^#[0-9a-f]{6}([0-9a-f]{2})?$/i. |
 | web.build | string | "bun run build" | Web build command -> tauri.conf.json build.beforeBuildCommand `{ script, cwd }`. Required non-empty. |
 | web.devCommand | string | "bun run dev" | Web dev command -> build.beforeDevCommand `{ script, cwd }`. Required non-empty. |
 | web.devUrl | string | "http://localhost:5173" | Dev server URL — also DevHandle.url and the readiness-poll target. Required non-empty. |
 | web.dist | string | "dist" | Web build output; resolved from web.cwd and rebased onto src-tauri as build.frontendDist (POSIX separators). Required non-empty. |
 | web.cwd | string? | (absent => the process cwd) | Root of the web package (monorepo layouts). Both before-commands carry it explicitly, frontendDist resolves from it, and doctor's web-script/versions checks read package.json from it. |
 | system | ReadonlyArray<{ name: string }> | [] | The composed system plugins — the shared cross-team contract. Unknown names throw at composition time. |
-| capabilities | Partial<CapabilityConfigMap> | {} | Per-capability packaging parameters. "deep-link" in `system` REQUIRES capabilities["deep-link"] = { mode: "scheme", scheme } with a non-empty scheme. |
+| capabilities | Partial<CapabilityConfigMap> | {} | Per-capability packaging parameters, keyed store / notification / clipboard-manager / tray / deep-link / back / haptics. "deep-link" in `system` REQUIRES capabilities["deep-link"] = { mode: "scheme", scheme } with a non-empty scheme. |
 | targets | readonly Target[] | hostTargets(process.platform) | Targets this app ships; the default scope for build.runAll and doctor.run. ONE desktop target per host; ios/android are opt-in. |
 | projectDir | string | ".moku/tauri" | Generated Tauri project root (contains src-tauri/). GITIGNORED build output, fully regenerable, never committed. |
 | outDir | string | "dist-native" | Installer delivery root; collect copies artifacts to outDir/<target>/. |
@@ -332,10 +347,12 @@ cli declares NO events — hooks only. Its hook map (handlers.ts):
 
 Responsibility: owns the generated Tauri project as FILES — capability registry,
 all generators for projectDir, the write-if-changed content-hash writer, the mobile
-completeness gate, the mobile patch pass (Android signing + the runner rewrite), the
-placeholder icon, and clean. It NEVER spawns subprocesses. Files: index.ts, types.ts,
-api.ts, validate.ts, layout.ts, paths.ts, registry.ts, writer.ts, clean.ts, icon.ts,
-mobile/{completeness,signing,runner,patch}.ts,
+completeness gate, the mobile patch pass (Android signing + main-activity manifest
+attributes + the runner rewrite; iOS Xcode settings + the runner rewrite), the build-time
+orientation lock, the placeholder icon, and clean. It NEVER spawns subprocesses. Files:
+index.ts, types.ts, api.ts, validate.ts, layout.ts, paths.ts, registry.ts, writer.ts,
+clean.ts, icon.ts, orientation.ts, xml.ts,
+mobile/{completeness,files,signing,manifest,runner,xcode-settings,patch}.ts,
 generators/{tauri-conf,cargo,rust,capabilities,build-script,entitlements,sidecar,paths,types}.ts.
 
 layout.ts is the ONE owner of the generated tree's output layout — the desktop
@@ -348,19 +365,21 @@ NFC + case rules, and the isDerivedPath() predicate that both the destructive cl
 guard and the composition-time config check ask, so what createApp accepts and what
 clean() will delete can never drift apart.
 mobile/patch.ts is orchestration only: it decides WHICH patches a platform needs and in
-which order, while mobile/signing.ts owns the Android Gradle signing block and
-mobile/runner.ts owns the Xcode/Android-Studio runner-command rewrite.
+which order, while mobile/signing.ts owns the Android Gradle signing block,
+mobile/manifest.ts the main-activity attributes in AndroidManifest.xml, and
+mobile/runner.ts the Xcode/Android-Studio runner-command rewrite. orientation.ts turns
+app.orientation into its Info.ios.plist entries and its Android manifest entry.
 
 Generated artifacts (all through write-if-changed):
 | Path (under projectDir) | Generator | Carries |
 |---|---|---|
-| src-tauri/tauri.conf.json | generators/tauri-conf.ts | identity, web build/dev wiring, bundle metadata, Apple signing, a plugins.<name> block per CONFIGURED capability (empty conf = no key: store/notification/clipboard-manager deserialize `unit` and a `{}` map there aborts startup) |
-| src-tauri/Cargo.toml | generators/cargo.ts | package manifest, `tauri = { version = "2", features = [...] }` (sorted unique cargo features), one pinned crate per plugin-backed capability |
+| src-tauri/tauri.conf.json | generators/tauri-conf.ts | identity, web build/dev wiring, the main window (app.windows[0] = { title, backgroundColor? } — no label, so tauri names it "main"), bundle metadata, Apple signing, a plugins.<name> block per CONFIGURED capability (empty conf = no key: store/notification/clipboard-manager deserialize `unit` and a `{}` map there aborts startup) |
+| src-tauri/Cargo.toml | generators/cargo.ts | package manifest, `tauri = { version = "2.12", features = [...] }` (sorted unique cargo features; 2.12 is where `exit` and core:app:allow-exit landed — tauri-build stays at "2"), one pinned crate per plugin-backed capability, then `[target.'cfg(target_os = "ios")'.dependencies] objc2 = "0.6"` on every target |
 | src-tauri/build.rs | generators/build-script.ts | `fn main() { tauri_build::build() }` — without it capabilities are never compiled in and `tauri build` fails |
-| src-tauri/src/lib.rs, src/main.rs | generators/rust.ts | mobile entry point + one .plugin(...) line per capability |
+| src-tauri/src/lib.rs, src/main.rs | generators/rust.ts | `#[cfg(target_os = "ios")] use tauri::Manager;`, the mobile entry point, one .plugin(...) line per capability (sorted), then the iOS safe-area `.setup(|_app| { … })` hook: on the "main" window it sets the WKWebView scroll view's contentInsetAdjustmentBehavior to .never (2) through objc2, because wry leaves it on .automatic and UIKit shrinks the page by the safe area (tauri-apps/tauri#8166). The hook is #[cfg(target_os = "ios")], so lib.rs is the same file on every target |
 | src-tauri/capabilities/default.json | generators/capabilities.ts | "core:default" first, then every capability permission, scoped to Tauri's platform ids (macOS, iOS, windows, linux, android) |
 | src-tauri/Entitlements.plist | generators/entitlements.ts | App Store sandbox, only for signing.apple.appStore macOS builds with no consumer plist |
-| src-tauri/Info.ios.plist | generators/sidecar.ts | future-mechanism seam — no v1 row emits it |
+| src-tauri/Info.ios.plist | generators/sidecar.ts | iOS ONLY, ALWAYS written: capability sidecarPlist entries, then orientationPlist(app.orientation); a later duplicate key wins; string -> <string>, boolean -> <true/>/<false/>, array -> <array> of <string>, XML-escaped. An empty <dict> when nothing contributes a key, because the writer never deletes and Tauri merges this file on every build — a stale portrait lock must be cleared. Other targets: no artifact |
 | placeholder-icon.png | icon.ts | embedded 1024x1024 PNG, written only when app.icon is unset |
 
 Types (src/plugins/project/types.ts — verbatim):
@@ -379,7 +398,11 @@ export type CompletenessResult =
   | { status: "incomplete"; missing: readonly string[] }
   | { status: "complete" };
 
-/** Result of the idempotent mobile patch pass (Android signing + the mobile runner command). */
+/**
+ * Result of the idempotent mobile patch pass: Android release signing and the main
+ * activity's manifest attributes, the iOS Xcode build settings, and the runner command
+ * on both platforms. A file several patches touched is listed once.
+ */
 export type PatchResult = { readonly patched: readonly string[]; readonly unchanged: readonly string[] };
 
 /** Options for one mobile patch pass. The runner patch is skipped when `runner` is absent. */
@@ -392,9 +415,9 @@ export type PatchMobileOptions = {
 export type CleanResult = { removed: readonly string[] };
 
 /**
- * One capability registry row. A row is backed EITHER by a real Tauri plugin (crate + npm
- * package + Rust init) or by a core Tauri cargo feature (tray), so every plugin-only field
- * is optional and `cargoFeatures` is always present.
+ * One capability registry row. A row is backed by a real Tauri plugin (crate + npm
+ * package + Rust init), by a core Tauri cargo feature (tray), or by core permissions alone
+ * (back), so every plugin-only field is optional and `cargoFeatures` is always present.
  */
 export type RegistryRow = {
   name: keyof CapabilityConfigMap;
@@ -423,8 +446,21 @@ export type DeepLinkConf = {
  */
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
-export type PlistEntry = { key: string; value: string };
-export type ManifestEntry = { parentTag: string; xml: string };
+/** One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, or an `<array>` of strings. */
+export type PlistValue = string | boolean | readonly string[];
+
+/** An Info.ios.plist sidecar entry — no registry row carries one today; the orientation lock does. */
+export type PlistEntry = { key: string; value: PlistValue };
+
+/**
+ * An AndroidManifest need. `activity-attribute` sets one attribute on the main `<activity>`,
+ * or removes it when `value` is `undefined`; the orientation lock is one. `child` is the
+ * seam for a child element and the patch pass does not apply it. No registry row carries
+ * either kind: official plugins self-merge via build.rs.
+ */
+export type ManifestEntry =
+  | { kind: "child"; parentTag: string; xml: string }
+  | { kind: "activity-attribute"; name: `android:${string}`; value: string | undefined };
 
 export type ResolvedCapability = RegistryRow & {
   conf: TauriConfFragment;
@@ -523,6 +559,12 @@ Behavior:
       already carries the setting is left alone, a block that set it to NO is rewritten to YES,
       and a second pass reports every file unchanged. A file touched by both iOS patches is
       reported once, as patched.
+    * Path-qualified runners (`/opt/homebrew/bin/node tauri`, `/repo/node_modules/.bin/tauri`,
+      written when an absolute node drives `tauri ios init`) are matched from their first `/`:
+      the optional path prefix is `(?:[^\s"\\]*/)?` — it never contains a quote or a
+      backslash — so the `"` that opens `shellScript = "…"` (or a Kotlin string literal) is
+      never eaten. Eating it left a pbxproj xcodebuild refused to open (exit 74, "project is
+      damaged … parse error") and failed every FIRST iOS build.
     * Android: the same rewrite for " android android-studio-script" across
       gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts, PLUS a
       sentinel-delimited `// MOKU-SIGNING-START … // MOKU-SIGNING-END` block in
@@ -534,6 +576,25 @@ Behavior:
       No keystore.properties is written any
       more; an unset keystorePath REMOVES the block and deletes a legacy keystore.properties
       (a single named file inside gen/android, never a recursive remove).
+      Android order: signing -> manifest -> runner, merged into one report. The manifest step
+      (mobile/manifest.ts) applies `activity-attribute` entries — the api passes every
+      resolved android capability's activity-attribute entries, then
+      orientationManifest(app.orientation) — to the main <activity> of
+      gen/android/app/src/main/AndroidManifest.xml: the one whose body declares
+      android.intent.action.MAIN (a single activity without MAIN also counts; comments and
+      <activity-alias> never do; a ">" inside a quoted value never ends the start tag). SET
+      replaces the value in place or inserts it as the first attribute with the whitespace
+      that already follows "<activity" (a new line at the next attribute's indent on the
+      template layout); REMOVE (value undefined) drops it with the whitespace before it.
+      CRLF-safe, XML-escaped, write-if-changed, idempotent. No attribute entry => the manifest
+      is not read. Missing manifest => '[native] AndroidManifest.xml not found at <path>.\n
+      Re-run the mobile init pass (tauri android init) before patching the manifest.' A SET
+      with zero or several MAIN activities => '[native] Could not find the main <activity> in
+      <path>.\n  Re-run the mobile init pass (tauri android init) or report the manifest Tauri
+      generated.' A removal-only pass leaves such a manifest as it is (an app that never set an
+      orientation keeps building). `child` entries are never applied.
+      patchMobile(projectDir, opts, signing, manifest = []) is the domain signature; the api
+      wrapper computes `manifest` for android and passes [] for ios.
 - ensureIconSource(): app.icon set => path.resolve(app.icon), throwing a [native] fix-it when
   the file is missing. Unset => writes the embedded 1024x1024 placeholder PNG to
   <projectDir>/placeholder-icon.png via write-if-changed and returns that path.
@@ -590,6 +651,8 @@ Capability registry rows (registry.ts):
 | clipboard-manager | crate + @tauri-apps/plugin-clipboard-manager + rust init | all five | clipboard-manager:allow-read-text, clipboard-manager:allow-write-text | high |
 | tray | CARGO FEATURE "tray-icon" only — no crate, no npm package, no rust init | macos, windows, linux | core:tray:default, core:menu:default, core:image:default, core:resources:default, core:app:allow-default-window-icon | low |
 | deep-link | crate + @tauri-apps/plugin-deep-link + rust init | all five (custom-scheme-only, D-011) | deep-link:default | high |
+| back | CORE PERMISSIONS only — no crate, no npm package, no rust init (onBackButtonPress + exit ship in @tauri-apps/api/app) | android | core:app:allow-exit (NOT in core:app:default; exists since tauri 2.12.0) | high |
+| haptics | tauri-plugin-haptics ^2 + @tauri-apps/plugin-haptics ^2 + tauri_plugin_haptics::init() | ios, android | haptics:allow-impact-feedback, haptics:allow-notification-feedback, haptics:allow-selection-feedback, haptics:allow-vibrate (the plugin ships no default set; it merges android.permission.VIBRATE itself) | high |
 
 tray lists five permissions on purpose. @moku-labs/system defaults the tray icon to
 defaultWindowIcon() from @tauri-apps/api/app, and core:default does NOT grant that command:
@@ -603,9 +666,19 @@ deep-link resolves to the plugin's real two-sided conf shape:
   { "desktop": { "schemes": ["myapp"] },
     "mobile": [{ "scheme": ["myapp"], "appLink": false }] }
 
-v1 mobile permission codegen is conf-only (D-012): every registry row's sidecarPlist and
+Mobile permission codegen is conf-only (D-012): every registry row's sidecarPlist and
 manifest arrays are EMPTY — official Tauri plugins self-merge their own AndroidManifest needs
-via build.rs, and deep-link's iOS CFBundleURLTypes ride Tauri's own sidecar merge.
+via build.rs (haptics merges VIBRATE itself), and deep-link's iOS CFBundleURLTypes ride
+Tauri's own sidecar merge. The one XML the packager writes is presentation: app.orientation,
+as Info.ios.plist keys (orientationPlist) and the Android main-activity
+android:screenOrientation attribute (orientationManifest):
+| app.orientation | Info.ios.plist | Android main activity |
+|---|---|---|
+| "portrait" | UISupportedInterfaceOrientations = [Portrait]; ~ipad = [Portrait, PortraitUpsideDown]; UIRequiresFullScreen = true | android:screenOrientation="portrait" |
+| "landscape" | both keys = [LandscapeLeft, LandscapeRight]; UIRequiresFullScreen = true | android:screenOrientation="sensorLandscape" |
+| "any" / unset | no keys (template default: every orientation) | attribute removed |
+UIRequiresFullScreen: App Store review refuses an iPad app that restricts orientations
+without it.
 
 ====================================================================
 6. TAURI PLUGIN (Standard tier — src/plugins/tauri/)
@@ -1059,7 +1132,8 @@ import {
   // Shared types
   type AppleExportMethod, type AppleSigning, type CapabilityConfigMap, type Config,
   type BuildFlavor, type Events, type MobileTarget, type NativeCompleteEvent,
-  type NativePhase, type NativePhaseEvent, type SigningConfig, type Target, type TauriRunner,
+  type NativePhase, type NativePhaseEvent, type Orientation, type SigningConfig, type Target,
+  type TauriRunner,
   // Per-plugin TYPE-ONLY namespaces (`export type * as X`) — each is the plugin's types module
   type Project, type Tauri, type Build, type Doctor, type Cli
   //   e.g. Project.Api, Project.RegistryRow, Project.PatchResult, Tauri.DevHandle,
@@ -1201,6 +1275,10 @@ indented actionable second line ("  <fix-it / next command>").
   - '[native] app.version "<x>" is not a valid semantic version.' (/^\d+\.\d+\.\d+(?:[-+][\w.]+)?$/
     — it lands raw inside a Cargo TOML string)
   - '[native] app.buildNumber "<x>" is not a valid build number.' (/^[\w.]+$/ — raw in plist/JSON)
+  - '[native] app.backgroundColor "<x>" is not a valid colour.\n  Use a hex colour such as
+    "#10161d".' (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i)
+  - '[native] app.orientation "<x>" is not a valid orientation.\n  Use "portrait",
+    "landscape" or "any".' (config arrives as plain JS too)
   - '[native] signing.android.keystorePasswordEnv "<x>" is not a valid environment variable
     name.' (and keyPasswordEnv — each lands raw inside a Kotlin System.getenv("…") call)
   - '[native] config.projectDir "<x>" resolves outside the project.' (the SAME
@@ -1406,7 +1484,9 @@ try {
   discriminant keeps "universal" additive.
 - D-012: v1 mobile permission codegen is conf-only — zero XML patching ships. (EXTENDED: the
   patch pass now also rewrites the Xcode/Android-Studio runner command, because
-  Tauri's generated build phase calls a runner that does not resolve inside those IDEs.)
+  Tauri's generated build phase calls a runner that does not resolve inside those IDEs.
+  EXTENDED again: permissions stay conf-only, but the build-time orientation lock writes
+  Info.ios.plist keys and patches android:screenOrientation on the Android main activity.)
 - D-013: tauri CLI invocation is [nodePath, tauriJsPath, verb, ...args] with a PATH-walked
   real node and require.resolve("@tauri-apps/cli/tauri.js"); never bunx/`--bun`/the .node
   addon; node is a hard doctor prerequisite; plain `tauri init` is never used.
@@ -1447,6 +1527,9 @@ stay as empty objects, bundle.macOS is omitted entirely when nothing is configur
                                        `tauri ios build --export-method` on DEVICE builds
   app.category                      -> bundle.category
   app.buildNumber                   -> bundle.{iOS,macOS}.bundleVersion
+  app.backgroundColor               -> app.windows[0].backgroundColor
+  app.orientation                   -> Info.ios.plist orientation keys + Android
+                                       android:screenOrientation (build time only)
 
 Unsigned dev builds and iOS simulator builds require NO credentials. That is why doctor's
 signing check is warn-only: a missing credential never fails a build and never flips report.ok.

@@ -88,7 +88,7 @@ describe("S17 — invalid config fails loudly at createApp", () => {
       })
     ).toThrow(
       '[native] Unknown capability "bluetooth" in config.system.\n' +
-        "  Known capabilities: store, notification, clipboard-manager, tray, deep-link."
+        "  Known capabilities: store, notification, clipboard-manager, tray, deep-link, back, haptics."
     );
   });
 
@@ -353,12 +353,12 @@ describe("S19 — lifecycle edges", () => {
     );
 
     // The composed surface stays functional after stop — no held resources.
-    expect(firstApp.app.project.getRegistryRows()).toHaveLength(5);
+    expect(firstApp.app.project.getRegistryRows()).toHaveLength(7);
 
     // A SECOND fresh app cycles just as cleanly — nothing leaked across app lifecycles.
     const secondApp = await makeApp();
     await expect(secondApp.app.start()).resolves.toBeUndefined();
     await expect(secondApp.app.stop()).resolves.toBeUndefined();
-    expect(secondApp.app.project.getRegistryRows()).toHaveLength(5);
+    expect(secondApp.app.project.getRegistryRows()).toHaveLength(7);
   });
 });

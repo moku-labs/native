@@ -89,7 +89,8 @@ export function createTauriApi(ctx: TauriContext): Api {
       onTick?: ((tick: CompileTick) => void) | undefined;
     }
   ): Promise<RunResult> {
-    const startedAt = Date.now();
+    // Monotonic reading: a wall-clock step (NTP) must never yield a negative duration.
+    const startedAt = performance.now();
     /**
      * Scrubs one output line, forwards it to the caller's hooks, and parses
      * any compile-progress tick out of it.
@@ -109,7 +110,7 @@ export function createTauriApi(ctx: TauriContext): Api {
     };
 
     const result = await spawnFn({ cmd, cwd: runCwd(), onLine: handleLine });
-    const durationMs = Date.now() - startedAt;
+    const durationMs = Math.round(performance.now() - startedAt);
     const scrubbedStdout = scrub(result.stdout);
     const scrubbedStderr = scrub(result.stderr);
 

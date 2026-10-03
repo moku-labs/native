@@ -24,7 +24,9 @@ export type Config = {
 /**
  * Plugin state: the one branded console every verb and hook renders through (created
  * once in `createState`) plus the live-render bookkeeping for the current verb
- * invocation (`startedAt: undefined` = no phase running; unicorn/no-null).
+ * invocation (`startedAt: undefined` = no phase running; unicorn/no-null). `startedAt` is a
+ * `performance.now()` reading (monotonic, not epoch ms), so it only makes sense as the
+ * start of an elapsed-time difference.
  */
 export type State = {
   readonly ui: BrandConsole;

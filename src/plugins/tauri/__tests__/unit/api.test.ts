@@ -148,6 +148,28 @@ describe("createTauriApi", () => {
     expect(result).toEqual({ code: 0, stdout: "ok", stderr: "", durationMs: expect.any(Number) });
   });
 
+  it("RunResult.durationMs stays a >= 0 integer when the wall clock steps back", async () => {
+    // An NTP correction moves Date.now backwards under the running verb: -50ms per call.
+    let now = 1_000_000;
+    const wallClock = vi.spyOn(Date, "now").mockImplementation(() => {
+      now -= 50;
+      return now;
+    });
+    const spawnImpl = fakeSpawnResolving({ code: 0, stdout: "ok" });
+    const ctx = createMockCtx({
+      config: { spawnImpl, nodePath: "/usr/bin/node", readiness: { intervalMs: 1, timeoutMs: 50 } }
+    });
+
+    try {
+      const result = await createTauriApi(ctx).icon({ source: "icon.png" });
+
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(Number.isInteger(result.durationMs)).toBe(true);
+    } finally {
+      wallClock.mockRestore();
+    }
+  });
+
   it("build() forwards parsed compile ticks and scrubbed output lines", async () => {
     const ctx = createMockCtx({
       config: {

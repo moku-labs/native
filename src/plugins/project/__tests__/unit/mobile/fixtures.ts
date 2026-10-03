@@ -56,6 +56,17 @@ export const DETECTED_RUNNERS = [
   "cargo tauri"
 ];
 
+/**
+ * The runners Tauri bakes in when an absolute node drives `tauri ios|android init`: each
+ * one path-qualified, so the path sits right after the quote that opens the build phase.
+ */
+export const PATH_QUALIFIED_RUNNERS = [
+  "/opt/homebrew/bin/node tauri",
+  "/usr/local/bin/bun tauri",
+  "/repo/node_modules/.bin/tauri",
+  "/opt/homebrew/bin/npm run tauri --"
+];
+
 /** {@link RUNNER} as a YAML scalar. */
 export const YML_RUNNER = '"/opt/node v20/bin/node" "/repo/node modules/@tauri-apps/cli/tauri.js"';
 
@@ -86,3 +97,46 @@ export const pbxprojFor = (runner: string) =>
     "/* End PBXShellScriptBuildPhase section */",
     ""
   ].join("\n");
+
+/** The main activity's attribute lines in the tauri 2.12 Android template, one per line. */
+export const TEMPLATE_ACTIVITY_ATTRIBUTES = [
+  '            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"',
+  '            android:launchMode="singleTask"',
+  '            android:label="@string/main_activity_title"',
+  '            android:name=".MainActivity"',
+  '            android:exported="true">'
+];
+
+/** An `android:screenOrientation` attribute line at the template's attribute indentation. */
+export const screenOrientationLine = (value: string) =>
+  `            android:screenOrientation="${value}"`;
+
+/**
+ * `gen/android/app/src/main/AndroidManifest.xml` as `tauri android init` 2.12 writes it,
+ * 4-space indented, with the main activity's attribute lines swappable. The last attribute
+ * line carries the `>` that closes the start tag.
+ */
+export const androidManifest = (
+  activityAttributes: readonly string[] = TEMPLATE_ACTIVITY_ATTRIBUTES,
+  lineEnding = "\n"
+) =>
+  [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '    <uses-permission android:name="android.permission.INTERNET" />',
+    "",
+    "    <application",
+    '        android:icon="@mipmap/ic_launcher"',
+    '        android:label="@string/app_name"',
+    '        android:theme="@style/Theme.my_app">',
+    "        <activity",
+    ...activityAttributes,
+    "            <intent-filter>",
+    '                <action android:name="android.intent.action.MAIN" />',
+    '                <category android:name="android.intent.category.LAUNCHER" />',
+    "            </intent-filter>",
+    "        </activity>",
+    "    </application>",
+    "</manifest>",
+    ""
+  ].join(lineEnding);

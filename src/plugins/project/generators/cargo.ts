@@ -4,6 +4,20 @@
 import type { Artifact, GeneratorInput } from "./types";
 
 /**
+ * The `tauri` crate floor. The `back` capability calls `exit()` and grants
+ * `core:app:allow-exit`, and both exist only since tauri 2.12.0. `tauri-build` versions
+ * on its own 2.x line, so its floor stays `"2"`.
+ */
+const TAURI_VERSION_FLOOR = "2.12";
+
+/**
+ * The dependencies only an iOS build compiles: the safe-area hook in the generated
+ * `lib.rs` reaches WKWebView through `objc2`. A target table, written for every target,
+ * so no other target ever builds the crate and the table adds no per-target difference.
+ */
+const IOS_ONLY_DEPENDENCIES = [`[target.'cfg(target_os = "ios")'.dependencies]`, 'objc2 = "0.6"'];
+
+/**
  * Derives a valid Cargo package name from the app's display name — lowercased,
  * non-alphanumeric runs collapsed to a single hyphen, and guaranteed to start with a
  * letter (Cargo package names must match `[a-z][a-z0-9_-]*`).
@@ -47,7 +61,8 @@ export function crateIdent(packageName: string): string {
  * Generates `src-tauri/Cargo.toml` — the package manifest, the `tauri` dependency with
  * every cargo feature the composed capabilities ask for (tray's `tray-icon`; without it
  * the tray API is not compiled in at all), plus one pinned dependency line per resolved
- * capability that ships a real crate. Feature-only rows contribute no dependency line.
+ * capability that ships a real crate. Feature-only and permission-only rows contribute
+ * no dependency line. The iOS-only `objc2` table closes the file on every target.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
@@ -82,10 +97,12 @@ export function generateCargo(input: GeneratorInput): Artifact[] {
     'tauri-build = { version = "2", features = [] }',
     "",
     "[dependencies]",
-    `tauri = { version = "2", features = [${features}] }`,
+    `tauri = { version = "${TAURI_VERSION_FLOOR}", features = [${features}] }`,
     'serde = { version = "1", features = ["derive"] }',
     'serde_json = "1"',
     ...pinnedDeps,
+    "",
+    ...IOS_ONLY_DEPENDENCIES,
     ""
   ];
 

@@ -12,6 +12,7 @@ import {
   DETECTED_RUNNERS,
   IOS_VERB,
   LITERAL_RUNNER,
+  PATH_QUALIFIED_RUNNERS,
   pbxprojFor,
   pbxprojLine,
   projectYmlFor,
@@ -111,6 +112,33 @@ describe("applyRunnerCommand", () => {
     expect(applyRunnerCommand(source, android)).toBe(
       `val command = "${LITERAL_RUNNER} android android-studio-script"\n`
     );
+  });
+
+  it.each(
+    PATH_QUALIFIED_RUNNERS
+  )("keeps the opening quote of a `%s` pbxproj shellScript", runner => {
+    const rewritten = applyRunnerCommand(pbxprojFor(runner), iosLiteral);
+
+    expect(rewritten).toBe(pbxprojFor(LITERAL_RUNNER));
+    expect(rewritten).toContain(String.raw`shellScript = "\"/opt/node v20/bin/node\" `);
+  });
+
+  it.each(PATH_QUALIFIED_RUNNERS)("rewrites a path-qualified `%s` yml script line", runner => {
+    expect(applyRunnerCommand(projectYmlFor(runner), ios)).toBe(projectYmlFor(YML_RUNNER));
+  });
+
+  it("keeps the opening quote of a path-qualified Kotlin string literal", () => {
+    const source = `val command = "/opt/node/bin/node tauri android android-studio-script"\n`;
+
+    expect(applyRunnerCommand(source, android)).toBe(
+      `val command = "${LITERAL_RUNNER} android android-studio-script"\n`
+    );
+  });
+
+  it("is a no-op on a path-qualified pbxproj line it already rewrote", () => {
+    const once = applyRunnerCommand(pbxprojFor("/opt/homebrew/bin/node tauri"), iosLiteral);
+
+    expect(applyRunnerCommand(once, iosLiteral)).toBe(once);
   });
 
   it("is a no-op on already-patched yml (absolute paths containing spaces)", () => {
