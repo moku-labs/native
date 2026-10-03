@@ -176,7 +176,7 @@ the status bar style.
 Its default `SystemBarStyle.auto` picks the icon colour from the phone's night mode, not
 from the app: a dark app on a light-mode phone gets dark icons on a dark page. When
 `app.backgroundColor` is set, the patch rewrites that one call by the colour's relative
-luminance (alpha ignored; below 0.5 is dark):
+luminance (alpha ignored; below 0.179 is dark, where white and black icons contrast equally):
 
 | `app.backgroundColor` | Call written | Icons |
 |---|---|---|

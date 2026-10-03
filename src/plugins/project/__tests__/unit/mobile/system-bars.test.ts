@@ -72,10 +72,17 @@ describe("backgroundTone", () => {
     expect(backgroundTone("#ffffff00")).toBe("light");
   });
 
-  it("splits at relative luminance 0.5", () => {
-    // #bbbbbb is ~0.497, #bcbcbc is ~0.503 after the sRGB transfer curve.
-    expect(backgroundTone("#bbbbbb")).toBe("dark");
-    expect(backgroundTone("#bcbcbc")).toBe("light");
+  it("splits at relative luminance 0.179, where both icon colours have equal contrast", () => {
+    // #757575 is ~0.1779, #767676 is ~0.1812 after the sRGB transfer curve.
+    expect(backgroundTone("#757575")).toBe("dark");
+    expect(backgroundTone("#767676")).toBe("light");
+  });
+
+  it("gives mid-tone backgrounds dark icons", () => {
+    // Orange #ff9800 is ~0.437, grey #aaaaaa is ~0.402: dark icons contrast more.
+    expect(backgroundTone("#ff9800")).toBe("light");
+    expect(backgroundTone("#aaaaaa")).toBe("light");
+    expect(backgroundTone("#10161d")).toBe("dark");
   });
 
   it("weights the channels like the eye does", () => {
@@ -174,7 +181,7 @@ describe("applySystemBarStyle", () => {
       "class MainActivity {\n  fun f() { androidx.activity.enableEdgeToEdge() }\n}\n";
 
     expect(() => applySystemBarStyle(qualified, "light", ACTIVITY_PATH)).toThrow(
-      `[native] The enableEdgeToEdge() call in ${ACTIVITY_PATH} is not the one tauri android init generates.`
+      `[native] ${ACTIVITY_PATH} has no import line to add the system bar imports after.\n  Re-run the mobile init pass (tauri android init), or unset app.backgroundColor.`
     );
   });
 });

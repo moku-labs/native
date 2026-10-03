@@ -25,8 +25,11 @@ type StyleImport = {
   readonly usage: RegExp;
 };
 
-/** A background whose relative luminance is below this is dark, so it gets light icons. */
-const DARK_LUMINANCE_THRESHOLD = 0.5;
+/**
+ * A background whose relative luminance is below this is dark, so it gets light icons.
+ * Where white and black icons have equal WCAG contrast: sqrt(1.05 * 0.05) - 0.05.
+ */
+const DARK_LUMINANCE_THRESHOLD = 0.179;
 
 /** `#rrggbb` or `#rrggbbaa`, the three colour channels captured; alpha is ignored. */
 const HEX_CHANNELS_PATTERN = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})(?:[\da-f]{2})?$/i;
@@ -91,6 +94,23 @@ const TRAILING_CARRIAGE_RETURN = /\r$/;
 function unknownCallError(filePath: string): Error {
   return new Error(
     `[native] The enableEdgeToEdge() call in ${filePath} is not the one tauri android init generates.\n  Re-run the mobile init pass (tauri android init) to restore it, or unset app.backgroundColor.`
+  );
+}
+
+/**
+ * Builds the `[native]` error for a MainActivity.kt with no import line, so the system bar
+ * imports have no place to go.
+ *
+ * @param filePath - The MainActivity.kt that was read.
+ * @returns A formatted `[native] ...` error.
+ * @example
+ * ```ts
+ * throw noImportLineError("/repo/.moku/tauri/src-tauri/gen/android/app/src/main/java/com/acme/demo/MainActivity.kt");
+ * ```
+ */
+function noImportLineError(filePath: string): Error {
+  return new Error(
+    `[native] ${filePath} has no import line to add the system bar imports after.\n  Re-run the mobile init pass (tauri android init), or unset app.backgroundColor.`
   );
 }
 
@@ -184,7 +204,7 @@ function addStyleImports(source: string, filePath: string): string {
     if (result.split(/\r?\n/).includes(styleImport.line)) continue;
 
     const lastImport = [...result.matchAll(IMPORT_LINE_PATTERN)].at(-1);
-    if (!lastImport) throw unknownCallError(filePath);
+    if (!lastImport) throw noImportLineError(filePath);
     const end = lastImport.index + lastImport[0].length;
     result = `${result.slice(0, end)}${lineEnding}${styleImport.line}${result.slice(end)}`;
   }

@@ -243,7 +243,7 @@ GLOBAL Config (D-005 — the substantive surface; every plugin reads it via ctx.
 | app.category | string? | (absent) | Store category -> bundle.category. Key is ABSENT from the JSON when unset. |
 | app.buildNumber | string? | (absent) | Store build number -> bundle.iOS.bundleVersion + bundle.macOS.bundleVersion. |
 | app.orientation | "portrait" \| "landscape" \| "any" | (absent = "any") | Build-time mobile orientation lock. iOS: UISupportedInterfaceOrientations (+ ~ipad, + UIRequiresFullScreen) in src-tauri/Info.ios.plist. Android: android:screenOrientation on the main activity ("portrait" / "sensorLandscape"; removed for "any"). No runtime lock. Validated against the three values. |
-| app.backgroundColor | string? | (absent) | Hex window colour "#rrggbb" or "#rrggbbaa" -> app.windows[0].backgroundColor. Shows during launch and behind any gap the page does not cover. Android status bar icons follow it: light icons when its relative luminance is below 0.5, dark icons otherwise (mobile/system-bars.ts). Validated against /^#[0-9a-f]{6}([0-9a-f]{2})?$/i. |
+| app.backgroundColor | string? | (absent) | Hex window colour "#rrggbb" or "#rrggbbaa" -> app.windows[0].backgroundColor. Shows during launch and behind any gap the page does not cover. Android status bar icons follow it: light icons when its relative luminance is below 0.179, dark icons otherwise (mobile/system-bars.ts). Validated against /^#[0-9a-f]{6}([0-9a-f]{2})?$/i. |
 | web.build | string | "bun run build" | Web build command -> tauri.conf.json build.beforeBuildCommand `{ script, cwd }`. Required non-empty. |
 | web.devCommand | string | "bun run dev" | Web dev command -> build.beforeDevCommand `{ script, cwd }`. Required non-empty. |
 | web.devUrl | string | "http://localhost:5173" | Dev server URL — also DevHandle.url and the readiness-poll target. Required non-empty. |
@@ -599,7 +599,7 @@ Behavior:
       The system-bars step (mobile/system-bars.ts) styles the one MainActivity.kt below
       gen/android/app/src/main/java (build dirs skipped) that contains `enableEdgeToEdge(`.
       backgroundTone(app.backgroundColor): WCAG relative luminance of #RRGGBB (alpha ignored),
-      "dark" when < DARK_LUMINANCE_THRESHOLD (0.5). The call is rewritten to
+      "dark" when < DARK_LUMINANCE_THRESHOLD (0.179, equal WCAG contrast for white and black icons). The call is rewritten to
       `enableEdgeToEdge(statusBarStyle = S, navigationBarStyle = S)` with
       S = `SystemBarStyle.dark(Color.TRANSPARENT)` (dark colour, light icons) or
       `SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)` (light colour, dark icons),
@@ -614,7 +614,10 @@ Behavior:
       Keep the one tauri android init generated, or re-run the mobile init pass (tauri
       android init).'; an unknown call form => '[native] The enableEdgeToEdge() call in
       <path> is not the one tauri android init generates.\n  Re-run the mobile init pass
-      (tauri android init) to restore it, or unset app.backgroundColor.' Unset never fails.
+      (tauri android init) to restore it, or unset app.backgroundColor.'; no import line to
+      add the two imports after => '[native] <path> has no import line to add the system bar
+      imports after.\n  Re-run the mobile init pass (tauri android init), or unset
+      app.backgroundColor.' Unset never fails.
       iOS is untouched (its status bar adapts to the page content).
       patchMobile(projectDir, opts, signing, manifest = [], backgroundColor?) is the domain
       signature; the api wrapper computes `manifest` for android (passes [] for ios) and
