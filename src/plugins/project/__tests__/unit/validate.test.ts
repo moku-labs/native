@@ -131,6 +131,50 @@ describe("validateProjectConfig — app version fields", () => {
   });
 });
 
+describe("validateProjectConfig — app presentation fields", () => {
+  it.each([
+    "portrait",
+    "landscape",
+    "any"
+  ] as const)('accepts "%s" as an app.orientation', orientation => {
+    expect(() =>
+      validateProjectConfig(config({ app: { ...VALID.app, orientation } }))
+    ).not.toThrow();
+  });
+
+  it("rejects an app.orientation outside the three, with a fix-it", () => {
+    // Config arrives as plain JS too, so the closed set is checked at runtime.
+    const app = { ...VALID.app, orientation: "sideways" };
+
+    // @ts-expect-error -- "sideways" is not an Orientation; plain-JS callers can still pass it
+    expect(() => validateProjectConfig(config({ app }))).toThrow(
+      '[native] app.orientation "sideways" is not a valid orientation.\n  Use "portrait", "landscape" or "any".'
+    );
+  });
+
+  it.each([
+    "#10161d",
+    "#10161dff",
+    "#ABCDEF"
+  ])('accepts "%s" as an app.backgroundColor', backgroundColor => {
+    expect(() =>
+      validateProjectConfig(config({ app: { ...VALID.app, backgroundColor } }))
+    ).not.toThrow();
+  });
+
+  it.each([
+    "10161d",
+    "#1016",
+    "#10161d0",
+    "#10161g",
+    "dark"
+  ])('rejects "%s" as an app.backgroundColor', backgroundColor => {
+    expect(() => validateProjectConfig(config({ app: { ...VALID.app, backgroundColor } }))).toThrow(
+      `[native] app.backgroundColor "${backgroundColor}" is not a valid colour.\n  Use a hex colour such as "#10161d".`
+    );
+  });
+});
+
 describe("validateProjectConfig — signing env-var names", () => {
   it("accepts conventional env-var names", () => {
     expect(() =>

@@ -13,11 +13,19 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("registryRows", () => {
-  it("has exactly 5 rows, one per CapabilityConfigMap key", () => {
+  it("has exactly 7 rows, one per CapabilityConfigMap key", () => {
     const rows = registryRows();
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(7);
     expect(rows.map(row => row.name).toSorted()).toEqual(
-      ["clipboard-manager", "deep-link", "notification", "store", "tray"].toSorted()
+      [
+        "back",
+        "clipboard-manager",
+        "deep-link",
+        "haptics",
+        "notification",
+        "store",
+        "tray"
+      ].toSorted()
     );
   });
 
@@ -46,7 +54,7 @@ describe("registryRows", () => {
 
   it("every plugin-backed row carries no cargo feature", () => {
     for (const row of registryRows()) {
-      if (row.name === "tray") continue;
+      if (row.name === "tray" || row.name === "back") continue;
       expect(row.cargoFeatures).toEqual([]);
       expect(row.crate).toBeDefined();
       expect(row.npmPackage).toBeDefined();
@@ -61,11 +69,41 @@ describe("registryRows", () => {
     expect(registryRows().find(row => row.name === "store")?.confidence).toBe("high");
   });
 
-  it("every other row ships on all 5 targets", () => {
+  it("every row but tray, back and haptics ships on all 5 targets", () => {
     for (const row of registryRows()) {
-      if (row.name === "tray") continue;
+      if (row.name === "tray" || row.name === "back" || row.name === "haptics") continue;
       expect(row.platforms).toHaveLength(5);
     }
+  });
+
+  it("back is an Android-only permission row: exit, no crate, no package, no init", () => {
+    expect(registryRows().find(row => row.name === "back")).toEqual({
+      name: "back",
+      cargoFeatures: [],
+      permissions: ["core:app:allow-exit"],
+      platforms: ["android"],
+      confidence: "high"
+    });
+  });
+
+  it("haptics is a mobile-only plugin row granting its four commands by name", () => {
+    expect(registryRows().find(row => row.name === "haptics")).toEqual({
+      name: "haptics",
+      npmPackage: "@tauri-apps/plugin-haptics",
+      crate: "tauri-plugin-haptics",
+      crateRange: "^2",
+      npmRange: "^2",
+      rustInit: "tauri_plugin_haptics::init()",
+      cargoFeatures: [],
+      permissions: [
+        "haptics:allow-impact-feedback",
+        "haptics:allow-notification-feedback",
+        "haptics:allow-selection-feedback",
+        "haptics:allow-vibrate"
+      ],
+      platforms: ["ios", "android"],
+      confidence: "high"
+    });
   });
 });
 
@@ -73,6 +111,8 @@ describe("isKnownCapability", () => {
   it("narrows known capability names", () => {
     expect(isKnownCapability("store")).toBe(true);
     expect(isKnownCapability("deep-link")).toBe(true);
+    expect(isKnownCapability("back")).toBe(true);
+    expect(isKnownCapability("haptics")).toBe(true);
   });
 
   it("rejects unknown names", () => {
@@ -96,7 +136,15 @@ describe("unknownCapabilityError", () => {
   it("lists every known capability name", () => {
     const error = unknownCapabilityError("bogus");
     expect(error.message).toContain('Unknown capability "bogus"');
-    for (const name of ["store", "notification", "clipboard-manager", "tray", "deep-link"]) {
+    for (const name of [
+      "store",
+      "notification",
+      "clipboard-manager",
+      "tray",
+      "deep-link",
+      "back",
+      "haptics"
+    ]) {
       expect(error.message).toContain(name);
     }
   });
@@ -124,6 +172,16 @@ describe("resolve", () => {
   it("resolves clipboard-manager", () => {
     const resolved = resolve("clipboard-manager");
     expect(resolved.npmPackage).toBe("@tauri-apps/plugin-clipboard-manager");
+  });
+
+  it.each([
+    "back",
+    "haptics"
+  ] as const)("resolves %s with no conf, plist or manifest need", name => {
+    const resolved = resolve(name);
+    expect(resolved.conf).toEqual({});
+    expect(resolved.sidecarPlist).toEqual([]);
+    expect(resolved.manifest).toEqual([]);
   });
 
   it("resolves tray", () => {

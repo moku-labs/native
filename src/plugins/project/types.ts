@@ -20,7 +20,11 @@ export type CompletenessResult =
   | { status: "incomplete"; missing: readonly string[] }
   | { status: "complete" };
 
-/** Result of the idempotent mobile patch pass (Android signing + the mobile runner command). */
+/**
+ * Result of the idempotent mobile patch pass: Android release signing and the main
+ * activity's manifest attributes, the iOS Xcode build settings, and the runner command
+ * on both platforms. A file several patches touched is listed once.
+ */
 export type PatchResult = {
   readonly patched: readonly string[];
   readonly unchanged: readonly string[];
@@ -37,9 +41,9 @@ export type CleanResult = { removed: readonly string[] };
 
 /**
  * One capability registry row — packaging metadata with per-row research confidence.
- * A row is backed EITHER by a real Tauri plugin (crate + npm package + Rust init) or by
- * a core Tauri cargo feature (tray), so every plugin-only field is optional and
- * `cargoFeatures` is always present.
+ * A row is backed by a real Tauri plugin (crate + npm package + Rust init), by a core
+ * Tauri cargo feature (tray), or by core permissions alone (back), so every plugin-only
+ * field is optional and `cargoFeatures` is always present.
  */
 export type RegistryRow = {
   name: keyof CapabilityConfigMap;
@@ -69,11 +73,25 @@ export type DeepLinkConf = {
  */
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
-/** An Info.ios.plist sidecar entry (src-tauri root, outside gen/) — empty for every v1 row. */
-export type PlistEntry = { key: string; value: string };
+/** One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, or an `<array>` of strings. */
+export type PlistValue = string | boolean | readonly string[];
 
-/** An AndroidManifest need — empty for every v1 row (official plugins self-merge via build.rs). */
-export type ManifestEntry = { parentTag: string; xml: string };
+/**
+ * An Info.ios.plist sidecar entry (src-tauri root, outside gen/), which Tauri merges into
+ * the app's Info.plist on every iOS build. No registry row carries one today; the
+ * orientation lock does.
+ */
+export type PlistEntry = { key: string; value: PlistValue };
+
+/**
+ * An AndroidManifest need. `activity-attribute` sets one attribute on the main
+ * `<activity>`, or removes it when `value` is `undefined`; the orientation lock is one.
+ * `child` is the seam for a child element and the patch pass does not apply it. No
+ * registry row carries either kind: official plugins self-merge via build.rs.
+ */
+export type ManifestEntry =
+  | { kind: "child"; parentTag: string; xml: string }
+  | { kind: "activity-attribute"; name: `android:${string}`; value: string | undefined };
 
 /** A capability resolved against consumer config. */
 export type ResolvedCapability = RegistryRow & {

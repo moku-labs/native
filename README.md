@@ -98,7 +98,7 @@ Each `build.run({ target })` walks the phase pipeline `scaffold → codegen → 
 
 ### The composition is the contract
 
-`config.system` is a name-only array — `ReadonlyArray<{ name: string }>` — and that one list drives the whole packaging surface. The `project` plugin resolves each name against its capability registry (`store`, `notification`, `clipboard-manager`, `tray`, `deep-link`) into a `ResolvedCapability`: npm package + crate ranges, Rust init line, capability permissions, per-platform applicability, and conf fragments. Unknown names fail at composition time, not at build time. In v1 the mobile permission surface is conf-only by verified design — the official Tauri plugins self-merge their own manifest needs — so zero fragile XML patching ships at all.
+`config.system` is a name-only array — `ReadonlyArray<{ name: string }>` — and that one list drives the whole packaging surface. The `project` plugin resolves each name against its capability registry (`store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics`) into a `ResolvedCapability`: npm package + crate ranges, Rust init line, capability permissions, per-platform applicability, and conf fragments. Unknown names fail at composition time, not at build time. The mobile permission surface is conf-only by verified design — the official Tauri plugins self-merge their own manifest needs — so no permission XML is patched at all. The one XML the packager does write is presentation: the `app.orientation` lock, as `Info.ios.plist` keys and an attribute on the Android main activity.
 
 ## Two apps, one contract
 
@@ -154,13 +154,15 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | `app.icon` | `string?` | unset | 1024×1024 PNG, relative to cwd. Unset → a placeholder PNG is generated. |
 | `app.category` | `string?` | unset | Store category → `bundle.category`. |
 | `app.buildNumber` | `string?` | unset | Store build number → `bundle.{iOS,macOS}.bundleVersion`. |
+| `app.orientation` | `"portrait" \| "landscape" \| "any"` | unset (= `"any"`) | Build-time mobile orientation lock → `UISupportedInterfaceOrientations` (+ `~ipad`, `UIRequiresFullScreen`) in `Info.ios.plist`, `android:screenOrientation` on the Android main activity. No runtime lock. |
+| `app.backgroundColor` | `string?` | unset | Hex window colour (`"#10161d"`, `"#10161dff"`) → `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page does not cover. |
 | `web.build` | `string` | `"bun run build"` | Runs before a build, in `web.cwd`. |
 | `web.devCommand` | `string` | `"bun run dev"` | Runs before `dev`, in `web.cwd`. |
 | `web.devUrl` | `string` | `"http://localhost:5173"` | Dev server URL — also the `DevHandle.url` and the readiness-poll target. |
 | `web.dist` | `string` | `"dist"` | Web build output, resolved from `web.cwd` and rebased onto `src-tauri`. |
 | `web.cwd` | `string?` | unset → the process cwd | Root of the web package — monorepo layouts. Everything web-shaped resolves from here. |
 | `system` | `ReadonlyArray<{ name: string }>` | `[]` | The composed system plugins — the shared cross-team contract. Unknown names throw at init. |
-| `capabilities` | `Partial<CapabilityConfigMap>` | `{}` | Per-capability packaging parameters. `deep-link` requires `{ mode: "scheme", scheme: string }`. |
+| `capabilities` | `Partial<CapabilityConfigMap>` | `{}` | Per-capability packaging parameters, keyed `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics`. `deep-link` requires `{ mode: "scheme", scheme: string }`; the others take none. |
 | `targets` | `readonly Target[]` | `hostTargets(process.platform)` | The host's own desktop target (`darwin`→`macos`, `win32`→`windows`, `linux`→`linux`). **Mobile is opt-in**: name `ios`/`android` explicitly. |
 | `projectDir` | `string` | `".moku/tauri"` | Generated Tauri project root (contains `src-tauri/`). Gitignored build output. |
 | `outDir` | `string` | `"dist-native"` | Installer delivery root — `collect` copies finished artifacts to `outDir/<target>/`. |
@@ -179,10 +181,11 @@ Per-plugin knobs, overridable via `createApp({ pluginConfigs })`:
 | `doctor` | `probeTimeoutMs` | `10_000` | Per-check budget. A check that outruns it becomes a `warn`, never a `fail`. |
 | `cli` | `renderImpl` / `confirmImpl` | `undefined` / `undefined` | Test seams (default: branded console + styled confirm from `@moku-labs/common/cli`). |
 
-Three behaviours worth knowing before the first build:
+Four behaviours worth knowing before the first build:
 
 - **Placeholder icon.** `project.ensureIconSource()` returns `path.resolve(app.icon)` and throws a `[native]` fix-it when that file is missing. With `app.icon` unset it writes an embedded 1024×1024 PNG to `<projectDir>/placeholder-icon.png` and returns that. The icons phase reports `generated`, `placeholder`, or `up to date`.
-- **`tray` is a cargo feature, not a plugin.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. Every other registry row is a real plugin, so `RegistryRow.npmPackage`/`crate` are optional and consumers of `getRegistryRows()` null-check them. Its permission list is `core:tray:default`, `core:menu:default`, `core:image:default`, `core:resources:default`, `core:app:allow-default-window-icon` — the last one matters, because `@moku-labs/system` defaults the tray icon to `defaultWindowIcon()` and `core:default` does not grant that command, so without it a real macOS shell fails with `Command plugin:app|default_window_icon not allowed by ACL`.
+- **`tray` is a cargo feature, not a plugin, and `back` is a permission.** Composing `{ name: "tray" }` adds `tray-icon` to the `tauri` dependency's features in the generated `Cargo.toml` — no crate, no npm package, no Rust init line. `{ name: "back" }` adds only `core:app:allow-exit`, on Android only, since its API ships in `@tauri-apps/api/app`; that grant exists from tauri 2.12.0, so the generated `Cargo.toml` pins `tauri` at `"2.12"`. Every other registry row is a real plugin (`haptics` is `tauri-plugin-haptics` `^2`, iOS and Android only), so `RegistryRow.npmPackage`/`crate` are optional and consumers of `getRegistryRows()` null-check them. Its permission list is `core:tray:default`, `core:menu:default`, `core:image:default`, `core:resources:default`, `core:app:allow-default-window-icon` — the last one matters, because `@moku-labs/system` defaults the tray icon to `defaultWindowIcon()` and `core:default` does not grant that command, so without it a real macOS shell fails with `Command plugin:app|default_window_icon not allowed by ACL`.
+- **An iOS page gets the whole screen.** WKWebView's scroll view stays on `.automatic` and UIKit shrinks the page by the safe area (tauri-apps/tauri#8166), so the generated `lib.rs` carries a `.setup` hook that sets it to `.never` on the `main` window, through an iOS-only `objc2 = "0.6"` dependency. CSS `env(safe-area-inset-*)` still reports the notch. The hook is `#[cfg(target_os = "ios")]`, so every target gets the same file.
 - **`clean()` refuses anything that is not derived state.** The rule is positive containment, not a blacklist: `projectDir` must resolve strictly *inside* the **project anchor** (or a usable OS temp root, where test workspaces live) and must not be — or contain — the anchor, the cwd or the home directory, nor be a filesystem root. The anchor is the nearest ancestor of the cwd carrying a `.git` entry or a `workspaces` `package.json`, stopping before `$HOME` and the filesystem root — so an absolute `projectDir` at a monorepo root still validates when the script runs from `packages/app`. A temp root that is a filesystem root, or that is/contains `$HOME`, grants nothing (`os.tmpdir()` follows `TMPDIR`). Symlinks are resolved with `realpath`, and comparison is case-insensitive on macOS/Windows. `assertCleanableRoot` throws before any path is computed, and `createApp` rejects the same `projectDir` up front:
 
   ```
@@ -256,7 +259,7 @@ await native.cli.build({ target: "ios", simulator: true });
 | `pod` (CocoaPods) | `brew install cocoapods` | `ios-tools` (fail) |
 | An installed iOS platform + simulator runtime | `xcodebuild -downloadPlatform iOS` | `ios-platform` (warn) |
 
-The first iOS build also runs `tauri ios init` once, then rewrites the build phase Tauri baked into the generated Xcode project: it calls whichever runner Tauri *detected* (`node tauri`, `bun tauri`, …), and none of those resolve inside Xcode. `project.patchMobile({ target, runner: tauri.getRunner() })` replaces it with the absolute `<node> <tauri.js>` pair this framework spawns with. The pass is idempotent.
+The first iOS build also runs `tauri ios init` once, then rewrites the build phase Tauri baked into the generated Xcode project: it calls whichever runner Tauri *detected* (`node tauri`, `bun tauri`, …), and none of those resolve inside Xcode. `project.patchMobile({ target, runner: tauri.getRunner() })` replaces it with the absolute `<node> <tauri.js>` pair this framework spawns with. A path-qualified runner (`/opt/homebrew/bin/node tauri`) is replaced from its first `/`, so the `"` that opens the pbxproj `shellScript` string survives and the first build passes. The pass is idempotent. On Android the same pass also sets or removes `android:screenOrientation` on the main activity of `gen/android/app/src/main/AndroidManifest.xml`, from `app.orientation`.
 
 **Rebuilds.** Building the same tree a second time — no clean in between — used to fail twice over, and both failures belong to the generated project, so the packager handles both:
 

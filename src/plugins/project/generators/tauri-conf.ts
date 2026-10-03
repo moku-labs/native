@@ -113,7 +113,8 @@ function buildPlugins(
 
 /**
  * Generates `src-tauri/tauri.conf.json` — app identity, the web build/dev wiring, the
- * bundle/signing metadata, and a `plugins.<name>` block per CONFIGURED capability (see
+ * main window (its title, plus `app.backgroundColor` when set), the bundle/signing
+ * metadata, and a `plugins.<name>` block per CONFIGURED capability (see
  * {@link buildPlugins}; this is where deep-link's scheme rides — per D-011/D-012 the whole
  * v1 mobile-permission story is conf-only). Both path-shaped fields are rebased onto
  * `src-tauri`, which is where Tauri resolves them from, and the before-commands carry an
@@ -140,7 +141,11 @@ export function generateTauriConf(input: GeneratorInput): Artifact[] {
       frontendDist: relativeToTauriRoot(global.projectDir, path.resolve(webRoot, global.web.dist))
     },
     app: {
-      windows: [{ title: global.app.name }]
+      // The first entry carries no `label`, so tauri names it `main` — the window the
+      // capability file and the generated lib.rs safe-area hook both address.
+      windows: [
+        { title: global.app.name, ...compact([["backgroundColor", global.app.backgroundColor]]) }
+      ]
     },
     bundle: buildBundle(input),
     plugins: buildPlugins(capabilities)

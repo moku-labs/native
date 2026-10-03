@@ -21,6 +21,12 @@ const URL_SCHEME_PATTERN = /^[a-z][a-z\d+.-]*$/i;
 /** POSIX environment variable name — lands raw inside a Kotlin `System.getenv("…")` call. */
 const ENV_VAR_NAME_PATTERN = /^[a-z_][a-z\d_]*$/i;
 
+/** `#rrggbb` or `#rrggbbaa` — the hex forms Tauri parses a window colour from. */
+const HEX_COLOUR_PATTERN = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
+
+/** The three `Orientation` values — plain-JS config can carry anything else. */
+const ORIENTATION_PATTERN = /^(?:portrait|landscape|any)$/;
+
 /**
  * Validates one free-text config value that is interpolated verbatim into a generated
  * file. Every generated format (TOML, Kotlin, plist, XML) has its own escape rules, so a
@@ -97,13 +103,14 @@ function assertDeliveryDirectory(value: string): void {
 /**
  * Validates the global config at composition time — throws `[native]`-formatted errors
  * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, a `projectDir` outside the project, an `outDir`
- * this app must not deliver into, unknown `config.system` names, or a `deep-link`
- * composition missing its scheme.
+ * generated file they are written into, a window colour or orientation outside its
+ * allowed shape, a `projectDir` outside the project, an `outDir` this app must not
+ * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
+ * scheme.
  *
  * @param global - Frozen global framework config.
- * @throws {Error} When identity, web wiring, interpolated values, derived directories,
- *   system names, or deep-link config are invalid.
+ * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
+ *   derived directories, system names, or deep-link config are invalid.
  * @example
  * ```ts
  * validateProjectConfig(ctx.global);
@@ -159,6 +166,23 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     BUILD_NUMBER_PATTERN,
     "build number",
     'Use digits, letters, dots or underscores, such as "42" or "1.0.3".'
+  );
+  // The presentation fields: a colour Tauri parses out of tauri.conf.json, and an
+  // orientation that picks the Info.plist keys and the Android activity attribute. Config
+  // arrives as plain JS too, so neither is trusted to be one of the typed values.
+  assertShape(
+    "app.backgroundColor",
+    global.app.backgroundColor,
+    HEX_COLOUR_PATTERN,
+    "colour",
+    'Use a hex colour such as "#10161d".'
+  );
+  assertShape(
+    "app.orientation",
+    global.app.orientation,
+    ORIENTATION_PATTERN,
+    "orientation",
+    'Use "portrait", "landscape" or "any".'
   );
   assertShape(
     "signing.android.keystorePasswordEnv",

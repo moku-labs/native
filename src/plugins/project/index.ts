@@ -4,8 +4,9 @@ import { validateProjectConfig } from "./validate";
 
 /**
  * Complex tier — capability registry + generators/ + write-if-changed writer + the mobile/
- * sub-domain (completeness gate, Android signing block, runner-command rewrite) + the
- * guarded clean.
+ * sub-domain (completeness gate, Android signing block, Android manifest attributes,
+ * Xcode settings, runner-command rewrite) + the build-time orientation lock + the guarded
+ * clean.
  *
  * @see README.md
  * @example

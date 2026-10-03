@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +23,21 @@ const validAppConfig = {
   capabilities: { "deep-link": { mode: "scheme" as const, scheme: "testapp" } }
 };
 
+/** A manifest whose one MAIN activity carries `extra` as its first attribute line. */
+const manifestWithMainActivity = (extra: string) =>
+  [
+    "<manifest>",
+    "    <application>",
+    "        <activity",
+    ...(extra ? [`            ${extra}`] : []),
+    '            android:name=".MainActivity">',
+    '            <action android:name="android.intent.action.MAIN" />',
+    "        </activity>",
+    "    </application>",
+    "</manifest>",
+    ""
+  ].join("\n");
+
 describe("complex tier: project plugin (integration)", () => {
   let projectDir: string;
 
@@ -37,6 +52,34 @@ describe("complex tier: project plugin (integration)", () => {
   const createTestApp = () => {
     const framework = createCore(coreConfig, { plugins: [projectPlugin] });
     return framework.createApp({ config: { ...validAppConfig, projectDir } });
+  };
+
+  /** An app composing back + haptics, with a dark window and an optional lock. */
+  const createMobileApp = (orientation?: "portrait" | "any") => {
+    const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+    return framework.createApp({
+      config: {
+        ...validAppConfig,
+        projectDir,
+        app: {
+          ...validAppConfig.app,
+          backgroundColor: "#10161d",
+          ...(orientation ? { orientation } : {})
+        },
+        system: [{ name: "back" }, { name: "haptics" }],
+        capabilities: {}
+      }
+    });
+  };
+
+  /** Seeds the gen/android files the Android patch pass reads, manifest included. */
+  const seedAndroid = async (manifest: string) => {
+    const genDir = path.join(projectDir, "src-tauri", "gen", "android");
+    const manifestPath = path.join(genDir, "app", "src", "main", "AndroidManifest.xml");
+    await mkdir(path.dirname(manifestPath), { recursive: true });
+    await writeFile(path.join(genDir, "app", "build.gradle.kts"), "plugins {}\n", "utf8");
+    await writeFile(manifestPath, manifest, "utf8");
+    return manifestPath;
   };
 
   // -------------------------------------------------------------------------
@@ -107,6 +150,115 @@ describe("complex tier: project plugin (integration)", () => {
       expect(await readFile(path.join(projectDir, "src-tauri", "build.rs"), "utf8")).toBe(
         "fn main() {\n  tauri_build::build()\n}\n"
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: mobile presentation — orientation, window colour, back + haptics
+  // -------------------------------------------------------------------------
+
+  describe("runtime: mobile presentation", () => {
+    it("generates the iOS lock, the window colour, and haptics (not back) for ios", async () => {
+      const app = createMobileApp("portrait");
+
+      await app.project.generate({ target: "ios" });
+
+      const srcTauri = path.join(projectDir, "src-tauri");
+      const plist = await readFile(path.join(srcTauri, "Info.ios.plist"), "utf8");
+      expect(plist).toContain("<key>UISupportedInterfaceOrientations</key>");
+      expect(plist).toContain("<key>UIRequiresFullScreen</key>\n  <true/>");
+
+      const conf = JSON.parse(await readFile(path.join(srcTauri, "tauri.conf.json"), "utf8"));
+      expect(conf.app.windows).toEqual([{ title: "Test App", backgroundColor: "#10161d" }]);
+
+      const capabilities = JSON.parse(
+        await readFile(path.join(srcTauri, "capabilities", "default.json"), "utf8")
+      );
+      expect(capabilities.permissions).toEqual([
+        "core:default",
+        "haptics:allow-impact-feedback",
+        "haptics:allow-notification-feedback",
+        "haptics:allow-selection-feedback",
+        "haptics:allow-vibrate"
+      ]);
+
+      const cargo = await readFile(path.join(srcTauri, "Cargo.toml"), "utf8");
+      expect(cargo).toContain('tauri-plugin-haptics = "^2"');
+      expect(cargo).toContain('objc2 = "0.6"');
+      const lib = await readFile(path.join(srcTauri, "src", "lib.rs"), "utf8");
+      expect(lib).toContain(".plugin(tauri_plugin_haptics::init())");
+      expect(lib).toContain(".setup(|_app| {");
+    });
+
+    it("grants back's exit and haptics' commands on android", async () => {
+      const app = createMobileApp();
+
+      await app.project.generate({ target: "android" });
+
+      const capabilities = JSON.parse(
+        await readFile(path.join(projectDir, "src-tauri", "capabilities", "default.json"), "utf8")
+      );
+      expect(capabilities.permissions).toEqual([
+        "core:default",
+        "core:app:allow-exit",
+        "haptics:allow-impact-feedback",
+        "haptics:allow-notification-feedback",
+        "haptics:allow-selection-feedback",
+        "haptics:allow-vibrate"
+      ]);
+    });
+
+    it("drops both mobile-only rows from a desktop build", async () => {
+      const app = createMobileApp();
+
+      await app.project.generate({ target: "macos" });
+
+      const srcTauri = path.join(projectDir, "src-tauri");
+      const capabilities = JSON.parse(
+        await readFile(path.join(srcTauri, "capabilities", "default.json"), "utf8")
+      );
+      expect(capabilities.permissions).toEqual(["core:default"]);
+      expect(await readFile(path.join(srcTauri, "Cargo.toml"), "utf8")).not.toContain(
+        "tauri-plugin-haptics"
+      );
+      expect(existsSync(path.join(srcTauri, "Info.ios.plist"))).toBe(false);
+    });
+
+    it("patchMobile writes the orientation lock onto the Android main activity", async () => {
+      const manifestPath = await seedAndroid(manifestWithMainActivity(""));
+      const app = createMobileApp("portrait");
+
+      const result = await app.project.patchMobile({ target: "android" });
+
+      expect(result.patched).toContain(manifestPath);
+      expect(await readFile(manifestPath, "utf8")).toBe(
+        manifestWithMainActivity('android:screenOrientation="portrait"')
+      );
+    });
+
+    it("patchMobile removes a stale Android lock when the orientation is unset", async () => {
+      const manifestPath = await seedAndroid(
+        manifestWithMainActivity('android:screenOrientation="portrait"')
+      );
+      const app = createMobileApp();
+
+      await app.project.patchMobile({ target: "android" });
+
+      expect(await readFile(manifestPath, "utf8")).toBe(manifestWithMainActivity(""));
+    });
+
+    it("rejects an invalid orientation or colour at createApp", () => {
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+
+      expect(() =>
+        framework.createApp({
+          config: {
+            ...validAppConfig,
+            projectDir,
+            app: { ...validAppConfig.app, backgroundColor: "black" }
+          }
+        })
+      ).toThrow('[native] app.backgroundColor "black" is not a valid colour.');
     });
   });
 
@@ -231,7 +383,7 @@ describe("complex tier: project plugin (integration)", () => {
 
     it("exposes registryRows and requiredFiles for doctor", () => {
       const app = createTestApp();
-      expect(app.project.getRegistryRows()).toHaveLength(5);
+      expect(app.project.getRegistryRows()).toHaveLength(7);
       expect(app.project.getRequiredFiles({ target: "android" }).length).toBeGreaterThan(0);
     });
   });
