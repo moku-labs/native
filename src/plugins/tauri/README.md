@@ -17,7 +17,7 @@ app.tauri.icon({ source: "assets/icon.png" }): Promise<RunResult>
 app.tauri.build({ target, simulator?, exportMethod?, aab?, onTick?, onOutput? }): Promise<RunResult>
 app.tauri.mobileInit({ target: "ios" | "android" }): Promise<RunResult>
 app.tauri.dev({ target?, onOutput? }): Promise<DevHandle>
-app.tauri.getVersion(): Promise<{ cliVersion: string } | null>
+app.tauri.getVersion(): Promise<{ cliVersion: string } | undefined>
 app.tauri.getRunner(): { nodePath: string; tauriJsPath: string }
 ```
 

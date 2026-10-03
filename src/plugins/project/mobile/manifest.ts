@@ -83,13 +83,18 @@ function startTagEnd(text: string, from: number): number | undefined {
   let quote: string | undefined;
   for (let index = from; index < text.length; index += 1) {
     const character = text[index];
+    // Inside a quoted value: only the matching quote ends it, a `>` is plain text.
     if (quote !== undefined) {
       if (character === quote) quote = undefined;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === ">") {
-      return index + 1;
+      continue;
     }
+    // An opening quote starts a value.
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    // Outside any value, the first `>` closes the tag.
+    if (character === ">") return index + 1;
   }
   return undefined;
 }
@@ -104,7 +109,8 @@ function startTagEnd(text: string, from: number): number | undefined {
  * @returns One entry per activity, in file order.
  * @example
  * ```ts
- * locateActivities(manifest).filter(activity => activity.isMain);
+ * locateActivities('<activity android:name=".A" /><activity android:name=".B"><action android:name="android.intent.action.MAIN" /></activity>');
+ * // [{ start: 0, end: 30, isMain: false }, { start: 30, end: 58, isMain: true }]
  * ```
  */
 function locateActivities(text: string): ActivityTag[] {
@@ -131,7 +137,9 @@ function locateActivities(text: string): ActivityTag[] {
  * @returns The main activity, or undefined when none or several qualify.
  * @example
  * ```ts
- * mainActivity(locateActivities(manifest));
+ * mainActivity([{ start: 0, end: 30, isMain: false }, { start: 30, end: 58, isMain: true }]);
+ * // { start: 30, end: 58, isMain: true }
+ * mainActivity([{ start: 0, end: 30, isMain: false }, { start: 30, end: 58, isMain: false }]); // undefined
  * ```
  */
 function mainActivity(activities: readonly ActivityTag[]): ActivityTag | undefined {
@@ -158,21 +166,25 @@ function mainActivity(activities: readonly ActivityTag[]): ActivityTag | undefin
  * ```
  */
 function applyAttribute(tag: string, entry: ActivityAttribute): string {
-  const existing = [...tag.matchAll(ATTRIBUTE_PATTERN)].find(match => match[1] === entry.name);
+  // Resolve the text to write: `name="value"`, or undefined when the entry removes.
   const rendered =
     entry.value === undefined ? undefined : `${entry.name}="${escapeXml(entry.value)}"`;
+  const existing = [...tag.matchAll(ATTRIBUTE_PATTERN)].find(match => match[1] === entry.name);
 
+  // Existing attribute: replace it in place, or remove it with the whitespace before it.
   if (existing) {
     // The whole whitespace run before the attribute: its line break and indent, CRLF included.
     const before = tag.slice(0, existing.index).trimEnd();
     const separator = tag.slice(before.length, existing.index + 1);
     const after = tag.slice(existing.index + existing[0].length);
-    return rendered === undefined
-      ? `${before}${after}`
-      : `${before}${separator}${rendered}${after}`;
+    if (rendered === undefined) return `${before}${after}`;
+    return `${before}${separator}${rendered}${after}`;
   }
+
+  // Absent attribute and a removal: nothing to do.
   if (rendered === undefined) return tag;
 
+  // Absent attribute: insert it right after `<activity`, reusing the whitespace that follows.
   const rest = tag.slice(ACTIVITY_OPEN.length);
   const separator = rest.slice(0, rest.length - rest.trimStart().length) || " ";
   return `${ACTIVITY_OPEN}${separator}${rendered}${rest}`;
@@ -192,7 +204,8 @@ function applyAttribute(tag: string, entry: ActivityAttribute): string {
  *   be told apart.
  * @example
  * ```ts
- * applyManifestEntries(manifest, orientationManifest("portrait"), manifestPath);
+ * applyManifestEntries('<activity android:name=".Main">\n</activity>', orientationManifest("portrait"), "AndroidManifest.xml");
+ * // '<activity android:screenOrientation="portrait" android:name=".Main">\n</activity>'
  * ```
  */
 export function applyManifestEntries(
@@ -230,7 +243,9 @@ export function applyManifestEntries(
  *   the manifest has no clear main activity.
  * @example
  * ```ts
- * await patchAndroidManifest(projectDir, genDir, orientationManifest("portrait"));
+ * // First pass on a manifest without the lock; a second pass lists it under `unchanged`.
+ * await patchAndroidManifest(".moku/tauri", ".moku/tauri/src-tauri/gen/android", orientationManifest("portrait"));
+ * // { patched: [".moku/tauri/src-tauri/gen/android/app/src/main/AndroidManifest.xml"], unchanged: [] }
  * ```
  */
 export async function patchAndroidManifest(

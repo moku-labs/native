@@ -73,7 +73,16 @@ export type DeepLinkConf = {
  */
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
-/** One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, or an `<array>` of strings. */
+/**
+ * One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, or an `<array>` of strings.
+ *
+ * @example
+ * ```ts
+ * const fullScreen: PlistValue = true; // <true/>
+ * const portrait: PlistValue = ["UIInterfaceOrientationPortrait"];
+ * // <array><string>UIInterfaceOrientationPortrait</string></array>
+ * ```
+ */
 export type PlistValue = string | boolean | readonly string[];
 
 /**
@@ -115,6 +124,25 @@ export type Api = {
   generate(opts: { target: Target }): Promise<GenerateResult>;
   getBundleLayout(opts: { target: Target }): BundleLayout;
   getCompleteness(opts: { target: Target }): CompletenessResult;
+  /**
+   * Runs the idempotent mobile post-init patch pass. Android gets its release signing and
+   * the main activity's manifest attributes (the orientation lock among them); iOS gets
+   * the Xcode entitlements-modification setting; both get the Xcode/Android-Studio
+   * runner-command rewrite when a `runner` is supplied. The build plugin calls it after
+   * the mobile init pass, with the runner from `tauri.getRunner()`.
+   *
+   * @param opts - The patch options.
+   * @param opts.target - The mobile platform to patch.
+   * @param opts.runner - The absolute Node/`tauri.js` pair from `tauri.getRunner()`.
+   * @returns The paths patched vs. left unchanged.
+   * @example
+   * ```ts
+   * // app.orientation is "portrait", projectDir is the default, the lock is not written yet
+   * await app.project.patchMobile({ target: "android" });
+   * // { patched: [".moku/tauri/src-tauri/gen/android/app/src/main/AndroidManifest.xml"],
+   * //   unchanged: [".moku/tauri/src-tauri/gen/android/app/build.gradle.kts"] }
+   * ```
+   */
   patchMobile(opts: PatchMobileOptions): Promise<PatchResult>;
   clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;
   clearMobileBuildOutput(opts: { target: MobileTarget }): Promise<CleanResult>;

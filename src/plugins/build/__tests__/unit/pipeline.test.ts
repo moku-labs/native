@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Config as GlobalConfig, Target, TauriRunner } from "../../../../config";
+import type {
+  Config as GlobalConfig,
+  NativeCompleteEvent,
+  NativePhaseEvent,
+  Target,
+  TauriRunner
+} from "../../../../config";
 import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import { bundleLayout } from "../../../project/layout";
@@ -124,7 +130,7 @@ function createMocks(overrides?: {
 /** Projects the spy emit's calls into `"phase:status"` keys, in emission order. */
 function phaseKeys(emit: ReturnType<typeof vi.fn>): string[] {
   return emit.mock.calls.map(call => {
-    const payload = call[1] as { phase: string; status: string };
+    const payload = call[1] as NativePhaseEvent;
     return `${payload.phase}:${payload.status}`;
   });
 }
@@ -670,7 +676,7 @@ function spyBackwardsWallClock() {
 /** Every `durationMs` the spy emit carried on a `native:phase` or `native:complete` event. */
 function emittedDurations(emit: ReturnType<typeof vi.fn>): number[] {
   return emit.mock.calls.flatMap(call => {
-    const payload = call[1] as { durationMs?: number };
+    const payload = call[1] as Partial<NativePhaseEvent | NativeCompleteEvent>;
     return payload.durationMs === undefined ? [] : [payload.durationMs];
   });
 }
@@ -712,6 +718,30 @@ describe("durations stay monotonic when the wall clock steps back", () => {
     expectMonotonicDurations(result.phases.map(phase => phase.durationMs));
     expectMonotonicDurations([result.durationMs]);
     expectMonotonicDurations(emittedDurations(emit));
+  });
+
+  it("runPrepare: a phase duration is the delta of two performance.now readings", async () => {
+    const monotonicClock = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1042.4);
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+
+    try {
+      const phases = await runPrepare(ctx, deps, "macos");
+
+      expect(phases[0]).toEqual({ phase: "scaffold", durationMs: 42 });
+      expect(emit).toHaveBeenCalledWith(
+        "native:phase",
+        expect.objectContaining<Partial<NativePhaseEvent>>({
+          phase: "scaffold",
+          status: "done",
+          durationMs: 42
+        })
+      );
+    } finally {
+      monotonicClock.mockRestore();
+    }
   });
 
   it("runCompileAndBundle without a transition line: compile duration is a >= 0 integer", async () => {

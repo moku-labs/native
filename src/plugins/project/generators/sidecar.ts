@@ -42,7 +42,11 @@ function renderPlistValue(value: PlistValue): string[] {
  * @returns An artifact for `src-tauri/Info.ios.plist` on iOS, otherwise an empty array.
  * @example
  * ```ts
- * generateSidecar({ global, target: "ios", capabilities: [] }); // [{ path: "src-tauri/Info.ios.plist", … }]
+ * // `config` is any full native Config
+ * const global = { ...config, app: { name: "Demo", identifier: "com.acme.demo", orientation: "portrait" } };
+ * generateSidecar({ global, target: "ios", capabilities: [] })[0]?.path; // "src-tauri/Info.ios.plist"
+ * // its <dict>: UISupportedInterfaceOrientations, UISupportedInterfaceOrientations~ipad, UIRequiresFullScreen
+ * generateSidecar({ global, target: "macos", capabilities: [] }); // []
  * ```
  */
 export function generateSidecar(input: GeneratorInput): Artifact[] {

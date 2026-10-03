@@ -72,7 +72,8 @@ function resolveConfiguredCapabilities(
  * @returns The manifest entries for `patchMobile`'s Android pass.
  * @example
  * ```ts
- * androidManifestEntries(ctx.global);
+ * // `config` is any full native Config; no registry row carries a manifest entry today
+ * androidManifestEntries({ ...config, app: { name: "Demo", identifier: "com.acme.demo", orientation: "portrait" } });
  * // [{ kind: "activity-attribute", name: "android:screenOrientation", value: "portrait" }]
  * ```
  */
@@ -209,18 +210,13 @@ export function createProjectApi(ctx: ProjectContext): Api {
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Runs the idempotent mobile post-init patch pass. Android gets its release signing and
-   * the main activity's manifest attributes (the orientation lock among them); iOS gets
-   * the Xcode entitlements-modification setting; both get the Xcode/Android-Studio
-   * runner-command rewrite when a `runner` is supplied.
+   * Implements {@link Api.patchMobile}: hands Android its manifest entries, then logs.
    *
-   * @param opts - The patch options.
-   * @param opts.target - The mobile platform to patch.
-   * @param opts.runner - The absolute Node/`tauri.js` pair from `tauri.runner()`.
-   * @returns The paths patched vs. left unchanged.
+   * @param opts - See {@link Api.patchMobile}.
+   * @returns See {@link Api.patchMobile}.
    * @example
    * ```ts
-   * await runPatchMobile({ target: "ios", runner: tauri.runner() });
+   * await runPatchMobile({ target: "ios" }); // { patched: [], unchanged: [] } before `tauri ios init`
    * ```
    */
   const runPatchMobile = async (opts: PatchMobileOptions) => {

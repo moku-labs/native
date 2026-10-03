@@ -95,6 +95,11 @@ export type CapabilityConfigMap = {
  * Which way up a mobile app runs. Build time only: it picks the iOS `Info.plist`
  * orientation keys and the Android main activity's `android:screenOrientation`, and
  * nothing locks the screen at runtime. `"any"` keeps the Tauri template's default.
+ *
+ * @example
+ * ```ts
+ * createApp({ config: { app: { name: "Demo", identifier: "com.acme.demo", orientation: "portrait" } } });
+ * ```
  */
 export type Orientation = "portrait" | "landscape" | "any";
 
