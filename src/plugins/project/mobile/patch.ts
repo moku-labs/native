@@ -2,7 +2,8 @@
  * @file project plugin — the post-init mobile patch pass: it decides WHICH patches a
  * platform needs and in which order. The patches themselves live next door, in
  * `signing.ts` (the Android release-signing block), `manifest.ts` (the Android main
- * activity's attributes, such as the orientation lock), `runner.ts` (the Xcode /
+ * activity's attributes, such as the orientation lock), `system-bars.ts` (the Android
+ * status bar icon style from `app.backgroundColor`), `runner.ts` (the Xcode /
  * Android-Studio runner command) and `xcode-settings.ts` (the iOS
  * entitlements-modification setting that makes a REBUILD work).
  */
@@ -14,6 +15,7 @@ import type { ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
 import { patchAndroidManifest } from "./manifest";
 import { patchRunner } from "./runner";
 import { patchAndroidSigning } from "./signing";
+import { patchAndroidSystemBars } from "./system-bars";
 import { patchXcodeSettings } from "./xcode-settings";
 
 /**
@@ -38,29 +40,34 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
 /**
  * Deterministic, idempotent post-init patch pass over an existing complete gen/ tree.
  * Android gets, in this order, its release signing block, the main activity's manifest
- * attributes, then the runner command. iOS gets the Xcode entitlements-modification
- * setting (without it the SECOND build of the same tree fails), then the runner command.
- * The runner rewrite runs only when the caller supplies a `runner`. iOS takes no manifest
- * entries: its orientation lock and signing travel through the generated `Info.ios.plist`
- * sidecar and tauri.conf.json, never through the gen/ tree.
+ * attributes, the system bar style in MainActivity.kt, then the runner command. iOS gets
+ * the Xcode entitlements-modification setting (without it the SECOND build of the same
+ * tree fails), then the runner command. The runner rewrite runs only when the caller
+ * supplies a `runner`. iOS takes no manifest entries and no background colour: its
+ * orientation lock and signing travel through the generated `Info.ios.plist` sidecar and
+ * tauri.conf.json, and its status bar adapts to the page on its own.
  *
  * @param projectDirectory - The Tauri project root.
  * @param opts - The mobile platform, and optionally the absolute Node/tauri.js runner pair.
  * @param signing - The full signing config (only `.android` is consulted).
  * @param manifest - Android manifest entries for the main activity (ignored on iOS).
+ * @param backgroundColor - `app.backgroundColor`; the Android status bar icons follow it
+ *   (ignored on iOS).
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
  * @throws {Error} When the Android `gen/android` tree (or its `app/build.gradle.kts`) is
- *   missing, or manifest entries meet a missing manifest or an unclear main activity.
+ *   missing, manifest entries meet a missing manifest or an unclear main activity, or a
+ *   background colour meets a tree without exactly one MainActivity.kt to style.
  * @example
  * ```ts
- * await patchMobile("/repo/.moku/tauri", { target: "android", runner }, {}, orientationManifest("portrait"));
+ * await patchMobile("/repo/.moku/tauri", { target: "android", runner }, {}, orientationManifest("portrait"), "#10161d");
  * ```
  */
 export async function patchMobile(
   projectDirectory: string,
   opts: PatchMobileOptions,
   signing: SigningConfig,
-  manifest: readonly ManifestEntry[] = []
+  manifest: readonly ManifestEntry[] = [],
+  backgroundColor?: string
 ): Promise<PatchResult> {
   const genDirectory = genDirectoryPath(projectDirectory, opts.target);
 
@@ -90,11 +97,16 @@ export async function patchMobile(
     signing.android ?? {}
   );
   const manifestResult = await patchAndroidManifest(projectDirectory, genDirectory, manifest);
-  if (!opts.runner) return mergePatchResults(signingResult, manifestResult);
+  const systemBarsResult = await patchAndroidSystemBars(
+    projectDirectory,
+    genDirectory,
+    backgroundColor
+  );
+  if (!opts.runner) return mergePatchResults(signingResult, manifestResult, systemBarsResult);
 
   const runnerResult = await patchRunner(projectDirectory, genDirectory, {
     target: opts.target,
     runner: opts.runner
   });
-  return mergePatchResults(signingResult, manifestResult, runnerResult);
+  return mergePatchResults(signingResult, manifestResult, systemBarsResult, runnerResult);
 }

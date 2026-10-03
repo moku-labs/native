@@ -1,7 +1,11 @@
 /**
  * Shared fixtures for the mobile sub-domain tests: the runner pair, the Gradle signing
- * block, and the generated iOS files Tauri bakes its detected runner into.
+ * block, the generated iOS files Tauri bakes its detected runner into, and the generated
+ * Android MainActivity.kt.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Env-var NAME references, never secrets (the SigningConfig invariant).
 // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- an env-var *name*, never a secret
@@ -140,3 +144,16 @@ export const androidManifest = (
     "</manifest>",
     ""
   ].join(lineEnding);
+
+/**
+ * `gen/android/app/src/main/java/<identifier path>/MainActivity.kt`, byte for byte as
+ * `tauri android init` (cli 2.12.1) writes it for the identifier `dev.moku.v6app`.
+ */
+export const REAL_MAIN_ACTIVITY = readFileSync(
+  fileURLToPath(new URL("fixtures/MainActivity.real.kt", import.meta.url)),
+  "utf8"
+);
+
+/** Where {@link REAL_MAIN_ACTIVITY} sits inside a `gen/android` tree. */
+export const mainActivityPath = (genDirectory: string) =>
+  path.join(genDirectory, "app", "src", "main", "java", "dev", "moku", "v6app", "MainActivity.kt");

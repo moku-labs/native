@@ -125,11 +125,13 @@ export type Api = {
   getBundleLayout(opts: { target: Target }): BundleLayout;
   getCompleteness(opts: { target: Target }): CompletenessResult;
   /**
-   * Runs the idempotent mobile post-init patch pass. Android gets its release signing and
-   * the main activity's manifest attributes (the orientation lock among them); iOS gets
-   * the Xcode entitlements-modification setting; both get the Xcode/Android-Studio
-   * runner-command rewrite when a `runner` is supplied. The build plugin calls it after
-   * the mobile init pass, with the runner from `tauri.getRunner()`.
+   * Runs the idempotent mobile post-init patch pass. Android gets its release signing,
+   * the main activity's manifest attributes (the orientation lock among them) and the
+   * status bar style in MainActivity.kt (light icons on a dark `app.backgroundColor`,
+   * dark icons on a light one); iOS gets the Xcode entitlements-modification setting;
+   * both get the Xcode/Android-Studio runner-command rewrite when a `runner` is supplied.
+   * The build plugin calls it after the mobile init pass, with the runner from
+   * `tauri.getRunner()`.
    *
    * @param opts - The patch options.
    * @param opts.target - The mobile platform to patch.
@@ -137,9 +139,11 @@ export type Api = {
    * @returns The paths patched vs. left unchanged.
    * @example
    * ```ts
-   * // app.orientation is "portrait", projectDir is the default, the lock is not written yet
+   * // app.orientation is "portrait", app.backgroundColor is "#10161d", app.identifier is
+   * // "com.acme.demo", projectDir is the default, and neither is written yet
    * await app.project.patchMobile({ target: "android" });
-   * // { patched: [".moku/tauri/src-tauri/gen/android/app/src/main/AndroidManifest.xml"],
+   * // { patched: [".moku/tauri/src-tauri/gen/android/app/src/main/AndroidManifest.xml",
+   * //             ".moku/tauri/src-tauri/gen/android/app/src/main/java/com/acme/demo/MainActivity.kt"],
    * //   unchanged: [".moku/tauri/src-tauri/gen/android/app/build.gradle.kts"] }
    * ```
    */

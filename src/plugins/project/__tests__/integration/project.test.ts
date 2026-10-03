@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { coreConfig, createCore } from "../../../../config";
 import { projectPlugin } from "../../index";
+import { mainActivityPath, REAL_MAIN_ACTIVITY } from "../unit/mobile/fixtures";
 
 // ---------------------------------------------------------------------------
 // Complex tier: project plugin (integration)
@@ -72,13 +73,18 @@ describe("complex tier: project plugin (integration)", () => {
     });
   };
 
-  /** Seeds the gen/android files the Android patch pass reads, manifest included. */
+  /**
+   * Seeds the gen/android files the Android patch pass reads: the manifest, and the
+   * generated MainActivity.kt the status bar style is written into.
+   */
   const seedAndroid = async (manifest: string) => {
     const genDir = path.join(projectDir, "src-tauri", "gen", "android");
     const manifestPath = path.join(genDir, "app", "src", "main", "AndroidManifest.xml");
-    await mkdir(path.dirname(manifestPath), { recursive: true });
+    const activityPath = mainActivityPath(genDir);
+    await mkdir(path.dirname(activityPath), { recursive: true });
     await writeFile(path.join(genDir, "app", "build.gradle.kts"), "plugins {}\n", "utf8");
     await writeFile(manifestPath, manifest, "utf8");
+    await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
     return manifestPath;
   };
 
@@ -233,6 +239,19 @@ describe("complex tier: project plugin (integration)", () => {
       expect(result.patched).toContain(manifestPath);
       expect(await readFile(manifestPath, "utf8")).toBe(
         manifestWithMainActivity('android:screenOrientation="portrait"')
+      );
+    });
+
+    it("patchMobile gives a dark window light Android status bar icons", async () => {
+      await seedAndroid(manifestWithMainActivity(""));
+      const activityPath = mainActivityPath(path.join(projectDir, "src-tauri", "gen", "android"));
+      const app = createMobileApp();
+
+      const result = await app.project.patchMobile({ target: "android" });
+
+      expect(result.patched).toContain(activityPath);
+      expect(await readFile(activityPath, "utf8")).toContain(
+        "enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT), navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))"
       );
     });
 

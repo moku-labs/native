@@ -3,7 +3,7 @@
  * touch". Both iOS patches (the runner-command rewrite and the Xcode build-settings patch)
  * read the same list from here, so neither can drift into a file the other does not know
  * about — and neither ever descends into `gen/apple/build` or `gen/android/build`, which
- * belong to the toolchain.
+ * belong to the toolchain. The Android status bar patch finds its MainActivity.kt here too.
  */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -11,6 +11,12 @@ import path from "node:path";
 
 /** Source extensions that can carry the Android runner command. */
 const ANDROID_SOURCE_EXTENSIONS = new Set([".kt", ".kts", ".gradle"]);
+
+/** The Kotlin file `tauri android init` writes the app's activity into. */
+const MAIN_ACTIVITY_FILE = "MainActivity.kt";
+
+/** Where `tauri android init` writes the app's Kotlin sources, below `gen/android`. */
+const ANDROID_JAVA_SEGMENTS = ["app", "src", "main", "java"];
 
 /** Derived directories a patch scan never descends into — the toolchain owns them. */
 const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
@@ -93,4 +99,41 @@ export async function androidPatchFiles(genDirectory: string): Promise<string[]>
   ].filter(file => existsSync(file));
 
   return [...buildSource, ...gradleFiles];
+}
+
+/**
+ * Returns the directory `tauri android init` writes the app's Kotlin sources into. The
+ * MainActivity.kt sits below it, in a folder per segment of the app identifier.
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The `app/src/main/java` directory of that tree.
+ * @example
+ * ```ts
+ * androidJavaDirectory("/repo/.moku/tauri/src-tauri/gen/android");
+ * // "/repo/.moku/tauri/src-tauri/gen/android/app/src/main/java"
+ * ```
+ */
+export function androidJavaDirectory(genDirectory: string): string {
+  return path.join(genDirectory, ...ANDROID_JAVA_SEGMENTS);
+}
+
+/**
+ * Lists every `MainActivity.kt` below `app/src/main/java`, sorted by path. Build output is
+ * never listed. A generated tree holds exactly one; the caller decides what more or fewer
+ * means.
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The MainActivity.kt paths found, possibly none.
+ * @example
+ * ```ts
+ * await androidMainActivityFiles("/repo/.moku/tauri/src-tauri/gen/android");
+ * // ["/repo/.moku/tauri/src-tauri/gen/android/app/src/main/java/com/acme/demo/MainActivity.kt"]
+ * ```
+ */
+export async function androidMainActivityFiles(genDirectory: string): Promise<string[]> {
+  const found = await collectFiles(
+    androidJavaDirectory(genDirectory),
+    name => name === MAIN_ACTIVITY_FILE
+  );
+  return found.toSorted();
 }

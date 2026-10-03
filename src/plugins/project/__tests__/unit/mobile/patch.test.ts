@@ -10,8 +10,10 @@ import { orientationManifest } from "../../../orientation";
 import {
   androidManifest,
   LITERAL_RUNNER,
+  mainActivityPath,
   pbxprojFor,
   projectYmlFor,
+  REAL_MAIN_ACTIVITY,
   RUNNER,
   SIGNING,
   SIGNING_BLOCK,
@@ -288,5 +290,49 @@ describe("patchMobile", () => {
 
     expect(result.patched).toEqual([]);
     expect(existsSync(path.join(genDir, "app"))).toBe(false);
+  });
+
+  it("android styles the status bar after the manifest and before the runner — one report", async () => {
+    const genDir = await seedAndroid();
+    const gradlePath = path.join(genDir, "app", "build.gradle.kts");
+    const manifestPath = await seedAndroidManifest(genDir);
+    const activityPath = mainActivityPath(genDir);
+    await mkdir(path.dirname(activityPath), { recursive: true });
+    await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
+    const buildSrcDir = path.join(genDir, "buildSrc", "src", "main", "java");
+    await mkdir(buildSrcDir, { recursive: true });
+    const taskPath = path.join(buildSrcDir, "BuildTask.kt");
+    await writeFile(taskPath, 'val command = "node tauri android android-studio-script"\n', "utf8");
+    const portrait = orientationManifest("portrait");
+
+    const result = await patchMobile(
+      dir,
+      { target: "android", runner: RUNNER },
+      {},
+      portrait,
+      "#10161d"
+    );
+
+    expect(result).toEqual({
+      patched: [manifestPath, activityPath, taskPath],
+      unchanged: [gradlePath]
+    });
+    expect(await readFile(activityPath, "utf8")).toContain("SystemBarStyle.dark(");
+  });
+
+  it("android fails with a fix-it when a colour meets a tree without MainActivity.kt", async () => {
+    await seedAndroid();
+
+    await expect(patchMobile(dir, { target: "android" }, {}, [], "#10161d")).rejects.toThrow(
+      "[native] Could not find the MainActivity.kt that calls enableEdgeToEdge()"
+    );
+  });
+
+  it("ios ignores the background colour", async () => {
+    await seedApple();
+
+    const result = await patchMobile(dir, { target: "ios" }, {}, [], "#10161d");
+
+    expect(result.patched).toEqual([]);
   });
 });
