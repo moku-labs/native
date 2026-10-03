@@ -32,10 +32,10 @@ describe("completenessCheck.run", () => {
 
   it("fails and names both the missing files and the clean fix-it", async () => {
     const project = {
-      getRequiredFiles: vi.fn(() => ["build.gradle.kts", "settings.gradle.kts"]),
+      getRequiredFiles: vi.fn(() => ["build.gradle.kts", "settings.gradle"]),
       getCompleteness: vi.fn(() => ({
         status: "incomplete" as const,
-        missing: ["settings.gradle.kts"]
+        missing: ["settings.gradle"]
       })),
       getRegistryRows: vi.fn(() => [])
     };
@@ -43,7 +43,7 @@ describe("completenessCheck.run", () => {
     const result = await completenessCheck.run(createCheckInput({ target: "android", project }));
 
     expect(result.status).toBe("fail");
-    expect(result.message).toContain("settings.gradle.kts");
+    expect(result.message).toContain("settings.gradle");
     expect(result.fixIt).toBe("native clean --target android");
   });
 

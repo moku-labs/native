@@ -181,6 +181,7 @@ survive:
 | ios | `gen/apple/project.yml` | `script: ` (with any indent / `- `) | `"…"` (YAML scalar) |
 | ios | `gen/apple/*.xcodeproj/project.pbxproj` | `shellScript = "` | `\"…\"` (inside a pbxproj string) |
 | android | `gen/android/buildSrc/**/*.{kt,kts,gradle}`, the two top-level `build.gradle.kts` | the string literal's opening `"` | `\"…\"` (inside a source string) |
+| android | `gen/android/buildSrc/**/BuildTask.kt` (Kotlin shape, see below) | the rest of the file | Kotlin literals |
 
 The match is **runner-agnostic but narrow**: on every line carrying ` ios xcode-script` /
 ` android android-studio-script`, only the runner-shaped token run directly before the verb is
@@ -196,6 +197,22 @@ skipped. The pass is idempotent: a second run rewrites the absolute pair onto it
 every file unchanged — but an absolute pair whose Node path CHANGED (an fnm/nvm switch) is
 re-patched, not left stale.
 
+**The Android `BuildTask.kt` shape.** `tauri android init` (cli 2.12) does not write one
+command string there. It writes the runner as Kotlin code, which Gradle runs with no shell:
+
+```kotlin
+val executable = """/opt/homebrew/bin/node""";
+val args = listOf("tauri", "android", "android-studio-script");
+```
+
+The rewrite sets the raw-string `executable` to the absolute Node path, and every `listOf`
+argument before `"android", "android-studio-script"` (`"tauri"`, npm's `"run", "--", "tauri"`)
+to the one absolute `tauri.js` path. The executable is rewritten only in a file that also
+has that `listOf`. Each path is escaped for its own Kotlin literal: in the `listOf` string,
+`\`, `"` and `$` get a backslash; in the raw `"""…"""` string, which has no backslash
+escapes, `$` and `"` become `${'$'}` / `${'"'}` templates and `\` stays as it is.
+Everything else in the file is kept byte for byte, and a second pass reports it unchanged.
+
 A file that invokes the verb behind a runner shape the match does **not** recognize is an
 error, never an "unchanged" file — reporting success there ships a tree that fails on its
 first Xcode/Android-Studio build phase, with nothing in the log pointing back here:
@@ -205,6 +222,8 @@ first Xcode/Android-Studio build phase, with nothing in the log pointing back he
   Set pluginConfigs.tauri.nodePath, or report the runner line Tauri generated.
 ```
 
+A file whose `listOf` passes `"android", "android-studio-script"` but has no raw-string
+`val executable = """…"""` beside it, or passes them outside a `listOf`, gets the same error.
 A file that never mentions the verb is simply unchanged.
 
 ### The Android manifest

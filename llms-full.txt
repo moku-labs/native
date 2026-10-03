@@ -566,7 +566,9 @@ Behavior:
       never eaten. Eating it left a pbxproj xcodebuild refused to open (exit 74, "project is
       damaged … parse error") and failed every FIRST iOS build.
     * Android: the same rewrite for " android android-studio-script" across
-      gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts, PLUS a
+      gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts. The
+      tauri-cli 2.12 BuildTask.kt shape is rewritten too: `val executable = """<node>"""` and
+      `listOf("<tauri.js>", "android", "android-studio-script")`. PLUS a
       sentinel-delimited `// MOKU-SIGNING-START … // MOKU-SIGNING-END` block in
       gen/android/app/build.gradle.kts (signingConfigs.maybeCreate("release") with storeFile,
       keyAlias, storePassword/keyPassword read via System.getenv, and
