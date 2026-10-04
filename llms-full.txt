@@ -160,7 +160,7 @@ export type Config = {
     category?: string;
     buildNumber?: string;
     orientation?: Orientation;      // build-time mobile lock; unset behaves as "any"
-    backgroundColor?: string;       // "#rrggbb" | "#rrggbbaa" -> app.windows[0].backgroundColor
+    backgroundColor?: string;       // "#rrggbb" | "#rrggbbaa" -> app.windows[0].backgroundColor + Android status bar icons
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
@@ -243,7 +243,7 @@ GLOBAL Config (D-005 — the substantive surface; every plugin reads it via ctx.
 | app.category | string? | (absent) | Store category -> bundle.category. Key is ABSENT from the JSON when unset. |
 | app.buildNumber | string? | (absent) | Store build number -> bundle.iOS.bundleVersion + bundle.macOS.bundleVersion. |
 | app.orientation | "portrait" \| "landscape" \| "any" | (absent = "any") | Build-time mobile orientation lock. iOS: UISupportedInterfaceOrientations (+ ~ipad, + UIRequiresFullScreen) in src-tauri/Info.ios.plist. Android: android:screenOrientation on the main activity ("portrait" / "sensorLandscape"; removed for "any"). No runtime lock. Validated against the three values. |
-| app.backgroundColor | string? | (absent) | Hex window colour "#rrggbb" or "#rrggbbaa" -> app.windows[0].backgroundColor. Shows during launch and behind any gap the page does not cover. Validated against /^#[0-9a-f]{6}([0-9a-f]{2})?$/i. |
+| app.backgroundColor | string? | (absent) | Hex window colour "#rrggbb" or "#rrggbbaa" -> app.windows[0].backgroundColor. Shows during launch and behind any gap the page does not cover. Android status bar icons follow it: light icons when its relative luminance is below 0.179, dark icons otherwise (mobile/system-bars.ts). Validated against /^#[0-9a-f]{6}([0-9a-f]{2})?$/i. |
 | web.build | string | "bun run build" | Web build command -> tauri.conf.json build.beforeBuildCommand `{ script, cwd }`. Required non-empty. |
 | web.devCommand | string | "bun run dev" | Web dev command -> build.beforeDevCommand `{ script, cwd }`. Required non-empty. |
 | web.devUrl | string | "http://localhost:5173" | Dev server URL — also DevHandle.url and the readiness-poll target. Required non-empty. |
@@ -366,7 +366,8 @@ guard and the composition-time config check ask, so what createApp accepts and w
 clean() will delete can never drift apart.
 mobile/patch.ts is orchestration only: it decides WHICH patches a platform needs and in
 which order, while mobile/signing.ts owns the Android Gradle signing block,
-mobile/manifest.ts the main-activity attributes in AndroidManifest.xml, and
+mobile/manifest.ts the main-activity attributes in AndroidManifest.xml,
+mobile/system-bars.ts the Android status bar style in MainActivity.kt, and
 mobile/runner.ts the Xcode/Android-Studio runner-command rewrite. orientation.ts turns
 app.orientation into its Info.ios.plist entries and its Android manifest entry.
 
@@ -566,7 +567,9 @@ Behavior:
       never eaten. Eating it left a pbxproj xcodebuild refused to open (exit 74, "project is
       damaged … parse error") and failed every FIRST iOS build.
     * Android: the same rewrite for " android android-studio-script" across
-      gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts, PLUS a
+      gen/android/buildSrc/**/*.{kt,kts,gradle} and the two top-level build.gradle.kts. The
+      tauri-cli 2.12 BuildTask.kt shape is rewritten too: `val executable = """<node>"""` and
+      `listOf("<tauri.js>", "android", "android-studio-script")`. PLUS a
       sentinel-delimited `// MOKU-SIGNING-START … // MOKU-SIGNING-END` block in
       gen/android/app/build.gradle.kts (signingConfigs.maybeCreate("release") with storeFile,
       keyAlias, storePassword/keyPassword read via System.getenv, and
@@ -576,7 +579,7 @@ Behavior:
       No keystore.properties is written any
       more; an unset keystorePath REMOVES the block and deletes a legacy keystore.properties
       (a single named file inside gen/android, never a recursive remove).
-      Android order: signing -> manifest -> runner, merged into one report. The manifest step
+      Android order: signing -> manifest -> system bars -> runner, merged into one report. The manifest step
       (mobile/manifest.ts) applies `activity-attribute` entries — the api passes every
       resolved android capability's activity-attribute entries, then
       orientationManifest(app.orientation) — to the main <activity> of
@@ -593,8 +596,32 @@ Behavior:
       <path>.\n  Re-run the mobile init pass (tauri android init) or report the manifest Tauri
       generated.' A removal-only pass leaves such a manifest as it is (an app that never set an
       orientation keeps building). `child` entries are never applied.
-      patchMobile(projectDir, opts, signing, manifest = []) is the domain signature; the api
-      wrapper computes `manifest` for android and passes [] for ios.
+      The system-bars step (mobile/system-bars.ts) styles the one MainActivity.kt below
+      gen/android/app/src/main/java (build dirs skipped) that contains `enableEdgeToEdge(`.
+      backgroundTone(app.backgroundColor): WCAG relative luminance of #RRGGBB (alpha ignored),
+      "dark" when < DARK_LUMINANCE_THRESHOLD (0.179, equal WCAG contrast for white and black icons). The call is rewritten to
+      `enableEdgeToEdge(statusBarStyle = S, navigationBarStyle = S)` with
+      S = `SystemBarStyle.dark(Color.TRANSPARENT)` (dark colour, light icons) or
+      `SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)` (light colour, dark icons),
+      adding `import androidx.activity.SystemBarStyle` and `import android.graphics.Color`
+      after the last import. Unset restores the bare `enableEdgeToEdge()` and removes those
+      two imports when nothing else uses them, so the generated bytes come back exactly. Only
+      the bare call or one of these two rewrites is touched; CRLF-safe, write-if-changed,
+      idempotent. With a colour set: no candidate => '[native] Could not find the
+      MainActivity.kt that calls enableEdgeToEdge() under <java dir>.\n  Re-run the mobile
+      init pass (tauri android init), or unset app.backgroundColor.'; several => '[native]
+      Found <n> MainActivity.kt files that call enableEdgeToEdge() under <java dir>: <paths>.\n
+      Keep the one tauri android init generated, or re-run the mobile init pass (tauri
+      android init).'; an unknown call form => '[native] The enableEdgeToEdge() call in
+      <path> is not the one tauri android init generates.\n  Re-run the mobile init pass
+      (tauri android init) to restore it, or unset app.backgroundColor.'; no import line to
+      add the two imports after => '[native] <path> has no import line to add the system bar
+      imports after.\n  Re-run the mobile init pass (tauri android init), or unset
+      app.backgroundColor.' Unset never fails.
+      iOS is untouched (its status bar adapts to the page content).
+      patchMobile(projectDir, opts, signing, manifest = [], backgroundColor?) is the domain
+      signature; the api wrapper computes `manifest` for android (passes [] for ios) and
+      passes app.backgroundColor (ignored on ios).
 - ensureIconSource(): app.icon set => path.resolve(app.icon), throwing a [native] fix-it when
   the file is missing. Unset => writes the embedded 1024x1024 placeholder PNG to
   <projectDir>/placeholder-icon.png via write-if-changed and returns that path.
@@ -1527,7 +1554,8 @@ stay as empty objects, bundle.macOS is omitted entirely when nothing is configur
                                        `tauri ios build --export-method` on DEVICE builds
   app.category                      -> bundle.category
   app.buildNumber                   -> bundle.{iOS,macOS}.bundleVersion
-  app.backgroundColor               -> app.windows[0].backgroundColor
+  app.backgroundColor               -> app.windows[0].backgroundColor + Android
+                                       status bar style in MainActivity.kt (build time)
   app.orientation                   -> Info.ios.plist orientation keys + Android
                                        android:screenOrientation (build time only)
 

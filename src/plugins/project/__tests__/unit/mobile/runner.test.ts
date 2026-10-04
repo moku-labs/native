@@ -1,12 +1,14 @@
 /* biome-ignore-all lint/suspicious/noTemplateCurlyInString: the real `tauri ios init` output
    carries `${PLATFORM_DISPLAY_NAME:?}` as literal shell text — these fixtures are byte-for-byte
    copies of it, so the placeholders must stay plain strings. */
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyRunnerCommand, patchRunner } from "../../../mobile/runner";
+import { applyKotlinRunner, applyRunnerCommand, patchRunner } from "../../../mobile/runner";
 import {
   ANDROID_VERB,
   DETECTED_RUNNERS,
@@ -27,6 +29,37 @@ const REAL_YML_LINE =
 
 /** The same build phase inside `project.pbxproj` (node-detected runner), quotes escaped. */
 const REAL_PBXPROJ_LINE = `\t\t\tshellScript = "node tauri ios xcode-script -v --platform \${PLATFORM_DISPLAY_NAME:?} --sdk-root \${SDKROOT:?} --framework-search-paths \\"\${FRAMEWORK_SEARCH_PATHS:?}\\"";`;
+
+/**
+ * `gen/android/buildSrc/src/main/java/<pkg>/kotlin/BuildTask.kt`, byte for byte as
+ * `tauri android init` (cli 2.12.1) writes it when an absolute node drives it.
+ */
+const REAL_BUILD_TASK = readFileSync(
+  fileURLToPath(new URL("fixtures/BuildTask.real.kt", import.meta.url)),
+  "utf8"
+);
+
+/** The executable line in {@link REAL_BUILD_TASK}. */
+const REAL_EXECUTABLE_LINE = 'val executable = """/opt/homebrew/bin/node""";';
+
+/** The args line in {@link REAL_BUILD_TASK}. */
+const REAL_ARGS_LINE = 'val args = listOf("tauri", "android", "android-studio-script");';
+
+/**
+ * {@link REAL_BUILD_TASK} with the two runner lines set to a runner's literal forms.
+ * Function replacements, so a `$'` in an escaped path is not read as a replacement pattern.
+ */
+const buildTaskFor = (executable: string, firstArgument: string) =>
+  REAL_BUILD_TASK.replace(
+    REAL_EXECUTABLE_LINE,
+    () => `val executable = """${executable}""";`
+  ).replace(
+    REAL_ARGS_LINE,
+    () => `val args = listOf("${firstArgument}", "android", "android-studio-script");`
+  );
+
+/** {@link REAL_BUILD_TASK} after the rewrite onto {@link RUNNER}. */
+const PATCHED_BUILD_TASK = buildTaskFor(RUNNER.nodePath, RUNNER.tauriJsPath);
 
 describe("applyRunnerCommand", () => {
   const ios = { runner: RUNNER, verb: IOS_VERB, quote: '"' };
@@ -269,5 +302,130 @@ describe("patchRunner", () => {
 
     expect(result.patched).toEqual([sourcePath]);
     expect(await readFile(derivedPath, "utf8")).toBe(content);
+  });
+});
+
+describe("applyKotlinRunner", () => {
+  it("rewrites the real BuildTask.kt executable and first argument, nothing else", () => {
+    expect(PATCHED_BUILD_TASK).not.toBe(REAL_BUILD_TASK);
+    expect(applyKotlinRunner(REAL_BUILD_TASK, RUNNER)).toBe(PATCHED_BUILD_TASK);
+  });
+
+  it("is a no-op on a BuildTask.kt it already rewrote", () => {
+    expect(applyKotlinRunner(PATCHED_BUILD_TASK, RUNNER)).toBe(PATCHED_BUILD_TASK);
+  });
+
+  it("re-patches both lines when the node path changed (an fnm switch)", () => {
+    const switched = {
+      nodePath: "/Users/me/.local/state/fnm_multishells/123_456/bin/node",
+      tauriJsPath: "/repo/other/node_modules/@tauri-apps/cli/tauri.js"
+    };
+
+    expect(applyKotlinRunner(PATCHED_BUILD_TASK, switched)).toBe(
+      buildTaskFor(switched.nodePath, switched.tauriJsPath)
+    );
+  });
+
+  it("collapses a multi-word runner prefix (npm run -- tauri) to the tauri.js path", () => {
+    const npm = REAL_BUILD_TASK.replace(
+      REAL_ARGS_LINE,
+      'val args = listOf("run", "--", "tauri", "android", "android-studio-script");'
+    );
+
+    expect(applyKotlinRunner(npm, RUNNER)).toBe(PATCHED_BUILD_TASK);
+  });
+
+  it("escapes a quote, a dollar and a backslash for each Kotlin literal", () => {
+    const runner = {
+      nodePath: String.raw`/opt/we"ird $HOME\node`,
+      tauriJsPath: String.raw`/repo/we"ird $x\tauri.js`
+    };
+
+    expect(applyKotlinRunner(REAL_BUILD_TASK, runner)).toBe(
+      buildTaskFor(
+        // Raw string: no backslash escapes, so `"` and `$` go through `${'…'}` templates.
+        "/opt/we${'\"'}ird ${'$'}HOME\\node",
+        // Plain string: backslash escapes.
+        String.raw`/repo/we\"ird \$x\\tauri.js`
+      )
+    );
+  });
+
+  it("refuses a runner path carrying a line break", () => {
+    expect(() =>
+      applyKotlinRunner(REAL_BUILD_TASK, { nodePath: "/opt/node\nx", tauriJsPath: "/t.js" })
+    ).toThrow(/^\[native\] Refusing to write a runner path containing a line break/);
+  });
+
+  it("leaves an executable alone when the file has no android-studio-script args", () => {
+    const source = 'val executable = """/opt/homebrew/bin/node""";\n';
+
+    expect(applyKotlinRunner(source, RUNNER)).toBe(source);
+  });
+});
+
+describe("patchRunner on the Kotlin BuildTask shape", () => {
+  let dir: string;
+  let genDir: string;
+  let buildTask: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "moku-native-runner-kt-"));
+    genDir = path.join(dir, "src-tauri", "gen", "android");
+    const kotlinDir = path.join(
+      genDir,
+      "buildSrc",
+      "src",
+      "main",
+      "java",
+      "com",
+      "example",
+      "app",
+      "kotlin"
+    );
+    await mkdir(kotlinDir, { recursive: true });
+    buildTask = path.join(kotlinDir, "BuildTask.kt");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("reports the real BuildTask.kt as patched and writes the absolute runner", async () => {
+    await writeFile(buildTask, REAL_BUILD_TASK, "utf8");
+
+    const result = await patchRunner(dir, genDir, { target: "android", runner: RUNNER });
+
+    expect(result).toEqual({ patched: [buildTask], unchanged: [] });
+    expect(await readFile(buildTask, "utf8")).toBe(PATCHED_BUILD_TASK);
+  });
+
+  it("reports it unchanged on the second pass", async () => {
+    await writeFile(buildTask, REAL_BUILD_TASK, "utf8");
+    await patchRunner(dir, genDir, { target: "android", runner: RUNNER });
+
+    const result = await patchRunner(dir, genDir, { target: "android", runner: RUNNER });
+
+    expect(result).toEqual({ patched: [], unchanged: [buildTask] });
+  });
+
+  it.each([
+    [
+      "the executable is not a raw string",
+      REAL_BUILD_TASK.replace(REAL_EXECUTABLE_LINE, 'val executable = "node";')
+    ],
+    [
+      "the verb args are not in a listOf",
+      REAL_BUILD_TASK.replace(
+        REAL_ARGS_LINE,
+        'val args = arrayOf("tauri", "android", "android-studio-script");'
+      )
+    ]
+  ])("throws the unknown-runner error when %s", async (_case, content) => {
+    await writeFile(buildTask, content, "utf8");
+
+    await expect(patchRunner(dir, genDir, { target: "android", runner: RUNNER })).rejects.toThrow(
+      `[native] Could not find a Tauri runner command before "android android-studio-script" in ${buildTask}.`
+    );
   });
 });

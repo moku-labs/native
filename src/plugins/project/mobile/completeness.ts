@@ -8,7 +8,9 @@ import { genDirectoryPath } from "../layout";
 import type { CompletenessResult } from "../types";
 
 /**
- * Required top-level entries per mobile `gen/<platform>` tree (Tauri 2.9.x scaffolding).
+ * Required top-level entries per mobile `gen/<platform>` tree. The android set is verified
+ * against the tree `tauri android init` writes in tauri-cli 2.12.1: the settings file is
+ * Groovy `settings.gradle`, not `settings.gradle.kts`.
  * A partial init (tauri#13902) can leave some of these absent — `completeness` checks
  * the required-file SET, not mere directory existence.
  */
@@ -16,7 +18,7 @@ const REQUIRED_FILES: Readonly<Record<MobileTarget, readonly string[]>> = {
   ios: ["project.yml", "Assets.xcassets", "Sources", "ExportOptions.plist"],
   android: [
     "build.gradle.kts",
-    "settings.gradle.kts",
+    "settings.gradle",
     "gradle.properties",
     "app/build.gradle.kts",
     "app/src/main/AndroidManifest.xml"
@@ -31,7 +33,7 @@ const REQUIRED_FILES: Readonly<Record<MobileTarget, readonly string[]>> = {
  * @returns The frozen list of required paths, relative to `src-tauri/gen/<platform>`.
  * @example
  * ```ts
- * requiredFiles("android"); // ["build.gradle.kts", "settings.gradle.kts", ...]
+ * requiredFiles("android"); // ["build.gradle.kts", "settings.gradle", ...]
  * ```
  */
 export function requiredFiles(platform: MobileTarget): readonly string[] {

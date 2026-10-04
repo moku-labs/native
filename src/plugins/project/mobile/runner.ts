@@ -4,12 +4,18 @@
  * generated Xcode/Android-Studio build phase, and none of those resolve inside those IDEs —
  * so an unpatched tree fails on its first build phase. Every occurrence becomes the
  * absolute `<node> <tauri.js>` pair the tauri plugin itself spawns with.
+ *
+ * Two shapes carry the runner. Xcode and older Android sources hold ONE command string
+ * (`node tauri android android-studio-script`). The Android `BuildTask.kt` holds it as Kotlin
+ * code instead: `val executable = """node""";` plus
+ * `listOf("tauri", "android", "android-studio-script")`.
  */
 import { readFile } from "node:fs/promises";
 import type { MobileTarget, TauriRunner } from "../../../config";
 import type { PatchResult } from "../types";
 import { writeIfChanged } from "../writer";
 import { androidPatchFiles, iosPatchFiles } from "./files";
+import { kotlinString } from "./signing";
 
 /** `tauri ios init` bakes `<detected-runner> ios xcode-script …` into the Xcode project. */
 const IOS_RUNNER_VERB = "ios xcode-script";
@@ -62,6 +68,29 @@ const SHELL_METACHARACTER_PATTERN = /[\\"$`]/g;
 
 /** A line break inside a runner path would split the generated build phase into two commands. */
 const LINE_BREAK_PATTERN = /[\n\r]/;
+
+/**
+ * Characters a raw Kotlin string (`"""…"""`) cannot hold as they are. A raw string has no
+ * backslash escapes, so `$` (a template) and `"` (part of the closing `"""`) are written as
+ * `${'$'}` / `${'"'}` templates. A backslash is literal there and stays as it is.
+ */
+const KOTLIN_RAW_STRING_SPECIAL_PATTERN = /["$]/g;
+
+/** The Android verb as `BuildTask.kt` passes it: two separate `listOf` arguments. */
+const KOTLIN_VERB_ARGUMENTS = String.raw`"android"\s*,\s*"android-studio-script"`;
+
+/** One plain Kotlin string literal on one line, backslash escapes included. */
+const KOTLIN_STRING_LITERAL = String.raw`"(?:[^"\\\n]|\\.)*"`;
+
+/**
+ * The runner arguments of the `BuildTask.kt` `listOf(…)`: every string literal before the
+ * verb pair (`"tauri"`, npm's `"run", "--", "tauri"`, an already-patched `"<tauri.js>"`).
+ * Group 1 is the `listOf(` opener, kept as it is.
+ */
+const KOTLIN_RUNNER_ARGUMENTS = String.raw`(listOf\(\s*)(?:${KOTLIN_STRING_LITERAL}\s*,\s*)*?(?=${KOTLIN_VERB_ARGUMENTS})`;
+
+/** The raw-string body of `val executable = """…"""`. Group 1 is everything up to the body. */
+const KOTLIN_EXECUTABLE = String.raw`(\bval\s+executable\s*=\s*""")[^\n]*?(?=""")`;
 
 /** Regex metacharacters, escaped before a caller-supplied verb is embedded in a pattern. */
 const REGEX_METACHARACTER_PATTERN = /[.*+?^${}()|[\]\\]/g;
@@ -162,12 +191,112 @@ function unknownRunnerError(verb: string, filePath: string): Error {
  * ```
  */
 function escapeRunnerPath(value: string): string {
-  if (LINE_BREAK_PATTERN.test(value)) {
-    throw new Error(
-      `[native] Refusing to write a runner path containing a line break: ${JSON.stringify(value)}.\n  Install Node and the Tauri CLI under a path without line breaks, or set pluginConfigs.tauri.nodePath.`
-    );
-  }
+  assertSingleLine(value);
   return value.replaceAll(SHELL_METACHARACTER_PATTERN, match => `\\${match}`);
+}
+
+/**
+ * Refuses a runner path with a line break. In a shell build phase it would split the command
+ * in two; in a Kotlin literal it would end the line mid-string.
+ *
+ * @param value - The absolute path to check.
+ * @throws {Error} `[native]` when the path contains a line break.
+ * @example
+ * ```ts
+ * assertSingleLine("/opt/homebrew/bin/node"); // passes
+ * ```
+ */
+function assertSingleLine(value: string): void {
+  if (!LINE_BREAK_PATTERN.test(value)) return;
+
+  throw new Error(
+    `[native] Refusing to write a runner path containing a line break: ${JSON.stringify(value)}.\n  Install Node and the Tauri CLI under a path without line breaks, or set pluginConfigs.tauri.nodePath.`
+  );
+}
+
+/**
+ * Escapes one runner path for a raw Kotlin string (`"""…"""`), which has no backslash
+ * escapes: `$` and `"` become `${'$'}` / `${'"'}` templates, everything else stays as it is.
+ *
+ * @param value - The absolute path to escape.
+ * @returns The raw string's body.
+ * @throws {Error} `[native]` when the path contains a line break.
+ * @example
+ * ```ts
+ * kotlinRawStringBody("/opt/node $HOME/bin/node"); // "/opt/node ${'$'}HOME/bin/node"
+ * ```
+ */
+function kotlinRawStringBody(value: string): string {
+  assertSingleLine(value);
+  return value.replaceAll(KOTLIN_RAW_STRING_SPECIAL_PATTERN, match => `\${'${match}'}`);
+}
+
+/**
+ * Tests whether a file passes the Android verb as Kotlin `listOf` arguments at all.
+ *
+ * @param content - The file content to search.
+ * @returns Whether `"android", "android-studio-script"` appears.
+ * @example
+ * ```ts
+ * mentionsKotlinVerb('listOf("tauri", "android", "android-studio-script")'); // true
+ * ```
+ */
+function mentionsKotlinVerb(content: string): boolean {
+  return new RegExp(KOTLIN_VERB_ARGUMENTS).test(content);
+}
+
+/**
+ * Tests whether a file carries the full `BuildTask.kt` runner shape: the `listOf` arguments
+ * AND the raw-string `executable`. Rewriting only one of them still leaves a broken runner.
+ *
+ * @param content - The file content to search.
+ * @returns Whether both parts of the Kotlin runner are present.
+ * @example
+ * ```ts
+ * hasKotlinRunner(buildTaskSource); // true for the tauri 2.12 template
+ * ```
+ */
+function hasKotlinRunner(content: string): boolean {
+  return (
+    new RegExp(KOTLIN_RUNNER_ARGUMENTS).test(content) && new RegExp(KOTLIN_EXECUTABLE).test(content)
+  );
+}
+
+/**
+ * Rewrites the runner `tauri android init` bakes into `BuildTask.kt` as Kotlin code: the
+ * raw-string `executable` becomes the absolute Node path, and the `listOf` arguments before
+ * `"android", "android-studio-script"` become the one absolute `tauri.js` path. Gradle runs
+ * the executable directly, with no shell, so each path is escaped for its Kotlin literal
+ * only. Everything else is kept byte for byte. A file without that `listOf` is returned as
+ * it is, executable included.
+ *
+ * @param existing - The file content to rewrite.
+ * @param runner - The absolute Node and `tauri.js` paths.
+ * @returns The rewritten content (a no-op once already rewritten onto this runner).
+ * @throws {Error} `[native]` when a runner path contains a line break.
+ * @example
+ * ```ts
+ * applyKotlinRunner('val executable = """node""";\nval args = listOf("tauri", "android", "android-studio-script");', {
+ *   nodePath: "/opt/homebrew/bin/node",
+ *   tauriJsPath: "/repo/node_modules/@tauri-apps/cli/tauri.js"
+ * });
+ * // 'val executable = """/opt/homebrew/bin/node""";\nval args = listOf("/repo/node_modules/@tauri-apps/cli/tauri.js", "android", "android-studio-script");'
+ * ```
+ */
+export function applyKotlinRunner(existing: string, runner: TauriRunner): string {
+  if (!new RegExp(KOTLIN_RUNNER_ARGUMENTS).test(existing)) return existing;
+
+  const executable = kotlinRawStringBody(runner.nodePath);
+  assertSingleLine(runner.tauriJsPath);
+  const tauriJsArgument = `"${kotlinString(runner.tauriJsPath)}", `;
+
+  // Function replacements: a `$` in a path must never be read as a `$&`-style back-reference.
+  return existing
+    .replaceAll(new RegExp(KOTLIN_EXECUTABLE, "g"), (_match, open: string) => open + executable)
+    .replaceAll(
+      new RegExp(KOTLIN_RUNNER_ARGUMENTS, "g"),
+      (_match, open: string) => open + tauriJsArgument
+    );
 }
 
 /**
@@ -219,12 +348,59 @@ function quoteFor(filePath: string): string {
 }
 
 /**
+ * Tests whether every runner a file carries is one this rewrite recognizes. A file that
+ * never mentions the verb passes: it has no runner to rewrite.
+ *
+ * @param content - The file content to check.
+ * @param verb - The Tauri verb the build phase invokes.
+ * @returns Whether the rewrite can patch the file completely.
+ * @example
+ * ```ts
+ * isRecognizedRunner('val command = "deno task tauri-cli android android-studio-script"', "android android-studio-script"); // false
+ * ```
+ */
+function isRecognizedRunner(content: string, verb: string): boolean {
+  if (mentionsRunnerVerb(content, verb) && !hasRunnerCommand(content, verb)) return false;
+
+  const usesKotlinShape = verb === ANDROID_RUNNER_VERB && mentionsKotlinVerb(content);
+  return !usesKotlinShape || hasKotlinRunner(content);
+}
+
+/**
+ * Rewrites every runner shape a platform's file may carry: the one-string command, and on
+ * Android also the Kotlin `BuildTask.kt` shape.
+ *
+ * @param existing - The file content to rewrite.
+ * @param filePath - The file being patched, which picks the quote form.
+ * @param options - How to rewrite the command.
+ * @param options.runner - The absolute Node and `tauri.js` paths.
+ * @param options.verb - The Tauri verb the build phase invokes.
+ * @returns The rewritten content.
+ * @example
+ * ```ts
+ * rewriteRunner(buildTaskSource, buildTaskPath, { runner, verb: "android android-studio-script" });
+ * ```
+ */
+function rewriteRunner(
+  existing: string,
+  filePath: string,
+  options: { runner: TauriRunner; verb: string }
+): string {
+  const { runner, verb } = options;
+  const rewritten = applyRunnerCommand(existing, { runner, verb, quote: quoteFor(filePath) });
+  if (verb !== ANDROID_RUNNER_VERB) return rewritten;
+
+  return applyKotlinRunner(rewritten, runner);
+}
+
+/**
  * Applies the runner rewrite to every candidate file for a platform, reporting which
  * files actually changed. A second pass rewrites the absolute pair onto itself and
  * reports everything unchanged.
  *
  * A file that invokes the verb but carries a runner shape this rewrite does not recognize
- * is an ERROR, not an "unchanged" file: Tauri baked in a command that will not resolve
+ * (on Android also: a `listOf(…, "android", "android-studio-script")` without the
+ * `val executable = """…"""` beside it) is an ERROR, not an "unchanged" file: Tauri baked in a command that will not resolve
  * inside Xcode/Android Studio, and reporting success there means the failure surfaces much
  * later, as an opaque build-phase exit. A file that never mentions the verb is simply
  * unchanged.
@@ -256,15 +432,9 @@ export async function patchRunner(
   const unchanged: string[] = [];
   for (const file of files) {
     const existing = await readFile(file, "utf8");
-    if (mentionsRunnerVerb(existing, verb) && !hasRunnerCommand(existing, verb)) {
-      throw unknownRunnerError(verb, file);
-    }
+    if (!isRecognizedRunner(existing, verb)) throw unknownRunnerError(verb, file);
 
-    const rewritten = applyRunnerCommand(existing, {
-      runner: opts.runner,
-      verb,
-      quote: quoteFor(file)
-    });
+    const rewritten = rewriteRunner(existing, file, { runner: opts.runner, verb });
     const action = await writeIfChanged(file, rewritten, projectDirectory);
     (action === "written" ? patched : unchanged).push(file);
   }

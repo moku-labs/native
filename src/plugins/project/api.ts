@@ -210,7 +210,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Implements {@link Api.patchMobile}: hands Android its manifest entries, then logs.
+   * Implements {@link Api.patchMobile}: hands Android its manifest entries and
+   * `app.backgroundColor` (the status bar icons follow it), then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
@@ -221,7 +222,13 @@ export function createProjectApi(ctx: ProjectContext): Api {
    */
   const runPatchMobile = async (opts: PatchMobileOptions) => {
     const manifest = opts.target === "android" ? androidManifestEntries(ctx.global) : [];
-    const result = await patchMobile(ctx.global.projectDir, opts, ctx.global.signing, manifest);
+    const result = await patchMobile(
+      ctx.global.projectDir,
+      opts,
+      ctx.global.signing,
+      manifest,
+      ctx.global.app.backgroundColor
+    );
     ctx.log.info("project:patchMobile", { target: opts.target, patched: result.patched.length });
     return result;
   };

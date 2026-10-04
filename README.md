@@ -155,7 +155,7 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | `app.category` | `string?` | unset | Store category → `bundle.category`. |
 | `app.buildNumber` | `string?` | unset | Store build number → `bundle.{iOS,macOS}.bundleVersion`. |
 | `app.orientation` | `"portrait" \| "landscape" \| "any"` | unset (= `"any"`) | Build-time mobile orientation lock → `UISupportedInterfaceOrientations` (+ `~ipad`, `UIRequiresFullScreen`) in `Info.ios.plist`, `android:screenOrientation` on the Android main activity. No runtime lock. |
-| `app.backgroundColor` | `string?` | unset | Hex window colour (`"#10161d"`, `"#10161dff"`) → `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page does not cover. |
+| `app.backgroundColor` | `string?` | unset | Hex window colour (`"#10161d"`, `"#10161dff"`) → `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page does not cover. Android status bar icons follow it: light on a dark colour, dark on a light one. |
 | `web.build` | `string` | `"bun run build"` | Runs before a build, in `web.cwd`. |
 | `web.devCommand` | `string` | `"bun run dev"` | Runs before `dev`, in `web.cwd`. |
 | `web.devUrl` | `string` | `"http://localhost:5173"` | Dev server URL — also the `DevHandle.url` and the readiness-poll target. |

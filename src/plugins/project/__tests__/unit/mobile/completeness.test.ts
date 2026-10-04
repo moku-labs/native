@@ -46,7 +46,7 @@ describe("completeness", () => {
 
     expect(result.status).toBe("incomplete");
     if (result.status === "incomplete") {
-      expect(result.missing).toContain("settings.gradle.kts");
+      expect(result.missing).toContain("settings.gradle");
       expect(result.missing).not.toContain("build.gradle.kts");
     }
   });
@@ -57,6 +57,28 @@ describe("completeness", () => {
       const filePath = path.join(genDir, file);
       await mkdir(path.join(filePath, ".."), { recursive: true });
       await writeFile(filePath, "// stub", "utf8");
+    }
+
+    expect(completeness(dir, "android")).toEqual({ status: "complete" });
+  });
+
+  it("is complete for the exact tree `tauri android init` (tauri-cli 2.12.1) writes", async () => {
+    const genDir = path.join(dir, "src-tauri", "gen", "android");
+    for (const subDir of ["app/src/main", "buildSrc", "gradle"]) {
+      await mkdir(path.join(genDir, subDir), { recursive: true });
+    }
+    const files: Record<string, string> = {
+      "build.gradle.kts": "// stub",
+      "gradle.properties": "android.useAndroidX=true",
+      gradlew: "#!/bin/sh",
+      "gradlew.bat": "@echo off",
+      "settings.gradle": "include ':app'\napply from: 'tauri.settings.gradle'\n",
+      "app/build.gradle.kts": "// stub",
+      "app/proguard-rules.pro": "# stub",
+      "app/src/main/AndroidManifest.xml": "<manifest />"
+    };
+    for (const [file, content] of Object.entries(files)) {
+      await writeFile(path.join(genDir, file), content, "utf8");
     }
 
     expect(completeness(dir, "android")).toEqual({ status: "complete" });

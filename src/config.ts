@@ -173,7 +173,8 @@ export type Config = {
     /**
      * Hex window colour (`"#10161d"`, or `"#10161dff"` with alpha) →
      * `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page
-     * does not cover. Unset leaves the platform default (white in light mode).
+     * does not cover. Android status bar icons follow it: light icons on a dark colour,
+     * dark icons on a light one. Unset leaves the platform default (white in light mode).
      */
     backgroundColor?: string;
   };
