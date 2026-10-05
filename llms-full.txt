@@ -8,7 +8,8 @@
 > macos, windows, linux, ios, android. Package manager: bun exclusively. A real `node`
 > binary on PATH is a hard prerequisite (`@tauri-apps/cli` cannot run under bun).
 
-Version: 0.1.0. Dependencies: @moku-labs/common 0.3.0, @moku-labs/core 1.5.0, @tauri-apps/cli ^2.
+Version: 0.3.2. Peer dependencies (install beside the package): @moku-labs/core ^1.7.1, @moku-labs/common ^0.3.4. Dependencies: @tauri-apps/cli ^2.
+Install: `bun add @moku-labs/native @moku-labs/core @moku-labs/common`.
 Node >= 24, Bun >= 1.3.14. TypeScript strict with exactOptionalPropertyTypes and noUncheckedIndexedAccess.
 
 Table of contents:

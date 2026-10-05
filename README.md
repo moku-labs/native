@@ -29,11 +29,11 @@
 ## Quick start
 
 ```sh
-bun add @moku-labs/native
+bun add @moku-labs/native @moku-labs/core @moku-labs/common
 ```
 
 > [!NOTE]
-> **Status: `0.x` — early.** `@moku-labs/core` and `@moku-labs/common` install transitively as regular dependencies — one `bun add` is the whole install. A real `node` binary on PATH is a hard prerequisite (`@tauri-apps/cli` cannot run under bun); `native doctor` checks it.
+> **Status: `0.x` — early.** `@moku-labs/core` (`^1.7.1`) and `@moku-labs/common` (`^0.3.4`) are peer dependencies — install them beside the package, as above. A real `node` binary on PATH is a hard prerequisite (`@tauri-apps/cli` cannot run under bun); `native doctor` checks it.
 
 A native app is its own `createApp` — typically `src/native.ts`, beside your web app:
 
