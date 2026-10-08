@@ -78,4 +78,102 @@ describe("webScriptCheck.run", () => {
 
     expect(result.message.toLowerCase()).toContain("not executed");
   });
+
+  it("fails when `bun run build` names a missing script", async () => {
+    const fs = {
+      readFile: vi.fn(async (_path: string) => JSON.stringify({ scripts: { dev: "vite" } }))
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ fs }));
+
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain('web.build ("bun run build")');
+    expect(result.message).not.toContain("web.devCommand");
+  });
+
+  it("keeps the `<pm> <script>` shorthand", async () => {
+    const fs = {
+      readFile: vi.fn(async (_path: string) => JSON.stringify({ scripts: { test: "x" } }))
+    };
+    const global = {
+      ...baseGlobalConfig,
+      web: { ...baseGlobalConfig.web, build: "npm test", devCommand: "yarn dev" }
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ fs, global }));
+
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain('web.devCommand ("yarn dev")');
+    expect(result.message).not.toContain("web.build");
+  });
+
+  it("passes without reading package.json when both are direct commands", async () => {
+    const readFile = vi.fn(async (_path: string) => JSON.stringify({ scripts: {} }));
+    const global = {
+      ...baseGlobalConfig,
+      web: {
+        ...baseGlobalConfig.web,
+        build:
+          '"/opt/bun/bin/bun" "/repo/node_modules/@moku-labs/game/bin/moku-game.mjs" --root /repo build',
+        devCommand:
+          '"/opt/bun/bin/bun" "/repo/node_modules/@moku-labs/game/bin/moku-game.mjs" --root /repo dev'
+      }
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ fs: { readFile }, global }));
+
+    expect(result.status).toBe("pass");
+    expect(result.message).toBe(
+      "[native] web.build and web.devCommand are direct commands, not package scripts; not checked."
+    );
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("treats a non-package-manager command as direct", async () => {
+    const global = {
+      ...baseGlobalConfig,
+      web: { ...baseGlobalConfig.web, build: "vite build", devCommand: "./serve.sh" }
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ global }));
+
+    expect(result.status).toBe("pass");
+  });
+
+  it("checks only the script when the other is a direct command", async () => {
+    const fs = { readFile: vi.fn(async (_path: string) => JSON.stringify({ scripts: {} })) };
+    const global = {
+      ...baseGlobalConfig,
+      web: {
+        ...baseGlobalConfig.web,
+        build: '"/opt/bun/bin/bun" "/repo/bin/moku-game.mjs" --root /repo build'
+      }
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ fs, global }));
+
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain('web.devCommand ("bun run dev")');
+    expect(result.message).toContain(
+      "web.build is a direct command, not a package script; not checked."
+    );
+  });
+
+  it("passes a mixed config when the script one is present", async () => {
+    const fs = {
+      readFile: vi.fn(async (_path: string) => JSON.stringify({ scripts: { dev: "vite" } }))
+    };
+    const global = {
+      ...baseGlobalConfig,
+      web: {
+        ...baseGlobalConfig.web,
+        build: '"/opt/bun/bin/bun" "/repo/bin/moku-game.mjs" --root /repo build'
+      }
+    };
+
+    const result = await webScriptCheck.run(createCheckInput({ fs, global }));
+
+    expect(result.status).toBe("pass");
+    expect(result.message).toContain("web.build is a direct command");
+  });
 });
