@@ -518,7 +518,7 @@ export async function runPipeline(
 
   const durationMs = Math.round(performance.now() - startedAt);
   const { outPath, artifacts } = collect.result;
-  ctx.emit("native:complete", { target, outPath, artifacts, durationMs });
+  ctx.emit("native:complete", { target, outPath, artifacts, durationMs, profile: "store" });
 
   return { target, outPath, artifacts, durationMs, phases };
 }

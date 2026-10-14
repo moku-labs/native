@@ -106,7 +106,8 @@ describe("cross-plugin build pipeline (S05–S07)", () => {
         target: "macos",
         outPath: result.outPath,
         artifacts: result.artifacts,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
+        profile: "store"
       });
 
       // The BuildResult covers all six phases in canonical order.

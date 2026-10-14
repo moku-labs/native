@@ -34,7 +34,29 @@ export type BuildFlavor = {
   simulator?: boolean | undefined;
   /** Android: emit a store bundle (`.aab`) instead of the default installable `.apk`. */
   aab?: boolean | undefined;
+  /**
+   * Build the debug profile instead of the store one: a still-optimized build that installs
+   * next to the store app (`.debug` id, "(debug)" name), is signed with the debug keystore,
+   * forwards the page console and allows cleartext. Unset means the store profile.
+   *
+   * @example
+   * ```ts
+   * await native.build.run({ target: "android", debug: true });
+   * ```
+   */
+  debug?: boolean | undefined;
 };
+
+/**
+ * Which profile a build is made in. `"store"` is the shippable build; `"debug"` is the
+ * on-device test build of {@link BuildFlavor.debug}. The page sees `"store"` as `"release"`.
+ *
+ * @example
+ * ```ts
+ * const profile: BuildProfile = flavor.debug ? "debug" : "store";
+ * ```
+ */
+export type BuildProfile = "store" | "debug";
 
 /** Host platform → the one desktop target that host can package locally. */
 const HOST_TARGET: Partial<Record<NodeJS.Platform, Target>> = {
@@ -89,6 +111,17 @@ export type CapabilityConfigMap = {
   "deep-link": { mode: "scheme"; scheme: string };
   back: Record<string, never>;
   haptics: Record<string, never>;
+  /**
+   * The page bridge `globalThis.__MOKU_NATIVE__` (Android): display rate, thermal state,
+   * safe-area insets, device info. Composed like every capability, by naming it in
+   * `config.system`; this entry only carries its (empty) parameters and composes nothing alone.
+   *
+   * @example
+   * ```ts
+   * createApp({ config: { system: [{ name: "shell" }], capabilities: { shell: {} } } });
+   * ```
+   */
+  shell: Record<string, never>;
 };
 
 /**
@@ -177,6 +210,17 @@ export type Config = {
      * dark icons on a light one. Unset leaves the platform default (white in light mode).
      */
     backgroundColor?: string;
+    /**
+     * Android adaptive icon inset, in percent of the 108 dp canvas per side (`0 < n ≤ 30`).
+     * Wraps the launcher foreground in an `<inset>` so full-bleed art survives the mask.
+     * Unset leaves the icon untouched. `19.44` keeps the art inside the 66 dp safe zone.
+     *
+     * @example
+     * ```ts
+     * createApp({ config: { app: { name: "Demo", identifier: "com.acme.demo", adaptiveIconInset: 19.44 } } });
+     * ```
+     */
+    adaptiveIconInset?: number;
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
@@ -209,6 +253,8 @@ export type NativeCompleteEvent = {
   outPath: string;
   artifacts: readonly string[];
   durationMs: number;
+  /** The profile the artifacts were built in — the CLI marks a debug delivery. */
+  profile: BuildProfile;
 };
 
 /**

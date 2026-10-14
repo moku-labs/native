@@ -112,6 +112,7 @@ export type {
   AppleExportMethod,
   AppleSigning,
   BuildFlavor,
+  BuildProfile,
   CapabilityConfigMap,
   Config,
   Events,

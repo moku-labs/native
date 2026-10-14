@@ -115,7 +115,8 @@ describe("createCliHandlers — rendering", () => {
       target: "macos",
       outPath: "dist-native/macos",
       artifacts: ["dist-native/macos/App.dmg"],
-      durationMs: 1000
+      durationMs: 1000,
+      profile: "store"
     };
     handlers["native:complete"](completePayload);
 

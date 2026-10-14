@@ -123,7 +123,8 @@ describe("renderCompleteEvent", () => {
       target: "macos",
       outPath: "dist-native/macos",
       artifacts: ["dist-native/macos/App_1.0.0.dmg"],
-      durationMs: 42_000
+      durationMs: 42_000,
+      profile: "store"
     };
 
     renderCompleteEvent(ui, payload, "Demo App");

@@ -336,7 +336,8 @@ describe("build plugin integration", () => {
           target: "macos",
           outPath: "dist-native/macos",
           artifacts: [],
-          durationMs: 1
+          durationMs: 1,
+          profile: "store"
         })
       ).not.toThrow();
       // @ts-expect-error — native:complete has no `phase` field
