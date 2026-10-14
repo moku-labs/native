@@ -137,6 +137,38 @@ describe("renderCompleteEvent", () => {
     // A box has at least a top border, one content line, and a bottom border.
     expect(lines.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("marks a debug delivery with `debug build → <outPath>`", () => {
+    const { lines, ui } = createSink();
+    const payload: NativeCompleteEvent = {
+      target: "android",
+      outPath: "dist-native/android-debug",
+      artifacts: ["dist-native/android-debug/app-universal-release.apk"],
+      durationMs: 9000,
+      profile: "debug"
+    };
+
+    renderCompleteEvent(ui, payload, "Demo App");
+
+    expect(lines.join("\n")).toContain("debug build → dist-native/android-debug");
+  });
+
+  it("never marks a store delivery as a debug build", () => {
+    const { lines, ui } = createSink();
+    const payload: NativeCompleteEvent = {
+      target: "android",
+      outPath: "dist-native/android",
+      artifacts: [],
+      durationMs: 9000,
+      profile: "store"
+    };
+
+    renderCompleteEvent(ui, payload, "Demo App");
+
+    const text = lines.join("\n");
+    expect(text).toContain("dist-native/android");
+    expect(text).not.toContain("debug build");
+  });
 });
 
 describe("renderCheckEvent", () => {

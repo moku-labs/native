@@ -35,11 +35,86 @@ export type State = {
 
 /** Public API of the cli plugin — typed verbs, NO argv parsing. */
 export type Api = {
+  /**
+   * Builds one target (default: the host target) or every configured target with
+   * `{ all: true }` (which ignores any given `target`). The flavor flags pass straight
+   * through to `build.run`/`build.runAll`. Progress renders live through the plugin's
+   * `native:phase`/`native:complete` hooks — a debug delivery is marked
+   * `debug build → <outPath>` in the completion panel. A failure (the store refusal of an
+   * editor-agent page included) renders the scrubbed stderr tail before the `[native]`
+   * error line, then rethrows unchanged.
+   *
+   * @param opts - Build options.
+   * @param opts.target - The packaging target (default: the resolved host target).
+   * @param opts.all - Build every configured target instead of one (ignores `target`).
+   * @param opts.simulator - iOS: build for the host's simulator arch instead of a device archive.
+   * @param opts.aab - Android: emit a store bundle (`.aab`) instead of an `.apk`.
+   * @param opts.debug - Build the debug profile (Android only), delivered to `<outDir>/<target>-debug`.
+   * @returns Resolves once the build (or all builds) complete.
+   * @throws {Error} Whatever the pipeline throws — after rendering the failure.
+   *   `[native] --debug builds Android only …` when `debug` is set with a non-android target,
+   *   (or `all: true` with a non-android target).
+   * @example
+   * ```ts
+   * // A debug build for the phone, installed beside the store app; the completion panel
+   * // reads "debug build → dist-native/android-debug".
+   * await app.cli.build({ target: "android", debug: true });
+   * // Every configured target, store profile.
+   * await app.cli.build({ all: true });
+   * ```
+   */
   build(
     opts?: BuildFlavor & { target?: Target | undefined; all?: boolean | undefined }
   ): Promise<void>;
+  /**
+   * Runs the dev loop. Brings the generated project to a buildable state first —
+   * `build.prepare` runs scaffold → codegen → icons, so `tauri dev` never meets a
+   * half-generated tree, and a failure there renders exactly like a failed build — then
+   * awaits the dev handle's `ready` and `exited`. It NEVER stores the handle and NEVER calls
+   * `stop()` itself (D-002); teardown is owned by the tauri seam (signal handlers,
+   * process-group kill).
+   *
+   * @param opts - Dev options.
+   * @param opts.target - Packaging target (default: the resolved host target).
+   * @returns Resolves once the dev session exits cleanly (a Ctrl-C exit included).
+   * @throws {Error} `[native]` when the host has no desktop target, or when the dev
+   *   session exits with a non-zero code.
+   * @example
+   * ```ts
+   * // Live-reload the app in the iOS simulator until Ctrl-C.
+   * await app.cli.dev({ target: "ios" });
+   * ```
+   */
   dev(opts?: { target?: Target | undefined }): Promise<void>;
+  /**
+   * Runs diagnosis, renders the summary, and returns whether every check passed. The
+   * per-check rows (with their fix-its) print exactly once, live from this plugin's
+   * `doctor:check` hook; this method adds only the counts and the verdict.
+   *
+   * @param opts - Optional scoping.
+   * @param opts.target - A single target to diagnose (default: every configured target + host).
+   * @returns Whether the report is `ok` (no failing check) — the caller sets `process.exitCode`.
+   * @example
+   * ```ts
+   * // A CI step that fails when the Android toolchain is incomplete.
+   * if (!(await app.cli.doctor({ target: "android" }))) process.exitCode = 1;
+   * ```
+   */
   doctor(opts?: { target?: Target | undefined }): Promise<boolean>;
+  /**
+   * Cleans derived state. Without a `target`, this wipes the ENTIRE project directory —
+   * gated behind a styled confirm — before delegating to `project.clean` (D-006: project
+   * owns the destructive filesystem knowledge, cli is a thin delegate).
+   *
+   * @param opts - Clean options.
+   * @param opts.target - A single target to clean (default: confirm, then wipe everything).
+   * @returns Resolves once cleaning completes (or immediately, if the user declines).
+   * @example
+   * ```ts
+   * // Regenerate only the Android tree on the next build; no confirm is asked.
+   * await app.cli.clean({ target: "android" });
+   * ```
+   */
   clean(opts?: { target?: Target | undefined }): Promise<void>;
 };
 

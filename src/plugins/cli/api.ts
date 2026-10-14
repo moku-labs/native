@@ -66,33 +66,25 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
 
   return {
     /**
-     * Builds one target (default: the host target) or every configured target with
-     * `{ all: true }` (which ignores any given `target`). Progress renders live through
-     * the plugin's `native:phase`/`native:complete` hooks; a failure renders the scrubbed
-     * stderr tail in a box before the error line and then rethrows unchanged.
+     * Implements {@link Api.build}: one pipeline pass or all of them, the flavor flags
+     * (`simulator`, `aab`, `debug`) forwarded unchanged; a failure is rendered, then rethrown.
      *
-     * @param opts - Build options.
-     * @param opts.target - The packaging target (default: the resolved host target).
-     * @param opts.all - Build every configured target instead of one (ignores `target`).
-     * @param opts.simulator - iOS: build for the host's simulator arch instead of a device archive.
-     * @param opts.aab - Android: emit a store bundle (`.aab`) instead of an `.apk`.
-     * @returns Resolves once the build (or all builds) complete.
-     * @throws {Error} Whatever the pipeline throws — after rendering the failure.
+     * @param opts - See {@link Api.build}.
+     * @returns See {@link Api.build}.
      * @example
      * ```ts
-     * await app.cli.build({ target: "ios", simulator: true });
-     * await app.cli.build({ all: true });
+     * await api.build({ target: "android", debug: true }); // build.run({ target: "android", debug: true, … })
      * ```
      */
     async build(opts = {}) {
-      const { simulator, aab } = opts;
+      const { simulator, aab, debug } = opts;
 
       try {
         if (opts.all) {
-          await build.runAll({ simulator, aab });
+          await build.runAll({ simulator, aab, debug });
           return;
         }
-        await build.run({ target: opts.target ?? hostTarget(), simulator, aab });
+        await build.run({ target: opts.target ?? hostTarget(), simulator, aab, debug });
       } catch (error) {
         renderBuildFailure(ui, error);
         throw error;
@@ -100,21 +92,14 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Runs the dev loop. Brings the generated project to a buildable state first —
-     * `build.prepare` runs scaffold → codegen → icons, so `tauri dev` never meets a
-     * half-generated tree, and a failure there renders exactly like a failed build — then
-     * awaits the dev handle's `ready` and `exited`. It
-     * NEVER stores the handle and NEVER calls `stop()` itself (D-002); teardown is owned
-     * entirely by the tauri seam's own control flow (signal handlers, process-group kill).
+     * Implements {@link Api.dev}: prepare first (a failure renders like a failed build), then
+     * await the dev handle's `ready` and `exited` — never storing it, never stopping it (D-002).
      *
-     * @param opts - Dev options.
-     * @param opts.target - Packaging target (default: the resolved host target).
-     * @returns Resolves once the dev session exits cleanly.
-     * @throws {Error} `[native]` when the host has no desktop target, or when the dev
-     *   session exits with a non-zero code.
+     * @param opts - See {@link Api.dev}.
+     * @returns See {@link Api.dev}.
      * @example
      * ```ts
-     * await app.cli.dev({ target: "ios" });
+     * await api.dev({ target: "ios" }); // build.prepare({ target: "ios" }), then tauri.dev
      * ```
      */
     async dev(opts = {}) {
@@ -144,16 +129,13 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Runs diagnosis, renders the summary, and returns whether every check passed. The
-     * per-check rows (with their fix-its) print exactly once, live from this plugin's
-     * `doctor:check` hook; this method adds only the counts and the verdict.
+     * Implements {@link Api.doctor}: run the diagnosis, render the counts-only summary.
      *
-     * @param opts - Optional scoping.
-     * @param opts.target - A single target to diagnose (default: every configured target + host).
-     * @returns Whether the report is `ok` (no failing check) — the caller sets `process.exitCode`.
+     * @param opts - See {@link Api.doctor}.
+     * @returns See {@link Api.doctor}.
      * @example
      * ```ts
-     * if (!(await app.cli.doctor())) process.exitCode = 1;
+     * await api.doctor({ target: "android" }); // false when a check failed
      * ```
      */
     async doctor(opts = {}) {
@@ -163,16 +145,14 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Cleans derived state. Without a `target`, this wipes the ENTIRE project directory —
-     * gated behind a styled confirm — before delegating to `project.clean` (D-006: project
-     * owns the destructive filesystem knowledge, cli is a thin delegate).
+     * Implements {@link Api.clean}: confirm-gate the whole-directory wipe, then delegate to
+     * `project.clean` (D-006).
      *
-     * @param opts - Clean options.
-     * @param opts.target - A single target to clean (default: confirm, then wipe everything).
-     * @returns Resolves once cleaning completes (or immediately, if the user declines).
+     * @param opts - See {@link Api.clean}.
+     * @returns See {@link Api.clean}.
      * @example
      * ```ts
-     * await app.cli.clean({ target: "android" });
+     * await api.clean({ target: "android" }); // no confirm for a single target
      * ```
      */
     async clean(opts = {}) {

@@ -81,8 +81,8 @@ export type Api = {
    *   `debug` is set for any target but android — before any phase runs.
    * @example
    * ```ts
-   * // The cli's dev command prepares the debug tree of the phone build: the shell crate is
-   * // generated and the debug patches are applied, nothing is compiled.
+   * // A consumer prepares the debug tree of the phone build to open it in Android Studio: the
+   * // shell crate is generated and the debug patches are applied, nothing is compiled.
    * await ctx.require(buildPlugin).prepare({ target: "android", debug: true });
    * ```
    */

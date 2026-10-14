@@ -207,14 +207,15 @@ export function renderPhaseEvent(
 /**
  * Renders the `native:complete` summary panel — app name, target, artifact paths, and
  * total duration — as a branded box (`app.name` is the panel header, per config's
- * "Global fields consumed").
+ * "Global fields consumed"). A debug delivery (`profile: "debug"`) reads
+ * `debug build → <outPath>` on its output line, so it is never mistaken for a shippable one.
  *
  * @param ui - The branded console to render through.
  * @param payload - The completion event payload.
  * @param appName - The composed app's display name.
  * @example
  * ```ts
- * renderCompleteEvent(ui, { target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 42000 }, "Demo");
+ * renderCompleteEvent(ui, { target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 42000, profile: "store" }, "Demo");
  * ```
  */
 export function renderCompleteEvent(
@@ -222,10 +223,11 @@ export function renderCompleteEvent(
   payload: NativeCompleteEvent,
   appName: string
 ): void {
+  const output = payload.profile === "debug" ? `debug build → ${payload.outPath}` : payload.outPath;
   const lines = [
     `${appName} — ${payload.target} build complete`,
     `Target     ${payload.target}`,
-    `Output     ${payload.outPath}`,
+    `Output     ${output}`,
     ...payload.artifacts.map(artifact => `Artifact   ${artifact}`),
     `Duration   ${payload.durationMs}ms`
   ];

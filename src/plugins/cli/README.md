@@ -13,7 +13,7 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
 
 | Verb | Signature | What it does |
 |---|---|---|
-| `build` | `build(opts?: { target?: Target; all?: boolean; simulator?: boolean; aab?: boolean }): Promise<void>` | One target (default: the host target) or every configured target with `{ all: true }`. |
+| `build` | `build(opts?: { target?: Target; all?: boolean; simulator?: boolean; aab?: boolean; debug?: boolean }): Promise<void>` | One target (default: the host target) or every configured target with `{ all: true }`. |
 | `dev` | `dev(opts?: { target?: Target }): Promise<void>` | Prepares the project, then runs the dev loop until it exits. |
 | `doctor` | `doctor(opts?: { target?: Target }): Promise<boolean>` | Diagnoses and returns `report.ok`. |
 | `clean` | `clean(opts?: { target?: Target }): Promise<void>` | Deletes derived state (confirm-gated without a `target`). |
@@ -21,9 +21,12 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
 - **`build`** — the host-target default comes from the framework's own `hostTargets`
   (darwin→macos, win32→windows, linux→linux; mobile targets are never inferred; cli
   keeps no second table). `simulator` (iOS: build for the host's simulator arch) and `aab`
-  (Android: emit a store bundle instead of an apk) pass straight through to
+  (Android: emit a store bundle instead of an apk) and `debug` (the debug profile, Android
+  only, delivered to `<outDir>/<target>-debug`) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
-  hooks. On failure the classified `TauriError`'s scrubbed `stderrTail` prints above the
+  hooks; a debug delivery's completion panel reads `debug build → <outPath>`. The store
+  refusal of an editor-agent page is an ordinary `[native]` error and renders like any other
+  failure. On failure the classified `TauriError`'s scrubbed `stderrTail` prints above the
   `[native]` error line, then the error rethrows unchanged. One pure decision,
   `tailLineBound(process.stdout.columns)`, settles both how wide a tail line may be and
   whether it is framed at all:
@@ -101,7 +104,7 @@ makes zero raw `console.*` calls.
   `createLogSink` turns a console into the log sink `onInit` installs; pure
   formatters build the phase spinner lines
   (`spinnerFrameAt`, real progress ticks only — never a fake percentage), the `native:complete`
-  `box` panel (target, artifact paths, total duration), the live doctor rows + fix-its, the
+  `box` panel (target, artifact paths, total duration; `debug build → <outPath>` for a debug delivery), the live doctor rows + fix-its, the
   counts-only summary, and the failed-build stderr-tail box. All failure text uses the
   `[native]` actionable-suggestion style (spec/11 Part 3).
 - **`handlers.ts`** keeps the running phase's `startedAt` in `ctx.state.progress` — not in
