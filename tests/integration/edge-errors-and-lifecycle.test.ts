@@ -192,6 +192,7 @@ describe("S18 — cross-plugin error propagation", () => {
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe(
       "[native] tauri signing failed.\n" +
+        "  error running bundle_dmg: failed to run codesign\n" +
         "  Check your signing configuration (certificates/keystore/keychain) and run `native doctor`."
     );
     expect(caught).toMatchObject({ name: "TauriError", kind: "signing-failed", exitCode: 1 });

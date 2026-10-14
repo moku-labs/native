@@ -82,9 +82,9 @@ describe("generateTauriConf", () => {
     ]);
   });
 
-  it("keeps iOS and android blocks present but empty when no store metadata is set", () => {
+  it("keeps the android block empty and gives iOS only its minimum when nothing is set", () => {
     const conf = confFor("macos");
-    expect(conf.bundle.iOS).toEqual({});
+    expect(conf.bundle.iOS).toEqual({ minimumSystemVersion: "15.0" });
     expect(conf.bundle.android).toEqual({});
     expect(conf.bundle.macOS).toBeUndefined();
     expect(conf.bundle.category).toBeUndefined();
@@ -100,14 +100,14 @@ describe("generateTauriConf", () => {
         buildNumber: "42"
       },
       signing: {
-        apple: { macosMinimumSystemVersion: "12.0", iosMinimumSystemVersion: "15.0" }
+        apple: { macosMinimumSystemVersion: "12.0", iosMinimumSystemVersion: "16.4" }
       }
     });
     const [artifact] = generateTauriConf(input);
     const conf = JSON.parse(artifact?.content ?? "{}");
 
     expect(conf.bundle.category).toBe("Productivity");
-    expect(conf.bundle.iOS).toEqual({ minimumSystemVersion: "15.0", bundleVersion: "42" });
+    expect(conf.bundle.iOS).toEqual({ minimumSystemVersion: "16.4", bundleVersion: "42" });
     expect(conf.bundle.macOS).toEqual({ minimumSystemVersion: "12.0", bundleVersion: "42" });
   });
 
@@ -125,7 +125,10 @@ describe("generateTauriConf", () => {
     const [artifact] = generateTauriConf(input);
     const conf = JSON.parse(artifact?.content ?? "{}");
 
-    expect(conf.bundle.iOS).toEqual({ developmentTeam: "ABCDE12345" });
+    expect(conf.bundle.iOS).toEqual({
+      developmentTeam: "ABCDE12345",
+      minimumSystemVersion: "15.0"
+    });
     expect(conf.bundle.macOS).toEqual({
       signingIdentity: "Developer ID Application: Alex (ABCDE12345)",
       providerShortName: "AlexCo",

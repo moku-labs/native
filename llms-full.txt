@@ -134,7 +134,7 @@ export type AppleSigning = {
   appStore?: boolean;                 // generate a sandbox entitlements file when `entitlements` is unset
   exportMethod?: AppleExportMethod;   // tauri ios build --export-method
   macosMinimumSystemVersion?: string;
-  iosMinimumSystemVersion?: string;
+  iosMinimumSystemVersion?: string; // default "15.0" (Tauri's 14.0 is refused by Xcode 27)
 };
 
 /** Signing configuration — env-var REFERENCES and config-safe identifiers only, never raw secrets. */
@@ -300,7 +300,7 @@ GLOBAL Config (D-005 — the substantive surface; every plugin reads it via ctx.
 | signing.apple.appStore | boolean? | (absent) | true + no `entitlements` + macos target => generate src-tauri/Entitlements.plist (app-sandbox + network-client) and point bundle.macOS.entitlements at it. |
 | signing.apple.exportMethod | AppleExportMethod? | (absent) | Read by the build plugin and passed to `tauri ios build --export-method` on DEVICE builds. |
 | signing.apple.macosMinimumSystemVersion | string? | (absent) | -> bundle.macOS.minimumSystemVersion. |
-| signing.apple.iosMinimumSystemVersion | string? | (absent) | -> bundle.iOS.minimumSystemVersion. |
+| signing.apple.iosMinimumSystemVersion | string? | "15.0" | -> bundle.iOS.minimumSystemVersion. Tauri's own 14.0 default is refused by Xcode 27. |
 | signing.android.keystorePath | string? | (absent) | Path to the release keystore (config-safe identifier). Absent => the Gradle signing block is REMOVED. |
 | signing.android.keystorePasswordEnv | string? | (absent) | NAME of the env var holding the keystore password — a reference, never the secret. |
 | signing.android.keyPasswordEnv | string? | (absent => keystorePasswordEnv) | NAME of the env var holding the key password. |
@@ -1643,6 +1643,9 @@ indented actionable second line ("  <fix-it / next command>").
   "invalid config" (config-invalid) carry neither an "error" nor a "failed", so both are
   signal triggers in their own right; a table test feeds one real-shaped line per taxonomy
   alternative through classify() to keep that true.
+  The message quotes one cause line between the bucket and the advice: the first
+  error:/error[…]/panicked line among the last 15 signal lines, else the first of them, else
+  the last output line (cut at 300 chars).
   stderrTail is built as: the LAST 15 de-duplicated SIGNAL lines of the scrubbed output
   (/\berror\b[: ]/, /^\s*Error\b/, panicked, cannot find, not found, no <x> found, not
   installed, not booted, invalid config, PhaseScriptExecution, failed — skipping

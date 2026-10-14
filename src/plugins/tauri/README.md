@@ -121,6 +121,14 @@ it would bucket *every* iOS failure as `signing-failed`. `no code signing` is de
 signing pattern; a real refusal says `No signing certificate "…" found` or
 `requires a provisioning profile`.
 
+### The message names the cause
+
+A thrown error is often printed without its tail (a test runner, a log line), so the message
+quotes one line between the bucket and the advice: the first `error:` / `error[…]` /
+`panicked` line among the last 15 signal lines, else the first of those signal lines, else
+the last output line, cut at 300 characters. `[native] tauri unknown.` alone told nobody
+that Xcode had refused the deployment target.
+
 ### `stderrTail`
 
 A plain "last 20 lines" tail is useless for xcodebuild: those lines are a simulator destination

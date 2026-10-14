@@ -21,6 +21,14 @@ const BUNDLE_ICONS = [
 ];
 
 /**
+ * The iOS deployment target used when `signing.apple.iosMinimumSystemVersion` is unset.
+ * Tauri's own default is 14.0, which Xcode 27 rejects outright ("the range of supported
+ * deployment target versions is 15.0 to 27.0.x", xcodebuild exit 65), so every iOS build
+ * on a current Xcode failed until the person found and set this value themselves.
+ */
+const DEFAULT_IOS_MINIMUM_SYSTEM_VERSION = "15.0";
+
+/**
  * Drops the entries whose value is unset, so an unconfigured store/signing field is
  * ABSENT from the JSON rather than present-and-null (Tauri rejects null there).
  *
@@ -43,8 +51,9 @@ function compact(
 
 /**
  * Builds the `bundle` block — icon set, optional store metadata, and the signing
- * identifiers. `iOS` and `android` always exist (Tauri expects the keys); `macOS` and
- * `windows` appear only when something is actually configured for them.
+ * identifiers. `iOS` and `android` always exist (Tauri expects the keys), and `iOS` always
+ * carries a deployment target Xcode accepts; `macOS` and `windows` appear only when
+ * something is actually configured for them.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns The `bundle` object for tauri.conf.json.
@@ -73,7 +82,7 @@ function buildBundle(input: GeneratorInput) {
     ...compact([["category", app.category]]),
     iOS: compact([
       ["developmentTeam", apple.teamId],
-      ["minimumSystemVersion", apple.iosMinimumSystemVersion],
+      ["minimumSystemVersion", apple.iosMinimumSystemVersion ?? DEFAULT_IOS_MINIMUM_SYSTEM_VERSION],
       ["bundleVersion", app.buildNumber]
     ]),
     ...(Object.keys(macOS).length > 0 ? { macOS } : {}),

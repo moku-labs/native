@@ -577,7 +577,7 @@ named file inside `gen/android`, never a recursive remove).
 | `providerShortName` | `bundle.macOS.providerShortName` |
 | `entitlements` | `bundle.macOS.entitlements`, rebased onto `src-tauri` |
 | `appStore: true` | generates `src-tauri/Entitlements.plist` (sandbox + network client) for macOS when `entitlements` is unset |
-| `macosMinimumSystemVersion` / `iosMinimumSystemVersion` | `bundle.{macOS,iOS}.minimumSystemVersion` |
+| `macosMinimumSystemVersion` / `iosMinimumSystemVersion` | `bundle.{macOS,iOS}.minimumSystemVersion`; iOS defaults to `"15.0"` when unset, because Tauri's 14.0 default is below Xcode 27's floor and fails every iOS build |
 | `exportMethod` | read by the `tauri` plugin, not by this one |
 
 `app.category` and `app.buildNumber` map to `bundle.category` and
