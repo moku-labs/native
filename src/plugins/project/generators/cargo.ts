@@ -1,6 +1,9 @@
 /**
- * @file project plugin generator — Cargo.toml with registry-pinned crate dependencies.
+ * @file project plugin generator — Cargo.toml with registry-pinned crate dependencies and
+ * the path dependency of every generated local crate.
  */
+import path from "node:path";
+import type { ResolvedCapability } from "../types";
 import type { Artifact, GeneratorInput } from "./types";
 
 /**
@@ -58,11 +61,36 @@ export function crateIdent(packageName: string): string {
 }
 
 /**
+ * Renders the one dependency line a capability adds to `[dependencies]`: a pinned version
+ * for a published crate, a path for a crate this plugin generates (relative to
+ * `src-tauri`, POSIX), nothing for a feature-only or permission-only row.
+ *
+ * @param capability - A capability resolved for the target.
+ * @returns The TOML line, or undefined when the row ships no crate.
+ * @example
+ * ```ts
+ * dependencyLine(resolve("shell")); // 'tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }'
+ * dependencyLine(resolve("store")); // 'tauri-plugin-store = "^2"'
+ * ```
+ */
+function dependencyLine(capability: ResolvedCapability): string | undefined {
+  if (capability.localCrate) {
+    const cratePath = path.posix.join("..", capability.localCrate.directory);
+    return `${capability.localCrate.name} = { path = "${cratePath}" }`;
+  }
+  if (capability.crate && capability.crateRange) {
+    return `${capability.crate} = "${capability.crateRange}"`;
+  }
+  return undefined;
+}
+
+/**
  * Generates `src-tauri/Cargo.toml` — the package manifest, the `tauri` dependency with
  * every cargo feature the composed capabilities ask for (tray's `tray-icon`; without it
- * the tray API is not compiled in at all), plus one pinned dependency line per resolved
- * capability that ships a real crate. Feature-only and permission-only rows contribute
- * no dependency line. The iOS-only `objc2` table closes the file on every target.
+ * the tray API is not compiled in at all), plus one dependency line per resolved
+ * capability that ships a crate: pinned for a published one, by path for the generated
+ * shell crate. Feature-only and permission-only rows contribute no dependency line. The
+ * iOS-only `objc2` table closes the file on every target.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
@@ -74,8 +102,8 @@ export function crateIdent(packageName: string): string {
 export function generateCargo(input: GeneratorInput): Artifact[] {
   const packageName = sanitizePackageName(input.global.app.name);
   const pinnedDeps = input.capabilities
-    .filter(capability => capability.crate && capability.crateRange)
-    .map(capability => `${capability.crate} = "${capability.crateRange}"`)
+    .map(capability => dependencyLine(capability))
+    .filter(line => line !== undefined)
     .toSorted();
 
   const features = [...new Set(input.capabilities.flatMap(capability => capability.cargoFeatures))]

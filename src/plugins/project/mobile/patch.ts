@@ -1,22 +1,26 @@
 /**
  * @file project plugin — the post-init mobile patch pass: it decides WHICH patches a
  * platform needs and in which order. The patches themselves live next door, in
- * `signing.ts` (the Android release-signing block), `manifest.ts` (the Android main
- * activity's attributes, such as the orientation lock), `system-bars.ts` (the Android
- * status bar icon style from `app.backgroundColor`), `runner.ts` (the Xcode /
- * Android-Studio runner command) and `xcode-settings.ts` (the iOS
- * entitlements-modification setting that makes a REBUILD work).
+ * `profile.ts` (the Android build-profile patches), `signing.ts` (the Android
+ * release-signing block), `manifest.ts` (the Android main activity's attributes, such as
+ * the orientation lock), `system-bars.ts` (the Android status bar icon style from
+ * `app.backgroundColor`), `runner.ts` (the Xcode / Android-Studio runner command) and
+ * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work).
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SigningConfig } from "../../../config";
 import { genDirectoryPath } from "../layout";
-import type { ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
+import type { AndroidProfile, ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
 import { patchAndroidManifest } from "./manifest";
+import { patchAndroidProfile } from "./profile";
 import { patchRunner } from "./runner";
-import { patchAndroidSigning } from "./signing";
+import { assertDebugKeystore, patchAndroidSigning } from "./signing";
 import { patchAndroidSystemBars } from "./system-bars";
 import { patchXcodeSettings } from "./xcode-settings";
+
+/** The profile of a pass whose caller names none: the store profile, warnings dropped. */
+const STORE_PROFILE: AndroidProfile = { profile: "store" };
 
 /**
  * Merges the results of several patches over an overlapping file set into one report. A
@@ -39,11 +43,13 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
 
 /**
  * Deterministic, idempotent post-init patch pass over an existing complete gen/ tree.
- * Android gets, in this order, its release signing block, the main activity's manifest
- * attributes, the system bar style in MainActivity.kt, then the runner command. iOS gets
- * the Xcode entitlements-modification setting (without it the SECOND build of the same
- * tree fails), then the runner command. The runner rewrite runs only when the caller
- * supplies a `runner`. iOS takes no manifest entries and no background colour: its
+ * Android gets, in this order, its build-profile patches, its release signing block, the
+ * main activity's manifest attributes, the system bar style in MainActivity.kt, then the
+ * runner command. The profile patches run before signing so that the store profile cuts
+ * its Gradle block out byte for byte, wherever the signing block sits. iOS gets the Xcode
+ * entitlements-modification setting (without it the SECOND build of the same tree fails),
+ * then the runner command. The runner rewrite runs only when the caller supplies a
+ * `runner`. iOS takes no manifest entries, no background colour and no profile: its
  * orientation lock and signing travel through the generated `Info.ios.plist` sidecar and
  * tauri.conf.json, and its status bar adapts to the page on its own.
  *
@@ -53,9 +59,11 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
  * @param manifest - Android manifest entries for the main activity (ignored on iOS).
  * @param backgroundColor - `app.backgroundColor`; the Android status bar icons follow it
  *   (ignored on iOS).
+ * @param profile - The Android build profile; the store profile when omitted.
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
  * @throws {Error} When the Android `gen/android` tree (or its `app/build.gradle.kts`) is
- *   missing, manifest entries meet a missing manifest or an unclear main activity, or a
+ *   missing, the debug keystore is missing in the debug profile (before anything is
+ *   written), manifest entries meet a missing manifest or an unclear main activity, or a
  *   background colour meets a tree without exactly one MainActivity.kt to style.
  * @example
  * ```ts
@@ -67,7 +75,8 @@ export async function patchMobile(
   opts: PatchMobileOptions,
   signing: SigningConfig,
   manifest: readonly ManifestEntry[] = [],
-  backgroundColor?: string
+  backgroundColor?: string,
+  profile: AndroidProfile = STORE_PROFILE
 ): Promise<PatchResult> {
   const genDirectory = genDirectoryPath(projectDirectory, opts.target);
 
@@ -91,10 +100,15 @@ export async function patchMobile(
     );
   }
 
+  const debugKeystore = profile.profile === "debug" ? profile.debugKeystore : undefined;
+  if (debugKeystore !== undefined) assertDebugKeystore(debugKeystore);
+
+  const profileResult = await patchAndroidProfile({ projectDirectory, genDirectory, profile });
   const signingResult = await patchAndroidSigning(
     projectDirectory,
     genDirectory,
-    signing.android ?? {}
+    signing.android ?? {},
+    debugKeystore
   );
   const manifestResult = await patchAndroidManifest(projectDirectory, genDirectory, manifest);
   const systemBarsResult = await patchAndroidSystemBars(
@@ -102,11 +116,12 @@ export async function patchMobile(
     genDirectory,
     backgroundColor
   );
-  if (!opts.runner) return mergePatchResults(signingResult, manifestResult, systemBarsResult);
+  const androidResults = [profileResult, signingResult, manifestResult, systemBarsResult];
+  if (!opts.runner) return mergePatchResults(...androidResults);
 
   const runnerResult = await patchRunner(projectDirectory, genDirectory, {
     target: opts.target,
     runner: opts.runner
   });
-  return mergePatchResults(signingResult, manifestResult, systemBarsResult, runnerResult);
+  return mergePatchResults(...androidResults, runnerResult);
 }

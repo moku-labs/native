@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applySigningBlock,
+  debugKeystorePath,
   patchAndroidSigning,
   removeSigningBlock
 } from "../../../mobile/signing";
@@ -139,5 +140,67 @@ describe("patchAndroidSigning", () => {
     const unconfigured = await patchAndroidSigning(dir, genDir, {});
     expect(unconfigured.patched).toContain(keystorePropertiesPath);
     expect(existsSync(keystorePropertiesPath)).toBe(false);
+  });
+});
+
+describe("debug signing", () => {
+  let dir: string;
+  let genDir: string;
+  let gradlePath: string;
+  const debugKeystore = "/home/me/.android/debug.keystore";
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "moku-native-debug-signing-"));
+    genDir = path.join(dir, "src-tauri", "gen", "android");
+    gradlePath = path.join(genDir, "app", "build.gradle.kts");
+    await mkdir(path.join(genDir, "app"), { recursive: true });
+    await writeFile(gradlePath, "plugins {}\n", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("signs with the debug keystore and never names the store keystore (bug: a debug build signed with the store key)", async () => {
+    await patchAndroidSigning(dir, genDir, SIGNING, debugKeystore);
+
+    const gradle = await readFile(gradlePath, "utf8");
+    expect(gradle).toContain(`storeFile = file("${debugKeystore}")`);
+    expect(gradle).toContain('keyAlias = "androiddebugkey"');
+    expect(gradle).toContain('storePassword = "android"');
+    expect(gradle).toContain('keyPassword = "android"');
+    expect(gradle).not.toContain(SIGNING.keystorePath);
+    expect(gradle).not.toContain(STORE_PASSWORD_ENV);
+  });
+
+  it("a store pass after a debug pass puts the store keystore back in place", async () => {
+    await patchAndroidSigning(dir, genDir, SIGNING, debugKeystore);
+
+    await patchAndroidSigning(dir, genDir, SIGNING);
+
+    expect(await readFile(gradlePath, "utf8")).toBe(`plugins {}\n\n${SIGNING_BLOCK}\n`);
+  });
+});
+
+/** An env slice answering only the given variables. */
+const env = (values: Partial<Record<string, string>>) => ({ get: (key: string) => values[key] });
+
+describe("debugKeystorePath", () => {
+  it("resolves the keystore under HOME", () => {
+    expect(debugKeystorePath(env({ HOME: "/home/me", USERPROFILE: "/elsewhere" }))).toBe(
+      path.join("/home/me", ".android", "debug.keystore")
+    );
+  });
+
+  it("falls back to USERPROFILE when HOME is unset (bug: debug signing broken on a Windows host)", () => {
+    expect(debugKeystorePath(env({ USERPROFILE: "/users/me" }))).toBe(
+      path.join("/users/me", ".android", "debug.keystore")
+    );
+  });
+
+  it("fails with a fix-it when neither HOME nor USERPROFILE is set", () => {
+    expect(() => debugKeystorePath(env({}))).toThrow(
+      "[native] the debug profile signs with the debug keystore in your home directory, but neither HOME nor USERPROFILE is set."
+    );
   });
 });

@@ -1,72 +1,55 @@
 /**
  * @file project plugin — API factory: capability resolution, generation, and the mobile
- * patch/completeness/clean delegations. Composition-time validation lives in `validate.ts`.
+ * patch/icon/link/completeness/clean delegations, plus the page agent scan. Composition-time
+ * validation lives in `validate.ts`.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Config, MobileTarget, Target } from "../../config";
+import type { BuildProfile, Config, MobileTarget, Target } from "../../config";
 import { clean, clearMobileBuildOutput } from "./clean";
 import { generateBuildScript } from "./generators/build-script";
 import { generateCapabilities } from "./generators/capabilities";
 import { generateCargo } from "./generators/cargo";
 import { generateEntitlements } from "./generators/entitlements";
 import { generateRust } from "./generators/rust";
+import { generateShell } from "./generators/shell";
 import { generateSidecar } from "./generators/sidecar";
 import { generateTauriConf } from "./generators/tauri-conf";
 import type { GeneratorInput } from "./generators/types";
 import { placeholderIconPng } from "./icon";
 import type { BundleLayout } from "./layout";
-import { bundleLayout } from "./layout";
+import { bundleLayout, genDirectoryPath } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
+import { patchAndroidIcon } from "./mobile/icon";
 import { patchMobile } from "./mobile/patch";
+import { checkShellLinked } from "./mobile/shell-link";
+import { debugKeystorePath } from "./mobile/signing";
 import { orientationManifest } from "./orientation";
+import { detectPageAgent } from "./page-agent";
 import { comparableRealPath } from "./paths";
-import { isKnownCapability, registryRows, resolve, unknownCapabilityError } from "./registry";
+import {
+  isKnownCapability,
+  registryRows,
+  resolve,
+  resolveConfiguredCapabilities
+} from "./registry";
 import type {
+  AndroidProfile,
   Api,
   GenerateResult,
   ManifestEntry,
   PatchMobileOptions,
-  ProjectContext,
-  ResolvedCapability
+  PatchResult,
+  ProjectContext
 } from "./types";
 import { writeIfChanged } from "./writer";
 
 /**
- * Resolves every capability configured on `config.system` against the registry, scoped
- * to rows whose `platforms` include the target (D-012: the whole packaging composition
- * is data-driven from this one pass).
- *
- * @param global - Frozen global framework config.
- * @param target - The packaging target being generated for.
- * @returns The resolved capabilities applicable to this target.
- * @throws {Error} When `config.system` names a capability the registry doesn't know.
- * @example
- * ```ts
- * resolveConfiguredCapabilities(ctx.global, "ios");
- * ```
- */
-function resolveConfiguredCapabilities(
-  global: Readonly<Config>,
-  target: GeneratorInput["target"]
-): ResolvedCapability[] {
-  const resolved: ResolvedCapability[] = [];
-  for (const entry of global.system) {
-    if (!isKnownCapability(entry.name)) throw unknownCapabilityError(entry.name);
-    const capability = resolve(entry.name, global.capabilities[entry.name]);
-    if (capability.platforms.includes(target)) {
-      resolved.push(capability);
-    }
-  }
-  return resolved;
-}
-
-/**
- * Collects what the Android main activity must carry: the `activity-attribute` entries of
- * every capability resolved for android, then the orientation lock. Orientation comes
- * last so it wins a clash, the same order the iOS sidecar merges in. It is always present:
- * an unset orientation asks for `android:screenOrientation` to be absent, which removes a
- * lock a previous build left in the gen/ tree.
+ * Collects what the Android manifest must carry: the attribute entries of every capability
+ * resolved for android, then the orientation lock. Orientation comes last so it wins a
+ * clash, the same order the iOS sidecar merges in. It is always present: an unset
+ * orientation asks for `android:screenOrientation` to be absent, which removes a lock a
+ * previous build left in the gen/ tree.
  *
  * @param global - Frozen global framework config.
  * @returns The manifest entries for `patchMobile`'s Android pass.
@@ -80,7 +63,7 @@ function resolveConfiguredCapabilities(
 function androidManifestEntries(global: Readonly<Config>): ManifestEntry[] {
   const fromCapabilities = resolveConfiguredCapabilities(global, "android")
     .flatMap(capability => capability.manifest)
-    .filter(entry => entry.kind === "activity-attribute");
+    .filter(entry => entry.kind !== "child");
   return [...fromCapabilities, ...orientationManifest(global.app.orientation)];
 }
 
@@ -138,7 +121,8 @@ function resolveDerivedPath(target: string): string {
 
 /**
  * Creates the project plugin API surface — capability registry + `.moku/tauri`
- * generators + write-if-changed writer + mobile completeness/patch/clean.
+ * generators (the shell crate among them) + write-if-changed writer + mobile
+ * completeness/patch/icon/link/clean + the page agent scan.
  *
  * @param ctx - Plugin context (global config, log).
  * @returns The `project` plugin's public API.
@@ -155,6 +139,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
    *
    * @param opts - The generate options.
    * @param opts.target - The packaging target to generate for.
+   * @param opts.profile - The build profile; `"store"` when omitted.
    * @returns Which paths were written, left unchanged, or skipped.
    * @example
    * ```ts
@@ -163,8 +148,10 @@ export function createProjectApi(ctx: ProjectContext): Api {
    */
   const generateArtifacts = async (opts: {
     target: GeneratorInput["target"];
+    profile?: BuildProfile | undefined;
   }): Promise<GenerateResult> => {
-    const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target);
+    const profile = opts.profile ?? "store";
+    const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target, profile);
     const input: GeneratorInput = { global: ctx.global, target: opts.target, capabilities };
     const artifacts = [
       ...generateTauriConf(input),
@@ -173,7 +160,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
       ...generateRust(input),
       ...generateCapabilities(input),
       ...generateEntitlements(input),
-      ...generateSidecar(input)
+      ...generateSidecar(input),
+      ...generateShell(input, profile)
     ];
 
     const buckets: Record<"written" | "unchanged" | "skipped", string[]> = {
@@ -189,6 +177,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
     }
     ctx.log.info("project:generate", {
       target: opts.target,
+      profile,
       written: buckets.written.length,
       unchanged: buckets.unchanged.length
     });
@@ -210,8 +199,32 @@ export function createProjectApi(ctx: ProjectContext): Api {
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Implements {@link Api.patchMobile}: hands Android its manifest entries and
-   * `app.backgroundColor` (the status bar icons follow it), then logs.
+   * Builds the Android profile one patch pass applies. The debug profile resolves the debug
+   * keystore from `ctx.env` here (`HOME` ?? `USERPROFILE`), so the patch itself never reads
+   * the environment.
+   *
+   * @param opts - See {@link Api.patchMobile}.
+   * @returns The Android profile with its app name, keystore and log.
+   * @example
+   * ```ts
+   * androidProfile({ target: "android" }); // { profile: "store", log }
+   * ```
+   */
+  const androidProfile = (opts: PatchMobileOptions): AndroidProfile => {
+    if (opts.target !== "android" || opts.profile !== "debug") {
+      return { profile: "store", log: ctx.log };
+    }
+    return {
+      profile: "debug",
+      appName: ctx.global.app.name,
+      debugKeystore: debugKeystorePath(ctx.env),
+      log: ctx.log
+    };
+  };
+
+  /**
+   * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
+   * entries and `app.backgroundColor` (the status bar icons follow it), then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
@@ -222,16 +235,82 @@ export function createProjectApi(ctx: ProjectContext): Api {
    */
   const runPatchMobile = async (opts: PatchMobileOptions) => {
     const manifest = opts.target === "android" ? androidManifestEntries(ctx.global) : [];
+    const profile = androidProfile(opts);
     const result = await patchMobile(
       ctx.global.projectDir,
       opts,
       ctx.global.signing,
       manifest,
-      ctx.global.app.backgroundColor
+      ctx.global.app.backgroundColor,
+      profile
     );
-    ctx.log.info("project:patchMobile", { target: opts.target, patched: result.patched.length });
+    ctx.log.info("project:patchMobile", {
+      target: opts.target,
+      profile: profile.profile,
+      patched: result.patched.length
+    });
     return result;
   };
+
+  /**
+   * Implements {@link Api.patchMobileIcons}: the adaptive icon inset on Android, nothing on
+   * iOS.
+   *
+   * @param opts - See {@link Api.patchMobileIcons}.
+   * @param opts.target - The mobile platform whose icons to patch.
+   * @returns See {@link Api.patchMobileIcons}.
+   * @example
+   * ```ts
+   * await runPatchMobileIcons({ target: "ios" }); // { patched: [], unchanged: [] }
+   * ```
+   */
+  const runPatchMobileIcons = async (opts: { target: MobileTarget }): Promise<PatchResult> => {
+    if (opts.target !== "android") return { patched: [], unchanged: [] };
+    const result = await patchAndroidIcon({
+      projectDirectory: ctx.global.projectDir,
+      genDirectory: genDirectoryPath(ctx.global.projectDir, opts.target),
+      inset: ctx.global.app.adaptiveIconInset
+    });
+    ctx.log.debug("project:patchMobileIcons", {
+      target: opts.target,
+      patched: result.patched.length
+    });
+    return result;
+  };
+
+  /**
+   * Implements {@link Api.detectPageAgent} over `<web.cwd ?? .>/<web.dist>`.
+   *
+   * @returns See {@link Api.detectPageAgent}.
+   * @example
+   * ```ts
+   * await runDetectPageAgent(); // { agent: false } for a clean page
+   * ```
+   */
+  const runDetectPageAgent = () =>
+    detectPageAgent({ root: ctx.global.web.cwd ?? ".", dist: ctx.global.web.dist });
+
+  /**
+   * Implements {@link Api.checkShellLinked}, the store profile when omitted.
+   *
+   * @param opts - See {@link Api.checkShellLinked}.
+   * @param opts.target - The mobile platform that was compiled.
+   * @param opts.profile - The build profile; `"store"` when omitted.
+   * @returns See {@link Api.checkShellLinked}.
+   * @example
+   * ```ts
+   * await runCheckShellLinked({ target: "android" }); // resolves: no shell composed
+   * ```
+   */
+  const runCheckShellLinked = (opts: {
+    target: MobileTarget;
+    profile?: BuildProfile | undefined;
+  }): Promise<void> =>
+    checkShellLinked({
+      global: ctx.global,
+      target: opts.target,
+      profile: opts.profile ?? "store"
+    });
 
   /**
    * Resolves the 1024x1024 source PNG `tauri icon` expands into the platform icon sets.
@@ -308,6 +387,9 @@ export function createProjectApi(ctx: ProjectContext): Api {
     getBundleLayout,
     getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
+    patchMobileIcons: runPatchMobileIcons,
+    detectPageAgent: runDetectPageAgent,
+    checkShellLinked: runCheckShellLinked,
     clean: runClean,
     clearMobileBuildOutput: runClearMobileBuildOutput,
     resolveDerivedPath,

@@ -1,6 +1,6 @@
 # project
 
-> Complex plugin — capability registry + `.moku/tauri` generators + write-if-changed writer + mobile init-once-then-patch + clean.
+> Complex plugin — capability registry + `.moku/tauri` generators (the shell plugin crate among them) + write-if-changed writer + mobile init-once-then-patch with build profiles + clean.
 
 Owns everything about the generated Tauri project as *files*: the capability registry
 (name → packaging metadata), all generators for `.moku/tauri/`, the write-if-changed
@@ -15,6 +15,12 @@ target-set). The XML this plugin does write is presentation: the orientation loc
 `Info.ios.plist` keys and an `android:screenOrientation` attribute on the main activity.
 The one Kotlin source it styles is presentation too: the Android status bar icons follow
 `app.backgroundColor` through the generated `MainActivity.kt`.
+
+Two additions reach past packaging. The `shell` capability generates a small Tauri plugin
+crate, `tauri-plugin-moku-shell`, that installs the page contract
+[`globalThis.__MOKU_NATIVE__` v1](#page-contract-v1) (display rate, thermal state, safe-area
+insets, device info). And the [build profiles](#build-profiles) patch the Android tree for an
+on-device debug build that installs next to the store app.
 
 ## Files
 
@@ -31,12 +37,17 @@ The one Kotlin source it styles is presentation too: the Android status bar icon
 | `writer.ts` | write-if-changed (content hash) + the write-path guard |
 | `icon.ts` | the embedded 1024x1024 placeholder PNG |
 | `clean.ts` | target-scoped destructive cleanup behind the clean guards |
+| `page-agent.ts` | the editor-agent scan of the built page (`detectPageAgent`) |
 | `paths.ts` | **the one owner of path normalization/containment** — realpath resolution, case rules, the project-anchor walk, and the "is this derived state?" / "may we deliver here?" predicates shared by `clean.ts`, `validate.ts` and (via the API) `build`'s collect guard |
 | `generators/*.ts` | one generated artifact each (see the table below) |
+| `generators/shell/*.ts` | the shell plugin crate: `rust.ts` (Cargo.toml, build.rs, lib.rs, permissions), `page-script.ts` (the page contract), `android.ts` (the Kotlin library module), `index.ts` (orchestration) |
 | `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
 | `mobile/files.ts` | **the one owner of which generated files a patch may touch** — never anything under `gen/*/build` |
-| `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` |
-| `mobile/manifest.ts` | the main `<activity>` attributes in `app/src/main/AndroidManifest.xml` |
+| `mobile/profile.ts` | the build-profile patches: the Gradle profile block, the debug app name in `strings.xml`, the debug network security config |
+| `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` (the debug keystore in the debug profile) |
+| `mobile/manifest.ts` | the main `<activity>` and the `<application>` attributes in `app/src/main/AndroidManifest.xml` |
+| `mobile/icon.ts` | the adaptive icon inset in `res/mipmap-anydpi-v26/ic_launcher*.xml` |
+| `mobile/shell-link.ts` | the check that the shell plugin is linked into `gen/android` |
 | `mobile/system-bars.ts` | the Android status bar icon style in `app/src/main/java/**/MainActivity.kt`, from `app.backgroundColor` |
 | `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
 | `mobile/xcode-settings.ts` | the iOS entitlements-modification setting (`project.pbxproj` + `project.yml`) |
@@ -54,6 +65,14 @@ The one Kotlin source it styles is presentation too: the Android status bar icon
 | `src-tauri/Entitlements.plist` | `generators/entitlements.ts` | App Store sandbox, only for `signing.apple.appStore` macOS builds with no consumer plist |
 | `src-tauri/Info.ios.plist` | `generators/sidecar.ts` | iOS only, always written: the orientation lock plus any capability `sidecarPlist`; an empty `<dict>` when nothing is locked |
 | `placeholder-icon.png` | `icon.ts` | embedded 1024x1024 PNG, written only when `app.icon` is unset |
+| `plugins/moku-shell/**` | `generators/shell/*.ts` | only when `shell` is composed for the target: the `tauri-plugin-moku-shell` crate (`Cargo.toml` with `links`, `build.rs`, `src/lib.rs`, `src/page.js`, `permissions/default.toml`) and its Android module (`android/build.gradle.kts`, manifest, R8 rules, `MokuShellPlugin.kt`, the per-profile `MokuShellProfile.kt`) |
+
+Without the shell, nothing is written under `plugins/`, and the output is byte for byte what
+it was before the shell existed, in both profiles. With it, `Cargo.toml` gains
+`tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }`, `lib.rs` gains
+`.plugin(tauri_plugin_moku_shell::init())`, and the capability file gains `moku-shell:default`.
+`build.rs` and `default.toml` are generated from one list of six commands (`set_frame_rate`,
+`thermal`, `insets`, `log`, `share`, `info`), so a granted command always exists.
 
 Path fields (`build.frontendDist`, `bundle.macOS.entitlements`) are rebased onto
 `src-tauri` in POSIX form, because that is where Tauri resolves them from.
@@ -63,7 +82,8 @@ monorepo consumer's web build runs in its own package.
 ## API
 
 ```ts
-app.project.generate({ target: "macos" });
+app.project.generate({ target: "macos" }); // profile defaults to "store"
+app.project.generate({ target: "android", profile: "debug" });
 // => { written: string[], unchanged: string[], skipped: string[] }
 
 app.project.getCompleteness({ target: "android" });
@@ -73,7 +93,16 @@ app.project.getBundleLayout({ target: "macos" });
 // => { root: "src-tauri/target/release", formats: [{ directory, pattern }], genDirectory?: string }
 
 await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
+await app.project.patchMobile({ target: "android", runner: app.tauri.getRunner(), profile: "debug" });
 // => { patched: string[], unchanged: string[] }
+
+await app.project.patchMobileIcons({ target: "android" }); // after `tauri icon`
+// => { patched: string[], unchanged: string[] }
+
+await app.project.detectPageAgent();
+// => { agent: true, file: "page/main-4f2a.js" } | { agent: false }
+
+await app.project.checkShellLinked({ target: "android", profile: "debug" }); // after the compile
 
 await app.project.ensureIconSource();
 // => absolute path to the 1024x1024 source PNG for `tauri icon`
@@ -85,21 +114,28 @@ app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" });
 // => ResolvedCapability (registry row + conf/sidecarPlist/manifest)
 
 app.project.isKnownCapability("store"); // => true
-app.project.getRegistryRows(); // => copies of the 7 registry rows (consumed by doctor)
+app.project.getRegistryRows(); // => copies of the 8 registry rows (consumed by doctor)
 app.project.getRequiredFiles({ target: "android" }); // => required gen/android file set (consumed by doctor)
 ```
 
-- `generate({ target })` — writes/refreshes every pure artifact for a target into
+- `generate({ target, profile? })` — writes/refreshes every pure artifact for a target into
   `projectDir` via write-if-changed. Desktop targets get the whole tree; mobile targets
   get the shared tree + conf (the `gen/` tree itself is created by `tauri android/ios
-  init`, never by this plugin).
+  init`, never by this plugin). When `shell` is composed, the shell crate too, with the
+  profile baked into its page script. `profile` defaults to `"store"`.
 - `getCompleteness({ target })` — mobile `gen/<platform>` required-file-set gate. Desktop
   targets are `"not-applicable"`.
 - `getBundleLayout({ target })` — where that target's build output lands: the output root,
   the desktop bundle-format directories with their artifact globs, and the mobile
   `gen/<platform>` directory. `build`'s collect phase globs against this instead of keeping
   its own copy of the table, so the layout has exactly one owner (`layout.ts`).
-- `patchMobile({ target, runner? })` — idempotent post-init patch pass, see below.
+- `patchMobile({ target, runner?, profile? })` — idempotent post-init patch pass, see below.
+- `patchMobileIcons({ target })` — the [adaptive icon inset](#adaptive-icon-inset); iOS gets an
+  empty result.
+- `detectPageAgent()` — scans the built page for the editor agent, see
+  [The page agent](#the-page-agent).
+- `checkShellLinked({ target, profile? })` — fails when the shell is composed but not linked
+  into `gen/android`, see [Build profiles](#build-profiles).
 - `ensureIconSource()` — returns `path.resolve(app.icon)` when configured, throwing a
   `[native]` error when that file is missing. When unset it writes the embedded
   placeholder PNG to `<projectDir>/placeholder-icon.png` and returns that path, so a
@@ -162,8 +198,11 @@ picks the status bar icon colour, see [The Android status bar](#the-android-stat
 
 | Platform | Patches |
 |---|---|
-| android | release signing → main-activity manifest attributes → status bar style → runner command |
+| android | build profile → release signing → main-activity manifest attributes → status bar style → runner command |
 | ios | Xcode entitlements-modification setting → runner command |
+
+The profile patches run first, so the store profile cuts its Gradle block out byte for byte
+wherever the signing block sits; see [Build profiles](#build-profiles).
 
 The runner rewrite runs only when `runner` is passed. The api wrapper hands the Android
 pass its manifest entries: every capability's `activity-attribute` entries, then the
@@ -259,8 +298,10 @@ A file that never mentions the verb is simply unchanged.
 ### The Android manifest
 
 The manifest patch applies `activity-attribute` entries to the main `<activity>` of
-`gen/android/app/src/main/AndroidManifest.xml`. Tauri has no config key for what that
-element carries, `android:screenOrientation` included.
+`gen/android/app/src/main/AndroidManifest.xml`, and `application-attribute` entries to its
+`<application>` start tag (the debug profile's `android:networkSecurityConfig`). Tauri has no
+config key for what those elements carry, `android:screenOrientation` included. Both kinds
+follow the same set / replace / remove rules below.
 
 - **The main activity** is the one whose body declares `android.intent.action.MAIN`. A
   manifest with a single activity and no MAIN still has an obvious one. Comments and
@@ -285,6 +326,134 @@ to SET with zero or several MAIN activities, fails:
 
 A pass that only REMOVES leaves such a manifest as it is: there is nothing to remove, and
 an app that never set an orientation must not start failing on a manifest it never touches.
+
+## Build profiles
+
+`generate`, `patchMobile` and `checkShellLinked` take a `profile`: `"store"` (the default, the
+shippable build) or `"debug"` (an on-device test build, Android only — `build` refuses debug
+for other targets). The debug build stays a **release** build type, Rust and Gradle optimized,
+so measurements on the phone match the store app (Decision D1). Every patch is idempotent, and
+the store profile restores the bytes the tree had before the debug profile touched it.
+
+| What | Debug profile | Store profile |
+|---|---|---|
+| `app/build.gradle.kts` | `// MOKU-PROFILE-START … // MOKU-PROFILE-END` block: `applicationIdSuffix = ".debug"` on the release build type, so the debug app installs beside the store app | the block cut out, bytes restored exactly |
+| signing | the SDK debug keystore, see [Signing](#signing) | the configured store keystore, as before |
+| `res/values/strings.xml` | `app_name` and `main_activity_title` become `"<app.name> (debug)"`, escaped for aapt2 (`\'`, `\"`, `\\`, a leading `\@`/`\?`, `&amp;`, `&lt;`), after a `<!-- moku:native debug name <n> … -->` comment that keeps the original lines and the count `n` of renamed lines after it (a multi-line element is renamed onto one line) | touched only when that comment is there: the original lines come back. A tree never built in debug is not even written |
+| `res/xml/network_security_config.xml` | written, first line `<!-- moku:native debug profile -->`, `<base-config cleartextTrafficPermitted="true" />`: cleartext to every host, so `ws://` reaches the editor over `adb reverse` and on the LAN (Decision D4b). A hand-made config it replaces is kept inside it (base64, `<!-- moku:native kept file … -->`), with a `ctx.log.warn` | a moku config is undone: the hand-made file it replaced is written back byte for byte, or the file is deleted when there was none. A config this plugin did not write is left alone, with a `ctx.log.warn` (Decision D4) |
+| `<application android:networkSecurityConfig>` | `"@xml/network_security_config"`; a previous value is kept in the moku config (`<!-- moku:native kept attribute … -->`) | restored to that previous value, or removed when there was none. Next to a config this plugin did not write, left alone |
+| the shell | composed even when `system` does not name it | only when `system` names it |
+| the page | `build.profile === "debug"`, console forwarded to logcat, WebView debugging on, `share` present | `build.profile === "release"`, console untouched, no `share` |
+
+Line endings follow the patched file (CRLF included). The debug label and the restore both
+work on whole lines, so a name with `'`, `&` or `--` round-trips.
+
+**The link check.** The Tauri CLI writes `gen/android/tauri.settings.gradle` from every
+plugin's Android library. A tree initialised before the shell was added may not name it, and
+then every `__MOKU_NATIVE__` call fails at runtime with no build error. `checkShellLinked`
+therefore runs after the compile, whenever the shell is composed for the target and profile:
+
+```
+[native] the shell plugin is not linked into gen/android (tree initialised before the shell was added).
+  Run clean for android and build again.
+```
+
+Whether `tauri android build` regenerates that file, or only `tauri android init` does, is
+still unverified (research Q1); the first real build of an existing tree answers it.
+
+## Page contract v1
+
+The shell's init script runs before page scripts, in the main frame (Tauri 2.12 injects
+plugin init scripts there only; an iframe may lack `__TAURI_INTERNALS__` anyway), and installs
+a frozen `globalThis.__MOKU_NATIVE__`. A browser, iOS (shell deferred) or an app without the shell has
+none, and an engine that finds none keeps its old behaviour. A second run in the same frame is
+a no-op. IPC goes through `window.__TAURI_INTERNALS__.invoke`, present in every Tauri page.
+
+```ts
+type MokuNative = {
+  version: 1;
+  platform: "android";
+  build: { profile: "debug" | "release"; id: string }; // id "<app.version>+<app.buildNumber ?? 0>", "-debug" in debug
+  device: { model: string; manufacturer: string; sdk: number } | null; // null until `ready`
+  ready: Promise<void>; // resolves when the one `info` call answered, or failed — never rejects
+  display: {
+    maxHz: number | null; // the panel's top rate at the current resolution, null until `ready`
+    setFrameRate(fps: number | null): Promise<{ panelHz: number | null; maxHz: number | null }>;
+  };
+  thermal: {
+    read(): Promise<{
+      status: "none" | "light" | "moderate" | "severe" | "critical" | "emergency" | "shutdown";
+      headroom: number | null; // ADPF, 10 s forecast, cached for 1 s, NaN → null
+      at: number;
+      android?: { status: number; headroom: number | null; forecastSeconds: 10 };
+    }>;
+  };
+  insets: { readonly current: { top: number; right: number; bottom: number; left: number } }; // CSS px
+  share?(file: { name: string; mime: string; bytes: Uint8Array }): Promise<{ shared: boolean }>; // debug only
+};
+```
+
+- `setFrameRate(fps)` picks the display mode at the current resolution with the slowest rate
+  at or above `fps` (none: the fastest), through the window's preferred display mode; `null`
+  restores the system default. A non-positive or non-finite `fps` rejects with a `TypeError`
+  before the shell is called. The same preference again changes nothing.
+- `share` exists only in the debug profile (feature-detect with `"share" in shell`). It
+  rejects with a `TypeError`, before calling the shell, a name that is empty, contains `/` or
+  `\`, or is dot-only, and more than 32 MiB of bytes. The bytes travel base64-encoded; the
+  shell writes them to `cacheDir/moku-share/<name>` and opens the share sheet.
+- In the debug profile, `console.log|info|warn|error|debug` still run and also reach logcat
+  under the tag `moku-page` (arguments stringified, objects as JSON, at most 4000 characters).
+
+**Events and CSS.** The shell pushes through `globalThis.__MOKU_NATIVE_PUSH__`:
+
+| Push | On the page |
+|---|---|
+| `insets` (status bars and cutout for top/left/right, navigation bars and cutout for bottom, in dp) | `--moku-safe-top`, `--moku-safe-right`, `--moku-safe-bottom`, `--moku-safe-left` (`<n>px`) on `document.documentElement.style`, `insets.current` updated, then `moku-native:insets` dispatched on `window` with the insets as `detail` |
+| `thermal` (every thermal status change, API 29+) | `moku-native:thermal` dispatched on `window`, `detail` = the full thermal reading |
+
+The script also asks for the last insets once at start, so a push that came before it is not
+lost. Pages read them as `var(--moku-safe-top, env(safe-area-inset-top))`.
+
+**iOS.** Deferred (Decision D6). WKWebView caps `requestAnimationFrame` at 60 Hz on ProMotion
+with no public API, so a future iOS shell will answer `setFrameRate` with
+`{ panelHz: 60, maxHz: 60 }`.
+
+### WebView origin per platform
+
+| Platform | `location.origin` of the packaged page |
+|---|---|
+| Android | `http://tauri.localhost` (Tauri 2 default, `useHttpsScheme` false) — the e2e station confirms it on the A26 |
+| Windows | `http://tauri.localhost` |
+| iOS, macOS, Linux | `tauri://localhost` |
+
+The `http://<scheme>.localhost` form exists only on Windows and Android, where the WebView
+cannot register a custom scheme; everywhere else the page is served from `tauri://localhost`.
+
+## Adaptive icon inset
+
+`app.adaptiveIconInset` (percent per side of the 108 dp canvas, `0 < n ≤ 30`) keeps
+full-bleed launcher art inside the mask: `19.44` keeps it in the 66 dp safe zone.
+`patchMobileIcons` rewrites the foreground of `res/mipmap-anydpi-v26/ic_launcher.xml` and
+`ic_launcher_round.xml`:
+
+```xml
+<foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+<!-- becomes -->
+<foreground><inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="19.44%"/></foreground>
+```
+
+`tauri icon` rewrites these files, so `build` calls it after its icons phase on every build.
+A second pass is a no-op (never a nested `<inset>`), a new value replaces the old one, and an
+unset inset restores the plain foreground. No directory yet: nothing to do.
+
+## The page agent
+
+`detectPageAgent()` scans every `.js` file under `<web.cwd ?? .>/<web.dist>` — UTF-8, one at a
+time, in name order — for `"/__editor/hello"` or `"[moku-editor]"`, the two strings the
+engine's own release refusal uses (engine spec 10 §R). The first hit is
+`{ agent: true, file: <path relative to the dist> }`; a clean or missing dist is
+`{ agent: false }`. Source maps and HTML are never read, and a symlink is followed only when
+its target is inside the dist. `build` refuses a store build whose page carries the agent.
 
 ## iOS rebuilds
 
@@ -355,6 +524,17 @@ buildTypes { getByName("release") { signingConfig = signingConfigs.getByName("re
 Every interpolated value (keystore path, key alias, env-var names) is escaped for a
 double-quoted Kotlin literal first — `\`, `"`, `$` and newlines — so a path with a quote
 in it cannot close the literal, and a `$` cannot interpolate a Gradle expression.
+
+In the debug profile the release build is signed with the SDK debug key instead:
+`<home>/.android/debug.keystore` (`home` is `HOME`, or `USERPROFILE` on a Windows host, read
+through `ctx.env`), alias `androiddebugkey`, password `android` (the SDK's public defaults).
+The store keystore is never named in a debug build, and the next store pass writes the store
+block back in place. A missing debug keystore fails before anything is written:
+
+```
+[native] debug keystore not found at <path>.
+  Create it with: keytool -genkeypair -v -keystore "<path>" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US".
+```
 
 No `keystore.properties` is written any more. Dropping `signing.android.keystorePath`
 removes the block *and* a legacy `keystore.properties` left by an older build (a single
@@ -449,6 +629,7 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 | `app.buildNumber` | anything but word characters and dots — it lands raw in plist/JSON |
 | `app.backgroundColor` | not `#rrggbb` or `#rrggbbaa` |
 | `app.orientation` | not `"portrait"`, `"landscape"` or `"any"` — config arrives as plain JS too |
+| `app.adaptiveIconInset` | not a finite number with `0 < n ≤ 30` |
 | `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
 | `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
 | `projectDir` | resolving outside the project (the same rule as the clean guard) |
@@ -461,7 +642,7 @@ generated file: a quote in the wrong place rewrites the file around it. Failing 
 `createApp` is also what makes the `projectDir` rule useful — the misconfiguration is
 reported before anything is generated, not at clean time.
 
-### Capability registry (7 rows)
+### Capability registry (8 rows)
 
 | Capability | Platforms | Backed by | Permissions | Confidence |
 |---|---|---|---|---|
@@ -472,6 +653,7 @@ reported before anything is generated, not at clean time.
 | `deep-link` | all 5 (custom-scheme-only, D-011) | crate + npm package + Rust init | `deep-link:default` | high |
 | `back` | android only | **core permissions only** — no crate, no npm package, no Rust init | `core:app:allow-exit` | high |
 | `haptics` | mobile only (ios/android) | crate + npm package + Rust init | `haptics:allow-impact-feedback`, `haptics:allow-notification-feedback`, `haptics:allow-selection-feedback`, `haptics:allow-vibrate` | high |
+| `shell` | android only (iOS deferred, D6) | **generated local crate** `tauri-plugin-moku-shell` (`localCrate`, linked by path) + Rust init, no npm package | `moku-shell:default` | medium |
 
 `tray` names five permissions because a tray is not just the tray: the icon goes through
 `Image`, the menu through `Menu`, and `@moku-labs/system` defaults the icon to
@@ -490,6 +672,13 @@ generated `Cargo.toml` pins `tauri = { version = "2.12" }`.
 
 `haptics` names its four commands because the plugin ships no default permission set. It
 needs no manifest entry: the plugin merges `android.permission.VIBRATE` itself.
+
+`shell` is composed like every capability, by naming it in `config.system`
+(`system: [{ name: "shell" }]`); `capabilities.shell` is its empty parameter object and
+composes nothing on its own. The one exception is the debug profile, which composes the shell
+on android even unnamed (console forwarding and WebView debugging live there). A row carries
+`crate` + `crateRange` or `localCrate`, never both. On iOS the row is filtered out like any
+platform-limited row: the page has no `__MOKU_NATIVE__` there.
 
 `tray` and `back` are the reason every plugin-shaped field on `RegistryRow` is optional while
 `cargoFeatures` is required: one is a core Tauri feature flag, the other core permissions

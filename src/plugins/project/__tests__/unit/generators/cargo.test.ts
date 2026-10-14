@@ -105,6 +105,13 @@ describe("generateCargo", () => {
     );
   });
 
+  it("links the shell as a path crate, never a version (bug: plugin not linked / published crate looked up)", () => {
+    const dependencies = dependenciesTable(cargoFor("android", [resolve("shell")]));
+
+    expect(dependencies).toContain('tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }');
+    expect(dependencies).not.toContain('tauri-plugin-moku-shell = "');
+  });
+
   it("writes the exact Cargo.toml for a composed mobile app", () => {
     expect(cargoFor("ios", [resolve("store"), resolve("haptics")])).toBe(
       [

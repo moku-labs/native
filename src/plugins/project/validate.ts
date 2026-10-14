@@ -100,11 +100,36 @@ function assertDeliveryDirectory(value: string): void {
   );
 }
 
+/** The adaptive icon inset's upper bound, in percent per side of the 108 dp canvas. */
+const MAX_ICON_INSET = 30;
+
+/**
+ * Validates `app.adaptiveIconInset`: a finite number above 0 and at most 30 percent per
+ * side. 0 would wrap the icon for nothing, and above 30 the art shrinks below the mask's
+ * visible circle. Config arrives as plain JS too, so the type is not trusted.
+ *
+ * @param inset - The configured inset, or undefined when unset.
+ * @throws {Error} When the inset is set and outside `0 < n ≤ 30`.
+ * @example
+ * ```ts
+ * assertIconInset(19.44); // ok
+ * assertIconInset(31); // throws: [native] app.adaptiveIconInset must be …
+ * ```
+ */
+function assertIconInset(inset: number | undefined): void {
+  if (inset === undefined) return;
+  if (Number.isFinite(inset) && inset > 0 && inset <= MAX_ICON_INSET) return;
+
+  throw new Error(
+    `[native] app.adaptiveIconInset must be a number above 0 and at most ${MAX_ICON_INSET}, got ${String(inset)}.\n  Use the percent per side the art needs, such as 19.44, or unset it to leave the icon untouched.`
+  );
+}
+
 /**
  * Validates the global config at composition time — throws `[native]`-formatted errors
  * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, a window colour or orientation outside its
- * allowed shape, a `projectDir` outside the project, an `outDir` this app must not
+ * generated file they are written into, a window colour, orientation or adaptive icon
+ * inset outside its allowed shape, a `projectDir` outside the project, an `outDir` this app must not
  * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
  * scheme.
  *
@@ -184,6 +209,7 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     "orientation",
     'Use "portrait", "landscape" or "any".'
   );
+  assertIconInset(global.app.adaptiveIconInset);
   assertShape(
     "signing.android.keystorePasswordEnv",
     global.signing.android?.keystorePasswordEnv,

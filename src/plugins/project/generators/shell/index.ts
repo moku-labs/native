@@ -4,17 +4,36 @@
  */
 import type { BuildProfile } from "../../../../config";
 import type { Artifact, GeneratorInput } from "../types";
+import { shellAndroidArtifacts } from "./android";
+import { shellPageScript } from "./page-script";
+import { shellRustArtifacts } from "./rust";
 
 /**
- * Generates every file of the shell plugin crate, or nothing when `shell` is not resolved.
+ * Generates every file of the shell plugin crate, under the `shell` row's `localCrate`
+ * directory, or nothing when `shell` is not resolved for this target — so an app without
+ * the shell gets no `plugins/` directory at all.
  *
- * @param _input - The generator input for this target.
- * @param _profile - The build profile the crate is generated for.
+ * @param input - The generator input for this target, capabilities already resolved.
+ * @param profile - The build profile the crate is generated for.
+ * @returns The crate's artifacts, paths relative to `projectDir`; empty without the shell.
  * @example
  * ```ts
- * generateShell(input, "debug"); // plugins/moku-shell/** artifacts
+ * generateShell({ global, target: "android", capabilities: [resolve("shell")] }, "debug")[0]?.path;
+ * // "plugins/moku-shell/Cargo.toml"
  * ```
  */
-export function generateShell(_input: GeneratorInput, _profile: BuildProfile): Artifact[] {
-  throw new Error("not implemented");
+export function generateShell(input: GeneratorInput, profile: BuildProfile): Artifact[] {
+  const directory = input.capabilities.find(capability => capability.name === "shell")?.localCrate
+    ?.directory;
+  if (directory === undefined) return [];
+
+  const crate: Artifact[] = [
+    ...shellRustArtifacts(),
+    { path: "src/page.js", content: shellPageScript(input, profile) },
+    ...shellAndroidArtifacts(profile)
+  ];
+  return crate.map(artifact => ({
+    path: `${directory}/${artifact.path}`,
+    content: artifact.content
+  }));
 }

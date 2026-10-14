@@ -57,10 +57,19 @@ export type BuildArgvOptions = BuildFlavor & {
   exportMethod?: AppleExportMethod | undefined;
 };
 
-/** Options for `Api.build` — the argv options plus the live output/progress callbacks. */
+/**
+ * Options for `Api.build` — the argv options, the live output/progress callbacks, and extra
+ * environment for the child process.
+ */
 export type BuildOptions = BuildArgvOptions & {
   onTick?: ((tick: CompileTick) => void) | undefined;
   onOutput?: ((line: string) => void) | undefined;
+  /**
+   * Extra environment for the spawned tauri CLI, merged over the inherited one — it reaches the
+   * web build tauri runs (`beforeBuildCommand`), e.g. `{ MOKU_NATIVE_PROFILE: "debug" }`. Never
+   * changes the argv. Omitted: the spawn call carries no `env` key at all.
+   */
+  env?: Readonly<Record<string, string>> | undefined;
 };
 
 /** How a dev session ended. */

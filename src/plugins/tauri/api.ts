@@ -72,9 +72,10 @@ export function createTauriApi(ctx: TauriContext): Api {
    * A non-zero exit is classified from BOTH scrubbed streams, never stderr alone.
    *
    * @param cmd - The full `[nodePath, tauriJsPath, ...]` argv to spawn.
-   * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed).
+   * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed) and child env.
    * @param hooks.onOutput - Called with each scrubbed output line.
    * @param hooks.onTick - Called with each parsed compile-progress tick.
+   * @param hooks.env - Extra child environment; omitted, the spawn call carries no `env` key.
    * @returns The completed run's result.
    * @throws {Error} A classified `TauriError` on a non-zero exit.
    * @example
@@ -87,6 +88,7 @@ export function createTauriApi(ctx: TauriContext): Api {
     hooks?: {
       onOutput?: ((line: string) => void) | undefined;
       onTick?: ((tick: CompileTick) => void) | undefined;
+      env?: Readonly<Record<string, string>> | undefined;
     }
   ): Promise<RunResult> {
     // Monotonic reading: a wall-clock step (NTP) must never yield a negative duration.
@@ -109,7 +111,14 @@ export function createTauriApi(ctx: TauriContext): Api {
       if (tick) hooks?.onTick?.(tick);
     };
 
-    const result = await spawnFn({ cmd, cwd: runCwd(), onLine: handleLine });
+    // Conditional spread: with no env the call keeps its old shape — no `env: undefined` slot.
+    const env = hooks?.env;
+    const result = await spawnFn({
+      cmd,
+      cwd: runCwd(),
+      onLine: handleLine,
+      ...(env === undefined ? {} : { env })
+    });
     const durationMs = Math.round(performance.now() - startedAt);
     const scrubbedStdout = scrub(result.stdout);
     const scrubbedStderr = scrub(result.stderr);
@@ -147,17 +156,25 @@ export function createTauriApi(ctx: TauriContext): Api {
      * Runs `tauri build` / `tauri ios|android build` for the given target,
      * streaming scrubbed output and parsed compile ticks through the callbacks.
      *
-     * @param opts - Build options (target, artifact flavour, progress callbacks).
+     * @param opts - Build options (target, artifact flavour, progress callbacks, child env).
      * @param opts.target - Packaging target.
      * @param opts.simulator - iOS: build the host's simulator slice instead of a device archive.
      * @param opts.exportMethod - iOS device builds: the `--export-method` to archive with.
      * @param opts.aab - Android: emit a store bundle instead of the default installable APK.
      * @param opts.onTick - Called with parsed compile progress ("Compiling crate N/M").
      * @param opts.onOutput - Called with each scrubbed output line.
+     * @param opts.env - Extra environment for the tauri CLI, merged over the inherited one, so
+     *   the web build tauri runs (`beforeBuildCommand`) can read it. Never changes the argv: the
+     *   debug profile is still a release build (no `--debug`).
      * @returns The completed run's result.
      * @example
      * ```ts
      * await app.tauri.build({ target: "ios", simulator: true, onOutput: line => ctx.log.info(line) });
+     * ```
+     * @example
+     * ```ts
+     * // The web build reads MOKU_NATIVE_PROFILE to pick its debug wiring; the APK is still --release.
+     * await app.tauri.build({ target: "android", env: { MOKU_NATIVE_PROFILE: "debug" } });
      * ```
      */
     async build(opts) {
@@ -165,7 +182,8 @@ export function createTauriApi(ctx: TauriContext): Api {
       // `config.arch` is the injectable host arch: undefined lets buildArgv read process.arch.
       return run(buildArgv(nodePath, tauriJsPath, opts, ctx.config.arch), {
         onOutput: opts.onOutput,
-        onTick: opts.onTick
+        onTick: opts.onTick,
+        env: opts.env
       });
     },
 

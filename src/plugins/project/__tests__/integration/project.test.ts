@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import type { BuildProfile, Target } from "../../../../config";
 import { coreConfig, createCore } from "../../../../config";
 import { projectPlugin } from "../../index";
 import { mainActivityPath, REAL_MAIN_ACTIVITY } from "../unit/mobile/fixtures";
@@ -38,6 +39,10 @@ const manifestWithMainActivity = (extra: string) =>
     "</manifest>",
     ""
   ].join("\n");
+
+/** A captured pre-change artifact. */
+const baseline = (name: string) =>
+  readFile(new URL(`fixtures/${name}.baseline`, import.meta.url), "utf8");
 
 describe("complex tier: project plugin (integration)", () => {
   let projectDir: string;
@@ -87,6 +92,24 @@ describe("complex tier: project plugin (integration)", () => {
     await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
     return manifestPath;
   };
+
+  /** The fixtures under `fixtures/` were captured from this app BEFORE the shell existed. */
+  const createAndroidApp = (system: ReadonlyArray<{ name: string }>) => {
+    const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+    return framework.createApp({
+      config: {
+        ...validAppConfig,
+        projectDir,
+        app: { ...validAppConfig.app, version: "1.2.3", buildNumber: "7" },
+        system,
+        capabilities: {}
+      }
+    });
+  };
+
+  /** A generated file below `src-tauri`. */
+  const generated = (...segments: string[]) =>
+    readFile(path.join(projectDir, "src-tauri", ...segments), "utf8");
 
   // -------------------------------------------------------------------------
   // Runtime: generate writes the full tree
@@ -282,6 +305,159 @@ describe("complex tier: project plugin (integration)", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Runtime: the shell capability and the debug profile
+  // -------------------------------------------------------------------------
+
+  describe("runtime: the shell capability and the debug profile", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("generate android with shell writes the crate, links it in lib.rs and grants moku-shell:default", async () => {
+      const app = createAndroidApp([{ name: "store" }, { name: "shell" }]);
+
+      await app.project.generate({ target: "android" });
+
+      const crate = path.join(projectDir, "plugins", "moku-shell");
+      for (const file of [
+        "Cargo.toml",
+        "build.rs",
+        "src/lib.rs",
+        "src/page.js",
+        "permissions/default.toml",
+        "android/build.gradle.kts",
+        "android/src/main/AndroidManifest.xml",
+        "android/src/main/java/app/moku/shell/MokuShellPlugin.kt",
+        "android/src/main/java/app/moku/shell/MokuShellProfile.kt"
+      ]) {
+        expect(existsSync(path.join(crate, file)), file).toBe(true);
+      }
+      expect(await generated("src", "lib.rs")).toContain(
+        ".plugin(tauri_plugin_moku_shell::init())"
+      );
+      expect(JSON.parse(await generated("capabilities", "default.json")).permissions).toContain(
+        "moku-shell:default"
+      );
+      expect(await generated("Cargo.toml")).toContain(
+        'tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }'
+      );
+    });
+
+    it("without shell and with profile omitted the output is byte-identical to before the change, no plugins/ dir", async () => {
+      const app = createAndroidApp([{ name: "store" }, { name: "back" }, { name: "haptics" }]);
+
+      await app.project.generate({ target: "android" });
+
+      expect(existsSync(path.join(projectDir, "plugins"))).toBe(false);
+      expect(await generated("Cargo.toml")).toBe(await baseline("Cargo.toml"));
+      expect(await generated("src", "lib.rs")).toBe(await baseline("lib.rs"));
+      expect(await generated("capabilities", "default.json")).toBe(await baseline("default.json"));
+    });
+
+    it("patchMobile in debug signs with the keystore read through ctx.env and installs beside the store app", async () => {
+      // A Windows-shaped host: no HOME, the profile directory in USERPROFILE. The home stays
+      // outside the temp root, which the projectDir guard would otherwise stop trusting.
+      const home = await mkdtemp(path.join(tmpdir(), "moku-native-home-"));
+      const keystore = path.join(home, ".android", "debug.keystore");
+      await mkdir(path.dirname(keystore), { recursive: true });
+      await writeFile(keystore, "keystore", "utf8");
+      vi.stubEnv("HOME", undefined);
+      vi.stubEnv("USERPROFILE", home);
+      const manifestPath = await seedAndroid(manifestWithMainActivity(""));
+      const app = createAndroidApp([]);
+
+      await app.project.patchMobile({ target: "android", profile: "debug" });
+      await rm(home, { recursive: true, force: true });
+
+      const gradle = await readFile(
+        path.join(projectDir, "src-tauri", "gen", "android", "app", "build.gradle.kts"),
+        "utf8"
+      );
+      expect(gradle).toContain('applicationIdSuffix = ".debug"');
+      expect(gradle).toContain(`storeFile = file("${keystore}")`);
+      expect(await readFile(manifestPath, "utf8")).toContain(
+        'android:networkSecurityConfig="@xml/network_security_config"'
+      );
+    });
+
+    it("patchMobileIcons wraps the Android icon with app.adaptiveIconInset; ios gets nothing", async () => {
+      const mipmap = path.join(
+        projectDir,
+        "src-tauri",
+        "gen",
+        "android",
+        "app",
+        "src",
+        "main",
+        "res",
+        "mipmap-anydpi-v26"
+      );
+      await mkdir(mipmap, { recursive: true });
+      await writeFile(
+        path.join(mipmap, "ic_launcher.xml"),
+        '<adaptive-icon>\n  <foreground android:drawable="@mipmap/fg"/>\n</adaptive-icon>\n',
+        "utf8"
+      );
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: {
+          ...validAppConfig,
+          projectDir,
+          app: { ...validAppConfig.app, adaptiveIconInset: 19.44 }
+        }
+      });
+
+      expect(await app.project.patchMobileIcons({ target: "ios" })).toEqual({
+        patched: [],
+        unchanged: []
+      });
+      await app.project.patchMobileIcons({ target: "android" });
+
+      expect(await readFile(path.join(mipmap, "ic_launcher.xml"), "utf8")).toContain(
+        '<foreground><inset android:drawable="@mipmap/fg" android:inset="19.44%"/></foreground>'
+      );
+    });
+
+    it("detectPageAgent scans web.dist below web.cwd (bug: a monorepo page is never scanned)", async () => {
+      const web = path.join(projectDir, "web");
+      await mkdir(path.join(web, "out"), { recursive: true });
+      await writeFile(path.join(web, "out", "main.js"), 'fetch("/__editor/hello");\n', "utf8");
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: {
+          ...validAppConfig,
+          projectDir,
+          web: { ...validAppConfig.web, cwd: web, dist: "out" }
+        }
+      });
+
+      expect(await app.project.detectPageAgent()).toEqual({ agent: true, file: "main.js" });
+    });
+
+    it("checkShellLinked checks a debug android tree, and an omitted profile is the store one", async () => {
+      await seedAndroid(manifestWithMainActivity(""));
+      const app = createAndroidApp([]);
+
+      await expect(app.project.checkShellLinked({ target: "android" })).resolves.toBeUndefined();
+      await expect(
+        app.project.checkShellLinked({ target: "android", profile: "debug" })
+      ).rejects.toThrow("[native] the shell plugin is not linked into gen/android");
+    });
+
+    it("type-level: generate rejects a profile outside BuildProfile", () => {
+      const app = createAndroidApp([]);
+
+      // @ts-expect-error -- "beta" is not a BuildProfile
+      const misuse = () => app.project.generate({ target: "android", profile: "beta" });
+
+      expectTypeOf(misuse).toBeFunction();
+      expectTypeOf(app.project.generate)
+        .parameter(0)
+        .toEqualTypeOf<{ target: Target; profile?: BuildProfile | undefined }>();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Runtime: icon source
   // -------------------------------------------------------------------------
 
@@ -402,7 +578,7 @@ describe("complex tier: project plugin (integration)", () => {
 
     it("exposes registryRows and requiredFiles for doctor", () => {
       const app = createTestApp();
-      expect(app.project.getRegistryRows()).toHaveLength(7);
+      expect(app.project.getRegistryRows()).toHaveLength(8);
       expect(app.project.getRequiredFiles({ target: "android" }).length).toBeGreaterThan(0);
     });
   });
