@@ -16,9 +16,8 @@ const defaultConfig: Config = {
  * Each concern is its own file next to this one; the ≤30-line wiring rule keeps the layout
  * flat rather than nested.
  *
- * NO onStop by design (D-002): spec/08 §2 TeardownContext = { global } — a regular plugin's
- * onStop cannot reach ctx.state, so dev teardown is owned by the dev seam's own control flow
- * (signal handlers + DevHandle.stop()), which also covers Ctrl-C where onStop never fires.
+ * NO onStop by design (D-002): teardown is owned by the dev seam (signal handlers +
+ * DevHandle.stop()), which also covers Ctrl-C where onStop never fires.
  *
  * @see README.md
  * @example

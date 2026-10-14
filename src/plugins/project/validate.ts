@@ -126,20 +126,14 @@ function assertIconInset(inset: number | undefined): void {
 }
 
 /**
- * Validates the global config at composition time — throws `[native]`-formatted errors
- * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, a window colour, orientation or adaptive icon
- * inset outside its allowed shape, a `projectDir` outside the project, an `outDir` this app must not
- * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
- * scheme.
+ * Validates the app identity and web wiring: `app.name`, a reverse-DNS `app.identifier`,
+ * and every `web.*` field. Each lands verbatim in tauri.conf.json, where a missing value
+ * fails deep inside `tauri build` instead of at `createApp`.
  *
  * @param global - Frozen global framework config.
- * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
- *   derived directories, system names, or deep-link config are invalid.
+ * @throws {Error} When a required identity or web field is missing or malformed.
  */
-export function validateProjectConfig(global: Readonly<Config>): void {
-  // Stanza 1 — identity and web wiring. Every field below lands verbatim in
-  // tauri.conf.json, where a missing value fails deep inside `tauri build` instead.
+function assertIdentity(global: Readonly<Config>): void {
   if (!global.app.name) {
     throw new Error(
       "[native] app.name is required.\n  Set config.app.name to your app's display name."
@@ -170,6 +164,51 @@ export function validateProjectConfig(global: Readonly<Config>): void {
       "[native] web.dist is required.\n  Set config.web.dist to your web build's output directory."
     );
   }
+}
+
+/**
+ * Validates the deep-link scheme when `deep-link` is composed in `config.system`: the
+ * scheme must be set and shaped like an RFC 3986 scheme, because it lands raw in
+ * Info.plist and AndroidManifest.xml. A composition without deep-link passes untouched.
+ *
+ * @param global - Frozen global framework config.
+ * @throws {Error} When deep-link is composed and its scheme is missing or malformed.
+ */
+function assertDeepLinkScheme(global: Readonly<Config>): void {
+  const usesDeepLink = global.system.some(entry => entry.name === "deep-link");
+  if (!usesDeepLink) return;
+
+  const scheme = global.capabilities["deep-link"]?.scheme;
+  if (!scheme) {
+    throw new Error(
+      '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is missing.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
+    );
+  }
+  assertShape(
+    'capabilities["deep-link"].scheme',
+    scheme,
+    URL_SCHEME_PATTERN,
+    "URL scheme",
+    'Use a scheme that starts with a letter and carries no spaces or separators, such as "myapp".'
+  );
+}
+
+/**
+ * Validates the global config at composition time — throws `[native]`-formatted errors
+ * for missing app identity, missing web wiring, values that would break out of the
+ * generated file they are written into, a window colour, orientation or adaptive icon
+ * inset outside its allowed shape, a `projectDir` outside the project, an `outDir` this app must not
+ * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
+ * scheme.
+ *
+ * @param global - Frozen global framework config.
+ * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
+ *   derived directories, system names, or deep-link config are invalid.
+ */
+export function validateProjectConfig(global: Readonly<Config>): void {
+  // Stanza 1 — identity and web wiring. Every field below lands verbatim in
+  // tauri.conf.json, where a missing value fails deep inside `tauri build` instead.
+  assertIdentity(global);
 
   // Stanza 2 — values that are interpolated VERBATIM into a generated file. A version goes
   // into a Cargo TOML string, a build number into plist/JSON, an env-var name into a Kotlin
@@ -232,20 +271,5 @@ export function validateProjectConfig(global: Readonly<Config>): void {
   // deep-link is the one row that cannot be packaged from its defaults alone.
   assertKnownCapabilities(global.system);
 
-  const usesDeepLink = global.system.some(entry => entry.name === "deep-link");
-  if (!usesDeepLink) return;
-
-  const scheme = global.capabilities["deep-link"]?.scheme;
-  if (!scheme) {
-    throw new Error(
-      '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is missing.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
-    );
-  }
-  assertShape(
-    'capabilities["deep-link"].scheme',
-    scheme,
-    URL_SCHEME_PATTERN,
-    "URL scheme",
-    'Use a scheme that starts with a letter and carries no spaces or separators, such as "myapp".'
-  );
+  assertDeepLinkScheme(global);
 }

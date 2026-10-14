@@ -96,6 +96,9 @@ export const createApp = framework.createApp;
 /**
  * Creates a consumer-authored plugin bound to this framework's chain.
  *
+ * @param name - Unique plugin id; becomes the plugin's key on the app.
+ * @param spec - Plugin spec (config, state, api, hooks, lifecycle); every type infers from it.
+ * @returns A typed plugin instance for the `createCore` or `createApp` plugins array.
  * @example
  * ```ts
  * const myPlugin = createPlugin("my", { api: () => ({}) });

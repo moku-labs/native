@@ -273,20 +273,19 @@ export function createProjectApi(ctx: ProjectContext): Api {
    */
   const ensureIconSource = async (): Promise<string> => {
     const configured = ctx.global.app.icon;
-    if (configured) {
-      const resolved = path.resolve(configured);
-      if (!existsSync(resolved)) {
-        throw new Error(
-          `[native] app.icon "${configured}" was not found at ${resolved}.\n  Point config.app.icon at a 1024x1024 PNG, or unset it to use the generated placeholder.`
-        );
-      }
-      return resolved;
+    if (!configured) {
+      const placeholder = path.resolve(ctx.global.projectDir, "placeholder-icon.png");
+      const action = await writeIfChanged(placeholder, placeholderIconPng(), ctx.global.projectDir);
+      ctx.log.debug("project:ensureIconSource", { path: placeholder, action });
+      return placeholder;
     }
 
-    const placeholder = path.resolve(ctx.global.projectDir, "placeholder-icon.png");
-    const action = await writeIfChanged(placeholder, placeholderIconPng(), ctx.global.projectDir);
-    ctx.log.debug("project:ensureIconSource", { path: placeholder, action });
-    return placeholder;
+    const resolved = path.resolve(configured);
+    if (existsSync(resolved)) return resolved;
+
+    throw new Error(
+      `[native] app.icon "${configured}" was not found at ${resolved}.\n  Point config.app.icon at a 1024x1024 PNG, or unset it to use the generated placeholder.`
+    );
   };
 
   /**
