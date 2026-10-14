@@ -21,10 +21,6 @@ const IOS_RUST_TARGETS: readonly string[] = ["aarch64-apple-ios", "aarch64-apple
  *
  * @param input - The check input (uses the injected probe seam).
  * @returns The binaries that are missing, each with its install command.
- * @example
- * ```ts
- * await findMissingBinaries(input); // [{ cmd: "xcodegen", fixIt: "brew install xcodegen" }]
- * ```
  */
 async function findMissingBinaries(input: CheckInput): Promise<typeof IOS_BINARIES> {
   const probed = await Promise.all(
@@ -42,10 +38,6 @@ async function findMissingBinaries(input: CheckInput): Promise<typeof IOS_BINARI
  *
  * @param input - The check input (uses the injected probe seam).
  * @returns The missing rust target triples.
- * @example
- * ```ts
- * await findMissingRustTargets(input); // ["aarch64-apple-ios-sim"]
- * ```
  */
 async function findMissingRustTargets(input: CheckInput): Promise<readonly string[]> {
   const result = await input.probe("rustup", ["target", "list", "--installed"]);
@@ -61,10 +53,6 @@ async function findMissingRustTargets(input: CheckInput): Promise<readonly strin
  *
  * @param input - The check input, scoped to the "ios" target.
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "ios", probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const [missingBinaries, missingTargets] = await Promise.all([

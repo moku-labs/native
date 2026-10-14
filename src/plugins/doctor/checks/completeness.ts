@@ -12,10 +12,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param input - The check input, scoped to "ios" or "android".
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "android", project, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   if (input.target !== "ios" && input.target !== "android") {

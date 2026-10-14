@@ -9,10 +9,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param input - The check input, scoped to the "android" target.
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "android", env, probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const missing: string[] = [];

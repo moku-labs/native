@@ -11,10 +11,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param input - The check input (host-scoped).
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "host", probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const result = await input.probe("node", ["--version"]);
