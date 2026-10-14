@@ -140,6 +140,27 @@ describe("classify", () => {
     expect(error.message).not.toContain("non-zero exit code");
   });
 
+  it("falls back to the first cause line when none states an error", () => {
+    const log = ["Compiling app", "module 'x' not found", "bundling failed", "done"].join("\n");
+    expect(classify(1, log).message).toContain("module 'x' not found");
+  });
+
+  it("quotes only from the last 15 cause lines, as the tail does", () => {
+    const stale = "error: an early error that the build recovered from";
+    const recent = Array.from({ length: 15 }, (_, index) => `step ${index} failed`);
+    const error = classify(1, [stale, ...recent].join("\n"));
+    expect(error.message).not.toContain(stale);
+    expect(error.message).toContain("step 0 failed");
+  });
+
+  it("cuts a long cause line in the message and keeps it whole in the tail", () => {
+    const long = `error: ${"x".repeat(400)}`;
+    const error = classify(1, long);
+    expect(error.message).toContain(`${long.slice(0, 300)}…`);
+    expect(error.message).not.toContain(long.slice(0, 301));
+    expect(error.stderrTail).toContain(long);
+  });
+
   it("names the last output line when no line reads like a cause", () => {
     const error = classify(1, "Running beforeBuildCommand\nbundling stopped");
     expect(error.message).toContain("bundling stopped");

@@ -160,7 +160,7 @@ export type AppleSigning = {
   exportMethod?: AppleExportMethod;
   /** Minimum macOS version → `bundle.macOS.minimumSystemVersion`. */
   macosMinimumSystemVersion?: string;
-  /** Minimum iOS version → `bundle.iOS.minimumSystemVersion`. */
+  /** Minimum iOS version → `bundle.iOS.minimumSystemVersion`; `"15.0"` when unset (Xcode 27 rejects Tauri's 14.0). */
   iosMinimumSystemVersion?: string;
 };
 

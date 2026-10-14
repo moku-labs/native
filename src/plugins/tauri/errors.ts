@@ -171,10 +171,14 @@ export function classify(code: number | null, scrubbedOutput: string): TauriErro
   const lines = scrubbedOutput.split(/\r?\n/).filter(line => line.length > 0);
   const classifiable = signalLines(lines);
 
+  // The bucket is decided over cause lines only, never over progress narration.
   const match = TAXONOMY_PATTERNS.find(({ test }) => classifiable.some(line => test.test(line)));
   const kind: TauriErrorKind = match?.kind ?? (code === null ? "cancelled" : "unknown");
+
+  // The message quotes the cause itself: a thrown error is often printed without its tail.
   const cause = causeLine(classifiable, lines);
   const causeText = cause === undefined ? "" : `\n  ${cause}`;
+
   const message = `[native] tauri ${kind.replaceAll("-", " ")}.${causeText}\n  ${ADVICE[kind]}`;
   return new TauriError(kind, message, { exitCode: code, stderrTail: buildTail(lines) });
 }
@@ -190,7 +194,7 @@ export function classify(code: number | null, scrubbedOutput: string): TauriErro
  * @returns The trimmed line to quote, or `undefined` when there was no output at all.
  * @example
  * ```ts
- * causeLine(["error: Cannot find module 'x'"], ["Building", "error: Cannot find module 'x'"]);
+ * causeLine(["failed to build", "error: Cannot find module 'x'"], []); // "error: Cannot find module 'x'"
  * ```
  */
 function causeLine(causes: readonly string[], lines: readonly string[]): string | undefined {

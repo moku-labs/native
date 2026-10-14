@@ -30,7 +30,7 @@
  * | `targets` | `readonly Target[]` | `hostTargets(process.platform)` — one desktop target, mobile is opt-in |
  * | `projectDir` | `string` | `".moku/tauri"` — generated Tauri project (gitignored build output) |
  * | `outDir` | `string` | `"dist-native"` — installer delivery root |
- * | `signing` | `SigningConfig` | `{}` — identifiers and env-var NAMES only, never secrets |
+ * | `signing` | `SigningConfig` | `{}` — identifiers and env-var NAMES only, never secrets; the generated iOS minimum falls back to `"15.0"` |
  *
  * Per-plugin config (`pluginConfigs`) — each plugin's own defaults, all seams `undefined`
  * so the real implementation runs unless a test injects one:

@@ -59,7 +59,8 @@ function compact(
  * @returns The `bundle` object for tauri.conf.json.
  * @example
  * ```ts
- * buildBundle({ global, target: "macos", capabilities: [] });
+ * buildBundle({ global: { app: { name: "App" }, signing: {} }, target: "ios", capabilities: [] }).iOS;
+ * // { minimumSystemVersion: "15.0" }
  * ```
  */
 function buildBundle(input: GeneratorInput) {
