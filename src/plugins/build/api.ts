@@ -2,7 +2,8 @@
  * @file build plugin — API factory: prepare (scaffold→codegen→icons), run (one target),
  * runAll (sequential multi-target).
  */
-import { assertDebugTargets, profileOf, runPipeline, runPrepare } from "./pipeline";
+import { profileOf } from "./phase";
+import { assertDebugTargets, runPipeline, runPrepare } from "./pipeline";
 import type { Api, BuildContext, BuildDeps, BuildResult } from "./types";
 
 /**
@@ -17,23 +18,14 @@ import type { Api, BuildContext, BuildDeps, BuildResult } from "./types";
  * @param ctx - Plugin context (global config, log, emits native:phase/native:complete).
  * @param deps - The project/tauri API slices the pipeline calls.
  * @returns The `build` plugin's public API.
- * @example
- * ```ts
- * const api = createBuildApi(ctx, { project, tauri });
- * const result = await api.run({ target: "macos" });
- * ```
  */
 export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
   return {
     /**
-     * Implements {@link Api.prepare}: the debug-target guard, then the three phases.
+     * Implements {@link Api.prepare}.
      *
      * @param opts - See {@link Api.prepare}.
      * @returns See {@link Api.prepare}.
-     * @example
-     * ```ts
-     * await api.prepare({ target: "ios", debug: true }); // rejects: asked for ios
-     * ```
      */
     async prepare(opts) {
       assertDebugTargets([opts.target], opts);
@@ -41,28 +33,20 @@ export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
     },
 
     /**
-     * Implements {@link Api.run}: one pipeline pass.
+     * Implements {@link Api.run}.
      *
      * @param opts - See {@link Api.run}.
      * @returns See {@link Api.run}.
-     * @example
-     * ```ts
-     * (await api.run({ target: "android" })).outPath; // "dist-native/android"
-     * ```
      */
     run(opts) {
       return runPipeline(ctx, deps, opts);
     },
 
     /**
-     * Implements {@link Api.runAll}: the up-front guard, then one pass per target, in order.
+     * Implements {@link Api.runAll}.
      *
      * @param opts - See {@link Api.runAll}.
      * @returns See {@link Api.runAll}.
-     * @example
-     * ```ts
-     * await api.runAll({ targets: ["android", "ios"], debug: true }); // rejects before any phase
-     * ```
      */
     async runAll(opts = {}) {
       const targets = opts.targets ?? ctx.global.targets;

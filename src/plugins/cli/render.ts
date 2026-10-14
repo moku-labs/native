@@ -51,11 +51,6 @@ export function terminalWidth(columns: number | undefined = process.stdout.colum
  * @param renderImpl - Injected line sink (default: undefined → branded console default).
  * @param columns - Injected column count (default: undefined → `process.stdout.columns`).
  * @returns A branded console writing every line through the render seam.
- * @example
- * ```ts
- * const ui = createRenderConsole(ctx.config.renderImpl);
- * ui.info("ready");
- * ```
  */
 export function createRenderConsole(
   renderImpl: RenderFn | undefined,
@@ -77,10 +72,6 @@ const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error
  * @param ui - The branded console supplying the palette.
  * @param data - The record's optional structured payload.
  * @returns The dim ` {"…":…}` suffix, or an empty string when there is no payload.
- * @example
- * ```ts
- * formatEntryData(ui, { written: 7 }); // ' {"written":7}' (dim)
- * ```
  */
 function formatEntryData(ui: BrandConsole, data: unknown): string {
   if (data === undefined) return "";
@@ -104,11 +95,6 @@ function formatEntryData(ui: BrandConsole, data: unknown): string {
  * @param ui - The branded console to render through.
  * @param minLevel - Lowest severity to render (default `"info"` — debug detail stays in the trace).
  * @returns A log sink writing branded lines through `ui`.
- * @example
- * ```ts
- * ctx.log.clearSinks();
- * ctx.log.addSink(createLogSink(ctx.state.ui));
- * ```
  */
 export function createLogSink(ui: BrandConsole, minLevel: LogLevel = "info"): LogSink {
   const threshold = LEVEL_RANK[minLevel];
@@ -118,10 +104,6 @@ export function createLogSink(ui: BrandConsole, minLevel: LogLevel = "info"): Lo
      * Renders one record as the branded line matching its level.
      *
      * @param entry - The record to render.
-     * @example
-     * ```ts
-     * sink.write({ level: "info", event: "project:generate", ts: Date.now() });
-     * ```
      */
     write(entry: LogEntry): void {
       if (LEVEL_RANK[entry.level] < threshold) return;
@@ -154,11 +136,6 @@ export function createLogSink(ui: BrandConsole, minLevel: LogLevel = "info"): Lo
  *
  * @param confirmImpl - Injected confirm seam (default: undefined → branded prompt).
  * @returns The resolved confirm function.
- * @example
- * ```ts
- * const confirm = resolveConfirm(ctx.config.confirmImpl);
- * await confirm("Wipe the project directory?");
- * ```
  */
 export function resolveConfirm(confirmImpl: ConfirmFn | undefined): ConfirmFn {
   return confirmImpl ?? (question => createBrandPrompts().confirm(question));
@@ -173,10 +150,6 @@ export function resolveConfirm(confirmImpl: ConfirmFn | undefined): ConfirmFn {
  * @param ui - The branded console to render through.
  * @param payload - The phase event payload.
  * @param elapsedMs - Milliseconds since the phase started (drives the spinner frame).
- * @example
- * ```ts
- * renderPhaseEvent(ui, { target: "macos", phase: "compile", status: "start" }, 0);
- * ```
  */
 export function renderPhaseEvent(
   ui: BrandConsole,
@@ -213,10 +186,6 @@ export function renderPhaseEvent(
  * @param ui - The branded console to render through.
  * @param payload - The completion event payload.
  * @param appName - The composed app's display name.
- * @example
- * ```ts
- * renderCompleteEvent(ui, { target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 42000, profile: "store" }, "Demo");
- * ```
  */
 export function renderCompleteEvent(
   ui: BrandConsole,
@@ -241,10 +210,6 @@ export function renderCompleteEvent(
  *
  * @param ui - The branded console to render through.
  * @param result - The completed check result.
- * @example
- * ```ts
- * renderCheckEvent(ui, { id: "node-binary", target: "host", status: "pass", message: "node found" });
- * ```
  */
 export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
   const label = `${result.target} · ${result.id} — ${result.message}`;
@@ -265,10 +230,6 @@ export function renderCheckEvent(ui: BrandConsole, result: CheckResult): void {
  *
  * @param ui - The branded console to render through.
  * @param report - The aggregated diagnosis report.
- * @example
- * ```ts
- * renderDoctorSummary(ui, await app.doctor.run());
- * ```
  */
 export function renderDoctorSummary(ui: BrandConsole, report: DoctorReport): void {
   const counts = { pass: 0, warn: 0, fail: 0 };
@@ -331,6 +292,23 @@ function truncateLine(line: string, budget: number | undefined): string {
 }
 
 /**
+ * Renders a scrubbed stderr tail framed for the stream: line by line, whole, when there is
+ * no terminal (`budget` undefined), or as a branded box cut to the terminal's width.
+ *
+ * @param ui - The branded console to render through.
+ * @param stderrTail - The non-empty, trimmed stderr tail.
+ * @param budget - The maximum line length, from {@link tailLineBound}.
+ */
+function renderTail(ui: BrandConsole, stderrTail: string, budget: number | undefined): void {
+  const tailLines = stderrTail.split(/\r?\n/);
+  if (budget === undefined) {
+    for (const line of tailLines) ui.line(line);
+    return;
+  }
+  ui.box(tailLines.map(line => truncateLine(line, budget)));
+}
+
+/**
  * Renders a failed build: the classified {@link TauriError}'s scrubbed stderr tail first,
  * then the `[native]` error line. Cause first, verdict second — the tail is the only place
  * the real toolchain diagnostic survives. A non-`TauriError` failure (or an empty tail)
@@ -346,27 +324,16 @@ function truncateLine(line: string, budget: number | undefined): string {
  * @param ui - The branded console to render through.
  * @param error - The failure thrown by `build.run`/`build.runAll`.
  * @param columns - The stream's column count (default: `process.stdout.columns`).
- * @example
- * ```ts
- * try { await build.run({ target: "macos" }); } catch (error) { renderBuildFailure(ui, error); throw error; }
- * ```
  */
 export function renderBuildFailure(
   ui: BrandConsole,
   error: unknown,
   columns: number | undefined = process.stdout.columns
 ): void {
+  // Cause first: the toolchain's own diagnostic, when the failure carries one.
   const stderrTail = error instanceof TauriError ? error.stderrTail.trim() : "";
-  const budget = tailLineBound(columns);
+  if (stderrTail) renderTail(ui, stderrTail, tailLineBound(columns));
 
-  if (stderrTail) {
-    const tailLines = stderrTail.split(/\r?\n/);
-    if (budget === undefined) {
-      for (const line of tailLines) ui.line(line);
-    } else {
-      ui.box(tailLines.map(line => truncateLine(line, budget)));
-    }
-  }
-
+  // Verdict second: the `[native]` error line.
   ui.error(error instanceof Error ? error.message : String(error));
 }

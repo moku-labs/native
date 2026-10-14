@@ -195,9 +195,11 @@ function lineCount(region: string): number {
  * ```
  */
 export function restoreDebugName(existing: string): string {
+  // Never debugged: no marker, nothing to restore.
   const marker = existing.indexOf(DEBUG_NAME_MARKER);
   if (marker === -1) return existing;
 
+  // Read the record: the renamed line count and the original lines in base64.
   const commentEnd = existing.indexOf("-->", marker);
   const [count = "0", payload = ""] = existing
     .slice(marker + DEBUG_NAME_MARKER.length, commentEnd)
@@ -205,11 +207,14 @@ export function restoreDebugName(existing: string): string {
     .split(/\s+/);
   const original = Buffer.from(payload, "base64").toString("utf8");
 
+  // Locate the region: the marker line plus the renamed lines that follow it.
   const lineStart = existing.lastIndexOf("\n", marker) + 1;
   let regionEnd = lineEndAfter(existing, commentEnd);
   for (let line = 0; line < Number.parseInt(count, 10); line += 1) {
     regionEnd = lineEndAfter(existing, regionEnd);
   }
+
+  // Reassemble: the original lines take the region's place.
   return `${existing.slice(0, lineStart)}${original}${existing.slice(regionEnd)}`;
 }
 
@@ -228,23 +233,31 @@ export function restoreDebugName(existing: string): string {
  * ```
  */
 export function applyDebugName(existing: string, appName: string): string {
+  // Undo an earlier debug pass first, so the name is never suffixed twice.
   const base = restoreDebugName(existing);
   const matches = [...base.matchAll(NAME_ELEMENT)];
   const first = matches.at(0);
   const last = matches.at(-1);
   if (!first || !last) return base;
 
+  // Locate the region: whole lines from the first to the last name element.
   const regionStart = base.lastIndexOf("\n", first.index) + 1;
   const regionEnd = lineEndAfter(base, last.index + last[0].length);
   const region = base.slice(regionStart, regionEnd);
-  const indent = /^[\t ]*/.exec(region)?.[0] ?? "";
+
+  // Rename: every name element in the region gets the escaped debug label.
   const label = androidStringResource(`${appName} (debug)`);
   const renamed = region.replaceAll(
     NAME_ELEMENT,
     (_element, open: string, _body: string, close: string) => `${open}${label}${close}`
   );
+
+  // Record the original: a marker line, indented like the region, keeps it in base64.
+  const indent = /^[\t ]*/.exec(region)?.[0] ?? "";
   const payload = Buffer.from(region, "utf8").toString("base64");
   const markerLine = `${indent}${DEBUG_NAME_MARKER} ${lineCount(renamed)} ${payload} -->${lineEnding(base)}`;
+
+  // Reassemble: the marker line, then the renamed region, in the region's place.
   return `${base.slice(0, regionStart)}${markerLine}${renamed}${base.slice(regionEnd)}`;
 }
 
@@ -257,6 +270,7 @@ export function applyDebugName(existing: string, appName: string): string {
  * @param result - The lists to record the outcome in.
  * @param result.patched - Paths written.
  * @param result.unchanged - Paths already carrying `content`.
+ * @returns Resolves once the file is written (or found current) and its path recorded.
  */
 async function record(
   projectDirectory: string,
@@ -381,6 +395,7 @@ function keptNetwork(bytes: Buffer | undefined, manifest: string | undefined): K
  * @param genDirectory - The `src-tauri/gen/android` directory.
  * @param log - Where a replaced hand-made config is reported.
  * @param result - The lists to record the outcome in.
+ * @returns Resolves once the debug config and the manifest attribute are written.
  */
 async function applyDebugNetworkConfig(
   projectDirectory: string,
@@ -422,6 +437,7 @@ async function applyDebugNetworkConfig(
  * @param genDirectory - The `src-tauri/gen/android` directory.
  * @param log - Where a kept hand-made config is reported.
  * @param result - The lists to record the outcome in.
+ * @returns Resolves once the hand-made config and the attribute are back, or nothing was ours.
  */
 async function revertNetworkConfig(
   projectDirectory: string,
@@ -474,11 +490,6 @@ async function revertNetworkConfig(
  * @param options.genDirectory - Absolute `src-tauri/gen/android` path.
  * @param options.profile - The build profile, with the app name in debug.
  * @returns The paths patched vs. left unchanged.
- * @example
- * ```ts
- * await patchAndroidProfile({ projectDirectory, genDirectory, profile: { profile: "store" } });
- * // { patched: [], unchanged: [] } for a tree never built in debug
- * ```
  */
 export async function patchAndroidProfile(options: {
   projectDirectory: string;

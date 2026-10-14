@@ -27,7 +27,17 @@ export type SpawnFn = (opts: {
   signal?: AbortSignal;
 }) => Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>;
 
-/** tauri plugin per-plugin config — test seams (| undefined required under exactOptionalPropertyTypes). */
+/**
+ * Per-plugin config of tauri: the readiness budget `dev` polls `web.devUrl` with, plus test
+ * seams (spawn, node path, host arch) that fall back to the real host when `undefined`
+ * (`| undefined` is required under exactOptionalPropertyTypes).
+ *
+ * @example
+ * ```ts
+ * // A slow first Rust compile: give the dev server three minutes to answer.
+ * createApp({ pluginConfigs: { tauri: { readiness: { intervalMs: 250, timeoutMs: 180_000 } } } });
+ * ```
+ */
 export type Config = {
   spawnImpl?: SpawnFn | undefined;
   nodePath?: string | undefined;
@@ -72,7 +82,15 @@ export type BuildOptions = BuildArgvOptions & {
   env?: Readonly<Record<string, string>> | undefined;
 };
 
-/** How a dev session ended. */
+/**
+ * How a dev session ended: the exit code, or the signal that stopped it (`code: null`).
+ *
+ * @example
+ * ```ts
+ * // Ctrl-C stops the session through a signal: no code, and not a failure.
+ * const exit: DevExit = { code: null, signal: "SIGTERM" };
+ * ```
+ */
 export type DevExit = { code: number | null; signal: string | null };
 
 /** Live dev-session handle — teardown is owned HERE (D-002), never by cli. */
@@ -114,19 +132,125 @@ export type TauriErrorDetails = {
 // `instanceof` import the value by name from the package root.
 export type { TauriError } from "./errors";
 
-/** Mutable plugin state — the one live dev handle (undefined = no live session; unicorn/no-null). */
+/**
+ * Mutable plugin state: the one live dev handle, kept so a second `dev` call is refused
+ * while a session runs; `undefined` when none is live (unicorn/no-null).
+ */
 export type State = { dev: DevHandle | undefined };
 
 /** Public API of the tauri plugin — the framework's ONLY subprocess seam. */
 export type Api = {
+  /**
+   * Regenerates the icon set from a source image (`tauri icon`) into
+   * `<projectDir>/src-tauri/icons`.
+   *
+   * @param opts - Icon options.
+   * @param opts.source - Path to the source icon image.
+   * @returns The completed run's result.
+   * @throws {Error} A classified `TauriError` on a non-zero exit.
+   * @example
+   * ```ts
+   * // The build plugin's icons phase, with the source project.ensureIconSource() resolved.
+   * const tauri = ctx.require(tauriPlugin);
+   * await tauri.icon({ source: "/work/demo/assets/icon.png" }); // { code: 0, stdout, stderr, durationMs }
+   * ```
+   */
   icon(opts: { source: string }): Promise<RunResult>;
+
+  /**
+   * Runs `tauri build` / `tauri ios|android build` for the given target, streaming scrubbed
+   * output and parsed compile ticks through the callbacks.
+   *
+   * @param opts - Build options (target, artifact flavour, progress callbacks, child env).
+   * @param opts.target - Packaging target.
+   * @param opts.simulator - iOS: build the host's simulator slice instead of a device archive.
+   * @param opts.exportMethod - iOS device builds: the `--export-method` to archive with.
+   * @param opts.aab - Android: emit a store bundle instead of the default installable APK.
+   * @param opts.onTick - Called with parsed compile progress ("Compiling crate N/M").
+   * @param opts.onOutput - Called with each scrubbed output line.
+   * @param opts.env - Extra environment for the tauri CLI, merged over the inherited one, so
+   *   the web build tauri runs (`beforeBuildCommand`) can read it. Never changes the argv: the
+   *   debug profile is still a release build (no `--debug`).
+   * @returns The completed run's result.
+   * @throws {Error} A classified `TauriError` on a non-zero exit.
+   * @example
+   * ```ts
+   * // The build plugin's compile phase: the web build reads MOKU_NATIVE_PROFILE, the APK stays --release.
+   * const tauri = ctx.require(tauriPlugin);
+   * await tauri.build({ target: "android", env: { MOKU_NATIVE_PROFILE: "debug" } });
+   * // { code: 0, stdout, stderr, durationMs }
+   * ```
+   */
   build(opts: BuildOptions): Promise<RunResult>;
+
+  /**
+   * Runs `tauri ios|android init` — the ONLY init verbs (D-013). Callers must check that
+   * `project.getCompleteness({ target })` reports `"not-initialized"` before calling this.
+   *
+   * @param opts - Mobile init options.
+   * @param opts.target - Mobile target to initialize.
+   * @returns The completed run's result.
+   * @throws {Error} A classified `TauriError` on a non-zero exit.
+   * @example
+   * ```ts
+   * // The build plugin's codegen pass initializes a mobile tree only when none exists yet.
+   * const tauri = ctx.require(tauriPlugin);
+   * if (ctx.require(projectPlugin).getCompleteness({ target: "ios" }).status === "not-initialized") {
+   *   await tauri.mobileInit({ target: "ios" }); // writes <projectDir>/src-tauri/gen/apple
+   * }
+   * ```
+   */
   mobileInit(opts: { target: MobileTarget }): Promise<RunResult>;
+
+  /**
+   * Starts the long-lived dev verb (`tauri dev` / `tauri ios|android dev`). Returns at once
+   * with a live handle — never awaits `exited` itself.
+   *
+   * @param opts - Dev options.
+   * @param opts.target - Optional packaging target (desktop-uniform when omitted).
+   * @param opts.onOutput - Called with each scrubbed output line (cli renders these; defaults to log-only).
+   * @returns The live dev handle.
+   * @throws {Error} `[native]` when a dev session is already running.
+   * @example
+   * ```ts
+   * // The cli's dev command: wait for the dev server, then for the session to end.
+   * const handle = await ctx.require(tauriPlugin).dev({ target: "ios", onOutput: line => ui.line(line) });
+   * await handle.ready; // web.devUrl answered
+   * await handle.exited; // code: null after Ctrl-C — a signal ended it, the normal end
+   * ```
+   */
   dev(opts: {
     target?: Target | undefined;
     onOutput?: ((line: string) => void) | undefined;
   }): Promise<DevHandle>;
+
+  /**
+   * Probes CLI presence/version via `tauri info` — used by `doctor`.
+   *
+   * @returns The parsed CLI version, or `undefined` when the CLI can't be invoked.
+   * @example
+   * ```ts
+   * // doctor's tauri-cli check: the one probe routed through the tauri plugin.
+   * const version = await ctx.require(tauriPlugin).getVersion();
+   * version?.cliVersion; // "2.11.4", or undefined when `tauri info` cannot run
+   * ```
+   */
   getVersion(): Promise<{ cliVersion: string } | undefined>;
+
+  /**
+   * Returns the resolved `node` + `tauri.js` pair every verb spawns with, so
+   * `project.patchMobile` can write the same invocation into the generated Xcode/Gradle
+   * build scripts (tauri emits a bare `node tauri`, which does not exist).
+   *
+   * @returns The resolved invocation prefix.
+   * @throws {Error} `[native]` when `node` or the tauri CLI cannot be resolved.
+   * @example
+   * ```ts
+   * // The build plugin's codegen pass, after the mobile init.
+   * const runner = ctx.require(tauriPlugin).getRunner(); // { nodePath: "/usr/local/bin/node", tauriJsPath: "…/@tauri-apps/cli/tauri.js" }
+   * await ctx.require(projectPlugin).patchMobile({ target: "ios", runner, profile: "store" });
+   * ```
+   */
   getRunner(): TauriRunner;
 };
 

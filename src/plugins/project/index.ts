@@ -21,10 +21,6 @@ export const projectPlugin = createPlugin("project", {
    * Validates consumer config at composition time (spec/11 Part 3).
    *
    * @param ctx - Plugin context carrying the frozen global config.
-   * @example
-   * ```ts
-   * onInit: ctx => validateProjectConfig(ctx.global)
-   * ```
    */
   onInit: ctx => {
     validateProjectConfig(ctx.global);

@@ -41,7 +41,7 @@ const ORIENTATION_PATTERN = /^(?:portrait|landscape|any)$/;
  * @throws {Error} When `value` is set and does not match `pattern`.
  * @example
  * ```ts
- * assertShape("app.version", global.app.version, VERSION_PATTERN, "semantic version", 'Use "1.0.0".');
+ * assertShape("app.version", "1.0", VERSION_PATTERN, "semantic version", 'Use "1.0.0".'); // throws: [native] app.version "1.0" is not a valid semantic version.
  * ```
  */
 function assertShape(
@@ -67,7 +67,7 @@ function assertShape(
  * @throws {Error} When the directory is not derived state this app may delete.
  * @example
  * ```ts
- * assertDerivedDirectory(global.projectDir);
+ * assertDerivedDirectory("/"); // throws: [native] config.projectDir "/" resolves outside the project.
  * ```
  */
 function assertDerivedDirectory(value: string): void {
@@ -89,7 +89,7 @@ function assertDerivedDirectory(value: string): void {
  * @throws {Error} When the directory is one this app must not write installers into.
  * @example
  * ```ts
- * assertDeliveryDirectory(global.outDir);
+ * assertDeliveryDirectory("/"); // throws: [native] config.outDir "/" is a directory this app must not deliver into.
  * ```
  */
 function assertDeliveryDirectory(value: string): void {
@@ -136,10 +136,6 @@ function assertIconInset(inset: number | undefined): void {
  * @param global - Frozen global framework config.
  * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
  *   derived directories, system names, or deep-link config are invalid.
- * @example
- * ```ts
- * validateProjectConfig(ctx.global);
- * ```
  */
 export function validateProjectConfig(global: Readonly<Config>): void {
   // Stanza 1 — identity and web wiring. Every field below lands verbatim in

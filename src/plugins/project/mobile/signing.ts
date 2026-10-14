@@ -186,7 +186,7 @@ export function removeSigningBlock(existing: string): string {
  * @returns The patched content with exactly one signing block, or none when unconfigured.
  * @example
  * ```ts
- * applySigningBlock(gradleKts, { keystorePath: "release.jks", keyAlias: "release" });
+ * applySigningBlock("plugins {}\n", {}); // "plugins {}\n" — no keystore, so no block
  * ```
  */
 export function applySigningBlock(
@@ -334,10 +334,6 @@ export function assertDebugKeystore(keystorePath: string): void {
  * @param signing - The Android signing config slice (empty object when unconfigured).
  * @param debugKeystore - The debug keystore path, in the debug profile only.
  * @returns The paths patched vs. left unchanged.
- * @example
- * ```ts
- * await patchAndroidSigning(projectDir, genDir, { keystorePath: "release.jks" });
- * ```
  */
 export async function patchAndroidSigning(
   projectDirectory: string,

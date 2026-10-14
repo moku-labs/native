@@ -19,7 +19,7 @@ import type {
 } from "../../../src/index";
 import { createApp, createPlugin, doctorPlugin } from "../../../src/index";
 // PACKAGE ENTRY — the real framework instance, never createCore re-composition:
-import { ICON_SOURCE_STAMP_FILE } from "../../../src/plugins/build/pipeline";
+import { ICON_SOURCE_STAMP_FILE } from "../../../src/plugins/build/icons";
 import { probeAlwaysOk, spawnBuildSucceeds } from "./fixtures";
 
 /**

@@ -35,10 +35,6 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * `ctx.state.progress`, then renders the corresponding status line.
      *
      * @param payload - The phase event payload.
-     * @example
-     * ```ts
-     * handlers["native:phase"]({ target: "macos", phase: "compile", status: "start" });
-     * ```
      */
     "native:phase"(payload) {
       // A performance.now() reading: the spinner's elapsed time never goes negative on a
@@ -58,10 +54,6 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * Handles one `native:complete` event: renders the completion summary panel.
      *
      * @param payload - The completion event payload.
-     * @example
-     * ```ts
-     * handlers["native:complete"]({ target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 1, profile: "store" });
-     * ```
      */
     "native:complete"(payload) {
       renderCompleteEvent(ui, payload, ctx.global.app.name);
@@ -71,10 +63,6 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * Handles one `doctor:check` event: renders the live pass/warn/fail row.
      *
      * @param payload - The completed check result.
-     * @example
-     * ```ts
-     * handlers["doctor:check"]({ id: "node-binary", target: "host", status: "pass", message: "ok" });
-     * ```
      */
     "doctor:check"(payload) {
       renderCheckEvent(ui, payload);

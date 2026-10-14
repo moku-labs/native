@@ -1,13 +1,15 @@
 /**
  * @file build plugin — per-target phase pipeline: scaffold → codegen → icons → compile →
- * bundle → collect, with timing, native:phase/native:complete emission, the mobile
- * init/completeness gate inside codegen, the icons freshness rule and the
- * live compile→bundle transition split.
+ * bundle → collect, with timing, native:phase/native:complete emission, the debug-target
+ * guard and the mobile init/completeness gate inside codegen. The icons phase lives in
+ * `icons.ts`, the shared compile/bundle subprocess in `compile.ts`.
  */
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import type { BuildFlavor, BuildProfile, NativePhase, Target } from "../../config";
 import { collectArtifacts } from "./collect";
+import { runCompileAndBundle } from "./compile";
+import { runIconsPhase } from "./icons";
+import { emitPhase, profileOf } from "./phase";
 import type { BuildContext, BuildDeps, BuildResult, PhaseTiming, RunOptions } from "./types";
 
 /** Mobile packaging targets — the only two with a `gen/<platform>` init + completeness gate. */
@@ -44,21 +46,6 @@ function incompleteMobileTreeError(target: Target, missing: readonly string[]): 
   return new Error(
     `[native] ${target} project tree is incomplete.\n  Missing ${missing.join(", ")} — run \`native doctor\` to diagnose, or \`native clean --target ${target}\` to reset before rebuilding.`
   );
-}
-
-/**
- * Picks the profile a build flavour asks for: `debug` set means the debug profile,
- * anything else the store one.
- *
- * @param flavor - The build flavour of the run.
- * @returns `"debug"` or `"store"`.
- * @example
- * ```ts
- * profileOf({ debug: true }); // "debug"
- * ```
- */
-export function profileOf(flavor: BuildFlavor): BuildProfile {
-  return flavor.debug === true ? "debug" : "store";
 }
 
 /**
@@ -119,9 +106,11 @@ export async function runCodegen(
   target: Target,
   profile: BuildProfile = "store"
 ): Promise<CodegenResult> {
+  // Write the generated project first: mobile init refuses to run without its config on disk.
   await deps.project.generate({ target, profile });
   if (!isMobileTarget(target)) return { mobileInitRan: false };
 
+  // Initialize the mobile tree when it is absent, then read its completeness again.
   let status = deps.project.getCompleteness({ target });
   let mobileInitRan = false;
   if (status.status === "not-initialized") {
@@ -129,396 +118,16 @@ export async function runCodegen(
     mobileInitRan = true;
     status = deps.project.getCompleteness({ target });
   }
+
+  // A partial tree fails fast: it is never silently initialized over.
   if (status.status === "incomplete") {
     throw incompleteMobileTreeError(target, status.missing);
   }
 
+  // Point the generated build phases at the real runner and apply the profile.
   await deps.project.patchMobile({ target, runner: deps.tauri.getRunner(), profile });
   ctx.log.debug("build:codegen", { target, profile, mobileInitRan });
   return { mobileInitRan };
-}
-
-/**
- * Name of the stamp file the icons phase writes beside the generated set. An mtime
- * comparison cannot answer the question that matters — pointing `app.icon` at an OLDER file
- * is a change too — so the stamp records WHICH source the set was generated from.
- */
-export const ICON_SOURCE_STAMP_FILE = ".source";
-
-/**
- * Reads a path's modification time, treating an absent path as "no mtime" rather than
- * an error — a missing generated icon simply means the set has to be regenerated.
- *
- * @param target - The path to stat.
- * @returns The modification time in milliseconds, or undefined when the path is absent.
- * @example
- * ```ts
- * const mtime = await modifiedAt("/app/.moku/tauri/src-tauri/icons/icon.png");
- * ```
- */
-async function modifiedAt(target: string): Promise<number | undefined> {
-  try {
-    const stats = await stat(target);
-    return stats.mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Builds the stamp for one icon source: its absolute path, size and modification time. Any
- * of the three changing means the generated set no longer matches the configured icon.
- *
- * @param source - The icon source path.
- * @returns The stamp text, or undefined when the source is absent.
- * @example
- * ```ts
- * await iconSourceStamp("/app/assets/icon.png"); // "/app/assets/icon.png\n20480\n1758…"
- * ```
- */
-async function iconSourceStamp(source: string): Promise<string | undefined> {
-  try {
-    const stats = await stat(source);
-    return [path.resolve(source), stats.size, stats.mtimeMs].join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Reads the stamp a previous icons pass left, treating an absent/unreadable stamp as "never
- * generated" — the set is regenerated rather than trusted.
- *
- * @param stampPath - Path of the stamp file.
- * @returns The recorded stamp text, or undefined when there is none.
- * @example
- * ```ts
- * await readIconSourceStamp("/app/.moku/tauri/src-tauri/icons/.source");
- * ```
- */
-async function readIconSourceStamp(stampPath: string): Promise<string | undefined> {
-  try {
-    return await readFile(stampPath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Runs the `icons` phase: resolves the icon source through `project.ensureIconSource()`
- * (the configured `app.icon`, or a generated placeholder) and regenerates the full icon
- * set with `tauri.icon()`. The set is left alone ONLY when the generated
- * `src-tauri/icons/icon.png` exists, the stamp beside it still describes the current source,
- * AND this pass did not run `mobileInit` — a fresh `gen/` tree ships Tauri's own default
- * icons, which must be overwritten.
- *
- * @param ctx - The build pipeline's domain context.
- * @param deps - The resolved project/tauri APIs.
- * @param opts - Phase input.
- * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
- * @returns The phase detail: `"up to date"`, `"generated"` or `"placeholder"`.
- */
-export async function runIcons(
-  ctx: BuildContext,
-  deps: BuildDeps,
-  opts: { mobileInitRan: boolean }
-): Promise<{ detail: string }> {
-  const source = await deps.project.ensureIconSource();
-  const iconsDirectory = path.join(ctx.global.projectDir, "src-tauri", "icons");
-  const stampPath = path.join(iconsDirectory, ICON_SOURCE_STAMP_FILE);
-
-  const [generatedAt, stamp, recordedStamp] = await Promise.all([
-    modifiedAt(path.join(iconsDirectory, "icon.png")),
-    iconSourceStamp(source),
-    readIconSourceStamp(stampPath)
-  ]);
-
-  const isFresh = generatedAt !== undefined && stamp !== undefined && recordedStamp === stamp;
-  if (isFresh && !opts.mobileInitRan) {
-    ctx.log.debug("build:icons", { action: "skipped", source });
-    return { detail: "up to date" };
-  }
-
-  await deps.tauri.icon({ source });
-  if (stamp !== undefined) {
-    await mkdir(iconsDirectory, { recursive: true });
-    await writeFile(stampPath, stamp, "utf8");
-  }
-  ctx.log.debug("build:icons", { action: "generated", source });
-  return { detail: ctx.global.app.icon ? "generated" : "placeholder" };
-}
-
-/**
- * Runs the whole `icons` phase for one target: {@link runIcons}, then on android the
- * adaptive icon inset — re-applied on every build, also when the set was up to date,
- * because `tauri icon` rewrites the launcher files the inset lives in.
- *
- * @param ctx - The build pipeline's domain context.
- * @param deps - The resolved project/tauri APIs.
- * @param opts - Phase input.
- * @param opts.target - The packaging target the icons are for.
- * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
- * @returns The phase detail of {@link runIcons}.
- */
-async function runIconsPhase(
-  ctx: BuildContext,
-  deps: BuildDeps,
-  opts: { target: Target; mobileInitRan: boolean }
-): Promise<{ detail: string }> {
-  const result = await runIcons(ctx, deps, opts);
-  if (opts.target === "android") await deps.project.patchMobileIcons({ target: opts.target });
-  return result;
-}
-
-/**
- * Builds the refusal for a store build whose page carries the editor agent (Decision D7).
- *
- * @param dist - The configured `web.dist`.
- * @param file - The agent file, relative to the dist, when the scan named one.
- * @returns A formatted `[native] ...` error.
- * @example
- * ```ts
- * throw storeAgentRefusal("dist", "page/main-4f2a.js");
- * ```
- */
-function storeAgentRefusal(dist: string, file: string | undefined): Error {
-  const where = file === undefined ? dist : path.posix.join(dist, file);
-  return new Error(
-    `[native] store build refused: the page carries the editor agent (${where}).\n  Build with debug: true.`
-  );
-}
-
-/**
- * The checks at the end of compile/bundle, before anything is collected: on android the
- * shell link (the project plugin decides whether the profile composes the shell), then the
- * page — a store build whose page carries the editor agent is refused. They run after the
- * full compile because tauri runs the web build inside `tauri build`.
- *
- * @param ctx - The build pipeline's domain context.
- * @param deps - The resolved project/tauri APIs.
- * @param target - The packaging target that was compiled.
- * @param profile - The profile it was compiled in.
- * @returns Nothing.
- * @throws {Error} The project plugin's link error, or the store refusal.
- */
-async function checkBuiltTree(
-  ctx: BuildContext,
-  deps: BuildDeps,
-  target: Target,
-  profile: BuildProfile
-): Promise<void> {
-  if (target === "android") await deps.project.checkShellLinked({ target, profile });
-  const page = await deps.project.detectPageAgent();
-  if (page.agent && profile === "store") throw storeAgentRefusal(ctx.global.web.dist, page.file);
-}
-
-/** Matches a tauri build output line signalling the compile→bundle transition. */
-const BUNDLING_TRANSITION_PATTERN = /bundling/i;
-
-/** Compile-phase detail reported when a previous build's output had to be removed first. */
-const CLEARED_BUILD_OUTPUT_DETAIL = "cleared previous build output";
-
-/**
- * Formats a compile tick into the `native:phase` "progress" detail string — real crate
- * counts, never a fake percentage.
- *
- * @param tick - The parsed compile tick.
- * @param tick.crate - The crate currently compiling.
- * @param tick.index - The crate's position in the current compile unit count, if known.
- * @param tick.total - The total compile unit count, if known.
- * @returns The human-readable progress detail.
- * @example
- * ```ts
- * formatCompileTickDetail({ crate: "tauri", index: 3, total: 50 }); // "Compiling tauri 3/50"
- * ```
- */
-function formatCompileTickDetail(tick: { crate: string; index?: number; total?: number }): string {
-  const counter =
-    tick.index !== undefined && tick.total !== undefined ? ` ${tick.index}/${tick.total}` : "";
-  return `Compiling ${tick.crate}${counter}`;
-}
-
-/**
- * Emits one `native:phase` event, omitting `durationMs`/`detail` when absent rather than
- * assigning `undefined` (D-014, `exactOptionalPropertyTypes`).
- *
- * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target the phase runs for.
- * @param phase - Which pipeline phase this event reports on.
- * @param status - The phase's current status.
- * @param extra - Optional duration/detail to attach.
- * @param extra.durationMs - Elapsed time for a "done"/"error" event.
- * @param extra.detail - Human-readable detail (progress ticks, skip reasons, error text).
- */
-function emitPhase(
-  ctx: BuildContext,
-  target: Target,
-  phase: NativePhase,
-  status: "start" | "progress" | "done" | "error",
-  extra?: { durationMs?: number; detail?: string }
-): void {
-  ctx.emit("native:phase", {
-    target,
-    phase,
-    status,
-    ...(extra?.durationMs === undefined ? {} : { durationMs: extra.durationMs }),
-    ...(extra?.detail === undefined ? {} : { detail: extra.detail })
-  });
-}
-
-/** The measured durations of the shared `compile`/`bundle` subprocess. */
-type CompileAndBundleTimings = { compileDurationMs: number; bundleDurationMs: number };
-
-/**
- * The iOS step that opens `compile`: removes the previous build's output before the
- * compiler starts, and reports it as compile progress when something was removed. Any other
- * target is left alone.
- *
- * @param ctx - The build pipeline's domain context.
- * @param deps - The resolved project/tauri APIs.
- * @param target - The packaging target being compiled.
- * @returns Nothing.
- * @throws {Error} The project plugin's refusal from the guarded remove.
- */
-async function clearIosBuildOutput(
-  ctx: BuildContext,
-  deps: BuildDeps,
-  target: Target
-): Promise<void> {
-  if (target !== "ios") return;
-  const cleared = await deps.project.clearMobileBuildOutput({ target });
-  if (cleared.removed.length > 0) {
-    emitPhase(ctx, target, "compile", "progress", { detail: CLEARED_BUILD_OUTPUT_DETAIL });
-  }
-}
-
-/**
- * Closes the phases still open after a successful subprocess and measures both. With a live
- * transition only `bundle` is open; without one `compile` closes now and `bundle` is
- * reported as a zero-duration pass.
- *
- * @param ctx - The build pipeline's domain context.
- * @param target - The packaging target that was compiled.
- * @param marks - Monotonic readings of the run.
- * @param marks.startedAt - When `compile` opened.
- * @param marks.transitionAt - When `bundle` opened, or undefined when no transition line came.
- * @param marks.endedAt - When the subprocess and the built-tree checks finished.
- * @returns The measured `compile` and `bundle` durations.
- */
-function reportCompileAndBundleDone(
-  ctx: BuildContext,
-  target: Target,
-  marks: { startedAt: number; transitionAt: number | undefined; endedAt: number }
-): CompileAndBundleTimings {
-  const { startedAt, transitionAt, endedAt } = marks;
-  if (transitionAt === undefined) {
-    const compileDurationMs = Math.round(endedAt - startedAt);
-    emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
-    emitPhase(ctx, target, "bundle", "start");
-    emitPhase(ctx, target, "bundle", "done", { durationMs: 0 });
-    return { compileDurationMs, bundleDurationMs: 0 };
-  }
-
-  const bundleDurationMs = Math.round(endedAt - transitionAt);
-  emitPhase(ctx, target, "bundle", "done", { durationMs: bundleDurationMs });
-  return { compileDurationMs: Math.round(transitionAt - startedAt), bundleDurationMs };
-}
-
-/**
- * Runs the shared `tauri build` subprocess that covers BOTH the `compile` and `bundle`
- * phases (one process — D-013). The transition is LIVE: the first scrubbed output line
- * matching the bundling pattern closes `compile` and opens `bundle` right then, so a
- * progress UI never sits on "compiling" through the whole bundling step. When no
- * transition line ever appears, `compile` closes at exit and `bundle` is reported as a
- * zero-duration pass. A failure is attributed to whichever phase is open.
- *
- * iOS opens with one extra step: the previous build's output is removed before the
- * compiler starts. `tauri ios build` renames its fresh `.app` into the existing
- * `gen/apple/build` archive and fails the SECOND build of the same tree with
- * `Directory not empty`. Removing it is part of compile, so a refusal from the guarded
- * remove surfaces as a compile error rather than an unattributed throw.
- *
- * The run's profile reaches the engine's web build as `MOKU_NATIVE_PROFILE` in the spawned
- * tauri CLI's environment. After the subprocess, still inside the open phase, the built tree
- * is checked ({@link checkBuiltTree}): a failing check is that phase's error, and nothing
- * is collected.
- *
- * @param ctx - The build pipeline's domain context.
- * @param deps - The resolved project/tauri APIs.
- * @param opts - The target plus the platform build flags to forward.
- * @returns The measured `compile` and `bundle` phase durations.
- * @throws {Error} Whatever `tauri.build()` or the built-tree checks throw (already reported
- *   via native:phase).
- */
-export async function runCompileAndBundle(
-  ctx: BuildContext,
-  deps: BuildDeps,
-  opts: RunOptions
-): Promise<CompileAndBundleTimings> {
-  const { target } = opts;
-  const profile = profileOf(opts);
-  // Monotonic readings: a wall-clock step (NTP) must never yield a negative duration.
-  const startedAt = performance.now();
-  let transitionAt: number | undefined;
-
-  emitPhase(ctx, target, "compile", "start");
-  try {
-    // Inside the try: a refused remove is a compile error, not an unattributed throw.
-    await clearIosBuildOutput(ctx, deps, target);
-
-    // One subprocess for both phases; its output drives the live compile→bundle switch.
-    await deps.tauri.build({
-      target,
-      simulator: opts.simulator,
-      aab: opts.aab,
-      exportMethod: ctx.global.signing.apple?.exportMethod,
-      env: { MOKU_NATIVE_PROFILE: profile },
-      /**
-       * Forwards one parsed compile tick as a `native:phase` "progress" event — until the
-       * bundle phase opens, after which a "compiling" line would contradict the open phase.
-       *
-       * @param tick - The parsed compile tick.
-       */
-      onTick: tick => {
-        if (transitionAt !== undefined) return;
-        emitPhase(ctx, target, "compile", "progress", { detail: formatCompileTickDetail(tick) });
-      },
-      /**
-       * Closes `compile` and opens `bundle` the moment the subprocess reports it started
-       * bundling — while it is still running.
-       *
-       * @param line - A single scrubbed output line.
-       */
-      onOutput: line => {
-        if (transitionAt !== undefined) return;
-        if (!BUNDLING_TRANSITION_PATTERN.test(line)) return;
-        transitionAt = performance.now();
-        emitPhase(ctx, target, "compile", "done", {
-          durationMs: Math.round(transitionAt - startedAt)
-        });
-        emitPhase(ctx, target, "bundle", "start");
-      }
-    });
-
-    // Still inside the open phase: a failing built-tree check is that phase's error.
-    await checkBuiltTree(ctx, deps, target, profile);
-  } catch (error) {
-    // The failure belongs to whichever phase is still open when the subprocess dies.
-    const openPhase: NativePhase = transitionAt === undefined ? "compile" : "bundle";
-    const detail = error instanceof Error ? error.message : String(error);
-    emitPhase(ctx, target, openPhase, "error", {
-      durationMs: Math.round(performance.now() - (transitionAt ?? startedAt)),
-      detail
-    });
-    throw error;
-  }
-
-  // Success: close what is still open and report both durations.
-  return reportCompileAndBundleDone(ctx, target, {
-    startedAt,
-    transitionAt,
-    endedAt: performance.now()
-  });
 }
 
 /**
@@ -619,19 +228,23 @@ export async function runPipeline(
   deps: BuildDeps,
   opts: RunOptions
 ): Promise<BuildResult> {
+  // Refuse a debug run on a target it cannot build before any phase starts, then start the clock.
   const { target } = opts;
   assertDebugTargets([target], opts);
   const profile = profileOf(opts);
   const startedAt = performance.now();
 
+  // Bring the generated project to a buildable state.
   const phases: PhaseTiming[] = [...(await runPrepare(ctx, deps, target, profile))];
 
+  // Compile and bundle in one subprocess, recording both phase timings.
   const { compileDurationMs, bundleDurationMs } = await runCompileAndBundle(ctx, deps, opts);
   phases.push(
     { phase: "compile", durationMs: compileDurationMs },
     { phase: "bundle", durationMs: bundleDurationMs }
   );
 
+  // Deliver the built artifacts into the output directory.
   const collect = await runPhase(ctx, target, "collect", () =>
     collectArtifacts(
       ctx.global.projectDir,
@@ -648,9 +261,9 @@ export async function runPipeline(
   );
   phases.push({ phase: "collect", durationMs: collect.durationMs });
 
+  // Announce the finished delivery and hand back the full result.
   const durationMs = Math.round(performance.now() - startedAt);
   const { outPath, artifacts } = collect.result;
   ctx.emit("native:complete", { target, outPath, artifacts, durationMs, profile });
-
   return { target, outPath, artifacts, durationMs, phases, profile };
 }

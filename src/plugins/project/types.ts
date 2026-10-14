@@ -13,7 +13,11 @@ import type {
 } from "../../config";
 import type { BundleLayout } from "./layout";
 
-/** Result of a write-if-changed generation pass. */
+/**
+ * What one `generate` pass did to each artifact, as paths under `projectDir`: written
+ * because its content changed, or left unchanged because it was already current.
+ * `skipped` stays empty — the writer never skips an artifact.
+ */
 export type GenerateResult = {
   readonly written: readonly string[];
   readonly unchanged: readonly string[];
@@ -78,7 +82,10 @@ export type AndroidProfile =
  */
 export type PageAgentResult = { agent: boolean; file?: string };
 
-/** Result of a clean pass. */
+/**
+ * What one `clean` or `clearMobileBuildOutput` pass deleted, one path per removed file or
+ * directory; empty when there was nothing to remove.
+ */
 export type CleanResult = { removed: readonly string[] };
 
 /**

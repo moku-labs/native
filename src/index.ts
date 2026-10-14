@@ -80,6 +80,12 @@ const framework = createCore(coreConfig, {
  * composition time, and returns the frozen, fully-typed app. See the file JSDoc above
  * for the full options/defaults tables.
  *
+ * @param options - Optional `{ config?, pluginConfigs?, plugins?, onReady?, onError?, onStart?,
+ *   onStop? }`: a `Partial<Config>` shallow-merged over the defaults, per-plugin overrides
+ *   keyed by plugin name, extra consumer plugins appended to the defaults, and lifecycle
+ *   callbacks.
+ * @returns The frozen, fully-typed app: `start`/`stop` plus one API per plugin
+ *   (`app.cli`, `app.build`, `app.doctor`, `app.project`, `app.tauri`).
  * @example
  * ```ts
  * export const native = createApp({ config: { app: { name: "MyApp", identifier: "com.example.myapp" } } });
@@ -105,7 +111,7 @@ export type { Build, Cli, Doctor, Project, Tauri } from "./plugins";
 export { hostTargets, PHASE_ORDER, TARGETS } from "./config";
 // The one runtime value a plugin namespace cannot carry: the plugin type namespaces are
 // type-only (`export type * as Tauri`), so the error class is re-exported by name.
-export { TauriError } from "./plugins/tauri/errors";
+export { TauriError } from "./plugins";
 
 // ─── Types ───────────────────────────────────────────────────
 export type {

@@ -57,10 +57,6 @@ export function applyIconInset(existing: string, inset: number | undefined): str
  * @param options.genDirectory - Absolute `src-tauri/gen/android` path.
  * @param options.inset - Percent per side, or `undefined` to restore the plain form.
  * @returns The icon files patched vs. left unchanged.
- * @example
- * ```ts
- * await patchAndroidIcon({ projectDirectory, genDirectory, inset: 19.44 });
- * ```
  */
 export async function patchAndroidIcon(options: {
   projectDirectory: string;

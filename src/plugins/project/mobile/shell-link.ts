@@ -48,6 +48,7 @@ export async function assertShellLinked(options: { genDirectory: string }): Prom
  * @param options.global - Frozen global config (`system`, `projectDir`).
  * @param options.target - The mobile platform that was compiled.
  * @param options.profile - The build profile.
+ * @returns Resolves once the check passed or did not apply.
  * @throws {Error} When the shell is composed but not linked.
  */
 export async function checkShellLinked(options: {

@@ -121,9 +121,12 @@ export function createProjectApi(ctx: ProjectContext): Api {
     target: GeneratorInput["target"];
     profile?: BuildProfile | undefined;
   }): Promise<GenerateResult> => {
+    // Resolve the capabilities this target and profile compose.
     const profile = opts.profile ?? "store";
     const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target, profile);
     const input: GeneratorInput = { global: ctx.global, target: opts.target, capabilities };
+
+    // Render every generated artifact, the shell crate last.
     const artifacts = [
       ...generateTauriConf(input),
       ...generateCargo(input),
@@ -135,6 +138,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
       ...generateShell(input, profile)
     ];
 
+    // Write each one only when its content changed, and sort it into its bucket.
     const buckets: Record<"written" | "unchanged" | "skipped", string[]> = {
       written: [],
       unchanged: [],
@@ -146,6 +150,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
       buckets[action].push(fullPath);
       ctx.log.debug("project:generate:artifact", { path: fullPath, action });
     }
+
+    // Report the pass, then hand the buckets back.
     ctx.log.info("project:generate", {
       target: opts.target,
       profile,
@@ -335,9 +341,6 @@ export function createProjectApi(ctx: ProjectContext): Api {
     isKnownCapability,
     getRegistryRows: registryRows,
     getRequiredFiles,
-    /**
-     *
-     */
     getDebugKeystore
   };
 }

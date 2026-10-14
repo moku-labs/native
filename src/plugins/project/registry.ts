@@ -158,7 +158,7 @@ export function isKnownCapability(name: string): name is keyof CapabilityConfigM
  * @returns A formatted, throw-ready Error.
  * @example
  * ```ts
- * if (!isKnownCapability(name)) throw unknownCapabilityError(name);
+ * unknownCapabilityError("camera").message.startsWith('[native] Unknown capability "camera"'); // true
  * ```
  */
 export function unknownCapabilityError(name: string): Error {
@@ -176,7 +176,7 @@ export function unknownCapabilityError(name: string): Error {
  * @throws {Error} When any entry name is not a known capability.
  * @example
  * ```ts
- * assertKnownCapabilities(ctx.global.system);
+ * assertKnownCapabilities([{ name: "camera" }]); // throws: [native] Unknown capability "camera" in config.system.
  * ```
  */
 export function assertKnownCapabilities(system: ReadonlyArray<{ name: string }>): void {

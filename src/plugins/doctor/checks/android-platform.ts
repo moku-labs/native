@@ -29,10 +29,6 @@ const PLATFORM_DIRECTORY = /^android-(\d+)(?:\.0)?$/;
  *
  * @param input - The check input (home and `LOCALAPPDATA` come from its env).
  * @returns The default SDK root, or `undefined` when the env names no home to resolve it in.
- * @example
- * ```ts
- * defaultSdkRoot(input); // "/Users/me/Library/Android/sdk" on a macOS host
- * ```
  */
 function defaultSdkRoot(input: CheckInput): string | undefined {
   if (process.platform === "win32") {
@@ -53,10 +49,6 @@ function defaultSdkRoot(input: CheckInput): string | undefined {
  *
  * @param input - The check input (reads through its fs facade).
  * @returns The required API level.
- * @example
- * ```ts
- * await requiredLevel(input); // 38 when the gradle file says `compileSdk = 38`
- * ```
  */
 async function requiredLevel(input: CheckInput): Promise<number> {
   const gradlePath = path.resolve(
@@ -81,10 +73,6 @@ async function requiredLevel(input: CheckInput): Promise<number> {
  * @param input - The check input (tells which env var named the root).
  * @param configuredRoot - The SDK root `ANDROID_HOME`/`ANDROID_SDK_ROOT` named, if either is set.
  * @returns The `fail` or `warn` result.
- * @example
- * ```ts
- * missingSdkResult(input, "/opt/android-sdk"); // fail: ANDROID_HOME points to a missing directory
- * ```
  */
 function missingSdkResult(input: CheckInput, configuredRoot: string | undefined): CheckResult {
   if (configuredRoot === undefined) {
@@ -114,10 +102,6 @@ function missingSdkResult(input: CheckInput, configuredRoot: string | undefined)
  *
  * @param input - The check input, scoped to the "android" target.
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "android", env, fs, global, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const configuredRoot = input.env.get("ANDROID_HOME") ?? input.env.get("ANDROID_SDK_ROOT");

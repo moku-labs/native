@@ -94,10 +94,6 @@ function dependencyLine(capability: ResolvedCapability): string | undefined {
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
- * @example
- * ```ts
- * generateCargo({ global, target: "macos", capabilities: [] });
- * ```
  */
 export function generateCargo(input: GeneratorInput): Artifact[] {
   const packageName = sanitizePackageName(input.global.app.name);

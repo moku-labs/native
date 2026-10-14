@@ -281,6 +281,21 @@ const defaultConfig: Config = {
   signing: {}
 };
 
+/**
+ * The Layer-1 config of `@moku-labs/native`: the global {@link Config} defaults, the
+ * framework {@link Events} (`native:phase`, `native:complete`) and the `log`/`env` core
+ * plugins, so every plugin context carries `ctx.log` and `ctx.env`. The `env` core plugin is
+ * seeded with the process-env provider. `src/index.ts` composes it with the five framework
+ * plugins.
+ *
+ * @example
+ * ```ts
+ * // src/index.ts — the framework is this config plus its plugins, in dependency order.
+ * const framework = createCore(coreConfig, {
+ *   plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin]
+ * });
+ * ```
+ */
 export const coreConfig = createCoreConfig<Config, Events, [typeof logPlugin, typeof envPlugin]>(
   "native",
   {
@@ -301,6 +316,9 @@ export const coreConfig = createCoreConfig<Config, Events, [typeof logPlugin, ty
 /**
  * Creates a plugin bound to this framework's Config/Events chain.
  *
+ * @param name - Unique plugin id; becomes the plugin's key on the app.
+ * @param spec - Plugin spec (config, state, api, hooks, lifecycle); every type infers from it.
+ * @returns A typed plugin instance for the `createCore` or `createApp` plugins array.
  * @example
  * ```ts
  * export const xxxPlugin = createPlugin("xxx", { api: createXxxApi });
@@ -311,6 +329,10 @@ export const createPlugin = coreConfig.createPlugin;
 /**
  * Creates the framework core from this config (Layer 2 step 2).
  *
+ * @param config - This file's {@link coreConfig}.
+ * @param options - The framework's default plugins (`plugins`), plus optional `pluginConfigs`
+ *   and lifecycle callbacks.
+ * @returns The framework factory carrying `createApp` and `createPlugin`.
  * @example
  * ```ts
  * const framework = createCore(coreConfig, { plugins: [...] });

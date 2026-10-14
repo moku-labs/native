@@ -62,5 +62,24 @@ export type DoctorDeps = {
 
 /** Public API of the doctor plugin. */
 export type Api = {
+  /**
+   * Runs every check applicable to `opts.target` (or every configured target + host checks
+   * when omitted), in parallel, emitting `doctor:check` for each one as it settles. Never
+   * throws on check failures — a rejected check becomes an internal-error "fail" result and a
+   * check that outruns `probeTimeoutMs` becomes a "warn" result; `run()` only throws on a
+   * genuine internal bug in this orchestration itself.
+   *
+   * @param opts - Optional scoping.
+   * @param opts.target - A single real packaging target to diagnose, or every configured
+   *   target + host checks when omitted.
+   * @returns The aggregated report — `checks` stays in registry order regardless of the
+   *   order the individual checks settled (and were emitted) in.
+   * @example
+   * ```ts
+   * // The cli's doctor command: diagnose one target, then render the summary.
+   * const report = await ctx.require(doctorPlugin).run({ target: "ios" });
+   * report.ok; // false when any check failed — warnings alone keep it true
+   * ```
+   */
   run(opts?: { target?: Target | undefined }): Promise<DoctorReport>;
 };

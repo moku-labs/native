@@ -22,6 +22,23 @@ crate, `tauri-plugin-moku-shell`, that installs the page contract
 insets, device info). And the [build profiles](#build-profiles) patch the Android tree for an
 on-device debug build that installs next to the store app.
 
+## Tier
+
+The plugin is about 7,250 lines of source in 37 files, with `mobile/` and `generators/` as
+coordinating sub-domains. It stays **Complex**, not Very Complex, by decision:
+
+- **The API is flat.** One `Api` type in `types.ts`, one `createProjectApi` factory; the
+  sub-domains are reached through it, never through namespaced `api.mobile.*` /
+  `api.generators.*` slices.
+- **The sub-domains are stateless.** `mobile/` and `generators/` are plain functions over
+  files and the frozen global config. Neither owns state, config or events, so neither needs
+  the `types.ts` / `state.ts` / `api.ts` module directory of the Very Complex tier.
+- **That is the Complex shape in spec/15 §2.4-2.5**: Standard files plus subdirectories for
+  sub-domains. Very Complex is for coordinating modules that each own state and an API.
+
+The size alone does not re-open the decision; a sub-domain that gains its own state or a
+namespaced API slice does.
+
 ## Files
 
 | File | Owns |

@@ -50,10 +50,6 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
    * render seam tauri's `dev()` exposes specifically for cli).
    *
    * @param line - A single scrubbed output line.
-   * @example
-   * ```ts
-   * forwardDevOutput("Local:   http://localhost:5173/");
-   * ```
    */
   function forwardDevOutput(line: string): void {
     ui.line(line);
@@ -61,15 +57,10 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
 
   return {
     /**
-     * Implements {@link Api.build}: one pipeline pass or all of them, the flavor flags
-     * (`simulator`, `aab`, `debug`) forwarded unchanged; a failure is rendered, then rethrown.
+     * Implements {@link Api.build}.
      *
      * @param opts - See {@link Api.build}.
      * @returns See {@link Api.build}.
-     * @example
-     * ```ts
-     * await api.build({ target: "android", debug: true }); // build.run({ target: "android", debug: true, … })
-     * ```
      */
     async build(opts = {}) {
       const { simulator, aab, debug } = opts;
@@ -87,15 +78,10 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Implements {@link Api.dev}: prepare first (a failure renders like a failed build), then
-     * await the dev handle's `ready` and `exited` — never storing it, never stopping it (D-002).
+     * Implements {@link Api.dev}.
      *
      * @param opts - See {@link Api.dev}.
      * @returns See {@link Api.dev}.
-     * @example
-     * ```ts
-     * await api.dev({ target: "ios" }); // build.prepare({ target: "ios" }), then tauri.dev
-     * ```
      */
     async dev(opts = {}) {
       const target = opts.target ?? hostTarget();
@@ -124,14 +110,10 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Implements {@link Api.doctor}: run the diagnosis, render the counts-only summary.
+     * Implements {@link Api.doctor}.
      *
      * @param opts - See {@link Api.doctor}.
      * @returns See {@link Api.doctor}.
-     * @example
-     * ```ts
-     * await api.doctor({ target: "android" }); // false when a check failed
-     * ```
      */
     async doctor(opts = {}) {
       const report = await doctor.run({ target: opts.target });
@@ -140,15 +122,10 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
     },
 
     /**
-     * Implements {@link Api.clean}: confirm-gate the whole-directory wipe, then delegate to
-     * `project.clean` (D-006).
+     * Implements {@link Api.clean}.
      *
      * @param opts - See {@link Api.clean}.
      * @returns See {@link Api.clean}.
-     * @example
-     * ```ts
-     * await api.clean({ target: "android" }); // no confirm for a single target
-     * ```
      */
     async clean(opts = {}) {
       if (!opts.target) {

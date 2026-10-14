@@ -59,10 +59,6 @@ export async function iosPatchFiles(genDirectory: string): Promise<string[]> {
  * @param directory - The directory to walk (a missing directory yields nothing).
  * @param accept - Predicate over the file name.
  * @returns Every accepted file path below `directory`.
- * @example
- * ```ts
- * await collectFiles(buildSrcDirectory, name => name.endsWith(".kt"));
- * ```
  */
 async function collectFiles(
   directory: string,

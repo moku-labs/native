@@ -21,15 +21,9 @@ import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { createBuildApi } from "../../api";
 import { bundleRoot } from "../../collect";
-import {
-  ICON_SOURCE_STAMP_FILE,
-  runCodegen,
-  runCompileAndBundle,
-  runIcons,
-  runPipeline,
-  runPrepare,
-  runScaffold
-} from "../../pipeline";
+import { runCompileAndBundle } from "../../compile";
+import { ICON_SOURCE_STAMP_FILE, runIcons } from "../../icons";
+import { runCodegen, runPipeline, runPrepare, runScaffold } from "../../pipeline";
 import type { BuildContext, BuildDeps } from "../../types";
 
 /** The resolved runner pair the tauri mock hands to `project.patchMobile`. */

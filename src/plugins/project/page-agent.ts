@@ -72,10 +72,6 @@ function isInside(realRoot: string, real: string): boolean {
  * @param full - Its path.
  * @param walk - The real dist root and the directories already walked.
  * @returns What the entry is for the scan.
- * @example
- * ```ts
- * await entryKind(entry, "/app/dist/page", { realRoot: "/app/dist", visited }); // "directory"
- * ```
  */
 async function entryKind(entry: Dirent, full: string, walk: Walk): Promise<EntryKind> {
   const isScript = entry.name.endsWith(SCRIPT_EXTENSION);

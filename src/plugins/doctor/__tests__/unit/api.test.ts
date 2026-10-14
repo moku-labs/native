@@ -105,6 +105,19 @@ describe("createDoctorApi — per-check emission", () => {
       report.checks.toSorted((a, b) => a.id.localeCompare(b.id))
     );
   });
+
+  it("orders an unscoped report scope by scope: the configured targets, then host", async () => {
+    // Bug caught: a check-major schedule interleaves the scopes, so the cli summary would
+    // jump between targets instead of listing each target's checks together.
+    const { ctx } = createContext({ probeImpl: probeAfter(0) });
+
+    const report = await createDoctorApi(ctx, { project: projectApi, tauri: tauriApi }).run();
+
+    const scopeRuns = report.checks
+      .map(result => result.target)
+      .filter((target, index, all) => index === 0 || all[index - 1] !== target);
+    expect(scopeRuns).toEqual(["macos", "windows", "linux", "ios", "android", "host"]);
+  });
 });
 
 describe("createDoctorApi — probeTimeoutMs", () => {
