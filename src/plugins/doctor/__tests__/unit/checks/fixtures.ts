@@ -1,7 +1,8 @@
 import type { EnvApi } from "@moku-labs/common";
 import { vi } from "vitest";
 import type { Config as GlobalConfig } from "../../../../../config";
-import type { CheckInput, FsFacade } from "../../../checks/types";
+import { resolveDebugKeystore } from "../../../../project/mobile/signing";
+import type { CheckInput, CheckProjectApi, FsFacade } from "../../../checks/types";
 
 /** A representative, minimal-but-valid global config fixture shared by every check test. */
 export const baseGlobalConfig: Readonly<GlobalConfig> = {
@@ -68,19 +69,23 @@ export function createFs(tree: FakeTree = {}): FsFacade {
   };
 }
 
-/** `createCheckInput` overrides: every seam replaceable, `fs` one member at a time. */
-export type CheckInputOverrides = Omit<Partial<CheckInput>, "fs"> & { fs?: Partial<FsFacade> };
+/** `createCheckInput` overrides: every seam replaceable, `fs` and `project` one member at a time. */
+export type CheckInputOverrides = Omit<Partial<CheckInput>, "fs" | "project"> & {
+  fs?: Partial<FsFacade>;
+  project?: Partial<CheckProjectApi>;
+};
 
 /**
  * Builds a fully-populated `CheckInput` fixture with sensible always-ok defaults, so each
- * test only needs to override the one seam it's exercising. An `fs` override replaces only
- * the members it names (a test that reads files need not fake `exists`/`readdir`).
+ * test only needs to override the one seam it's exercising. An `fs` or `project` override
+ * replaces only the members it names (a test that reads files need not fake `exists`/`readdir`).
  *
  * @param overrides - Partial overrides merged shallowly over the defaults.
  * @returns A fresh `CheckInput`.
  */
 export function createCheckInput(overrides: CheckInputOverrides = {}): CheckInput {
-  const { fs, ...rest } = overrides;
+  const { fs, project, ...rest } = overrides;
+  const env = rest.env ?? createEnv();
   return {
     target: "host",
     global: baseGlobalConfig,
@@ -91,11 +96,14 @@ export function createCheckInput(overrides: CheckInputOverrides = {}): CheckInpu
       readdir: vi.fn(async () => []),
       ...fs
     },
-    env: createEnv(),
+    env,
     project: {
       getRequiredFiles: vi.fn(() => []),
       getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
-      getRegistryRows: vi.fn(() => [])
+      getRegistryRows: vi.fn(() => []),
+      // The real rule, over the same fake env the check input carries.
+      getDebugKeystore: vi.fn(() => resolveDebugKeystore(env)),
+      ...project
     },
     tauri: {
       getVersion: vi.fn(async () => ({ cliVersion: "2.0.0" }))

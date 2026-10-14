@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applySigningBlock,
+  assertDebugKeystore,
   debugKeystorePath,
   patchAndroidSigning,
-  removeSigningBlock
+  removeSigningBlock,
+  resolveDebugKeystore
 } from "../../../mobile/signing";
 import { KEY_PASSWORD_ENV, SIGNING, SIGNING_BLOCK, STORE_PASSWORD_ENV } from "./fixtures";
 
@@ -201,6 +203,37 @@ describe("debugKeystorePath", () => {
   it("fails with a fix-it when neither HOME nor USERPROFILE is set", () => {
     expect(() => debugKeystorePath(env({}))).toThrow(
       "[native] the debug profile signs with the debug keystore in your home directory, but neither HOME nor USERPROFILE is set."
+    );
+  });
+});
+
+describe("resolveDebugKeystore", () => {
+  it("an empty HOME falls back to USERPROFILE exactly as the debug signing patch does (bug: doctor and build disagree on the keystore)", () => {
+    const windowsHost = env({ HOME: "", USERPROFILE: "/users/me" });
+
+    const keystore = resolveDebugKeystore(windowsHost);
+
+    expect(keystore.path).toBe(path.join("/users/me", ".android", "debug.keystore"));
+    expect(keystore.path).toBe(debugKeystorePath(windowsHost));
+    expect(keystore.createCommand).toBe(
+      `mkdir -p "${path.join("/users/me", ".android")}" && keytool -genkeypair -v -keystore "${keystore.path}" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"`
+    );
+  });
+
+  it("without a home the path is undefined and the command names an unquoted ~ (bug: a quoted tilde the shell never expands)", () => {
+    const keystore = resolveDebugKeystore(env({}));
+
+    expect(keystore.path).toBeUndefined();
+    expect(keystore.createCommand).toMatch(
+      /^mkdir -p ~\/\.android && keytool -genkeypair -v -keystore ~\/\.android\/debug\.keystore /
+    );
+  });
+
+  it("the missing-keystore error shows the same create command (bug: build's fix-it and doctor's drift apart)", () => {
+    const keystore = resolveDebugKeystore(env({ HOME: path.join(tmpdir(), "moku-no-such-home") }));
+
+    expect(() => assertDebugKeystore(keystore.path ?? "")).toThrow(
+      `Create it with: ${keystore.createCommand}.`
     );
   });
 });

@@ -127,9 +127,17 @@ export default [
       "jsdoc/require-param-description": "error",
       "jsdoc/require-returns": "error",
       "jsdoc/require-returns-description": "error",
-      "jsdoc/require-example": "error",
+      "jsdoc/require-example": "off",
       "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
       "unicorn/require-module-specifiers": "off"
+    }
+  },
+
+  // 6b. Public contract files: every documented export carries a scenario @example (moku jsdoc-examples.md lint table)
+  {
+    files: ["src/**/types.ts", "src/config.ts", "src/index.ts"],
+    rules: {
+      "jsdoc/require-example": "error"
     }
   },
 

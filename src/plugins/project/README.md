@@ -116,6 +116,8 @@ app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" });
 app.project.isKnownCapability("store"); // => true
 app.project.getRegistryRows(); // => copies of the 8 registry rows (consumed by doctor)
 app.project.getRequiredFiles({ target: "android" }); // => required gen/android file set (consumed by doctor)
+app.project.getDebugKeystore();
+// => { path: "/home/me/.android/debug.keystore" | undefined, createCommand: 'mkdir -p "…" && keytool …' } (consumed by doctor)
 ```
 
 - `generate({ target, profile? })` — writes/refreshes every pure artifact for a target into
@@ -156,6 +158,10 @@ app.project.getRequiredFiles({ target: "android" }); // => required gen/android 
   registry, or when resolving `"deep-link"` without a non-empty `scheme`.
 - `isKnownCapability(name)` — runtime narrowing guard for capability names arriving
   from `config.system` as plain strings.
+- `getDebugKeystore()` — the Android SDK debug keystore the debug profile signs with
+  (`<home>/.android/debug.keystore`, home from `HOME`, else `USERPROFILE`) and the
+  `mkdir -p … && keytool …` command that creates it. Never throws and never touches the
+  filesystem; doctor's debug-keystore check reads it instead of keeping its own copy of the rule.
 
 ## Mobile presentation
 
@@ -526,15 +532,20 @@ double-quoted Kotlin literal first — `\`, `"`, `$` and newlines — so a path 
 in it cannot close the literal, and a `$` cannot interpolate a Gradle expression.
 
 In the debug profile the release build is signed with the SDK debug key instead:
-`<home>/.android/debug.keystore` (`home` is `HOME`, or `USERPROFILE` on a Windows host, read
-through `ctx.env`), alias `androiddebugkey`, password `android` (the SDK's public defaults).
+`<home>/.android/debug.keystore` (`home` is `HOME`, or `USERPROFILE` when `HOME` is unset or
+empty, read through `ctx.env`), alias `androiddebugkey`, password `android` (the SDK's public defaults).
 The store keystore is never named in a debug build, and the next store pass writes the store
 block back in place. A missing debug keystore fails before anything is written:
 
 ```
 [native] debug keystore not found at <path>.
-  Create it with: keytool -genkeypair -v -keystore "<path>" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US".
+  Create it with: mkdir -p "<home>/.android" && keytool -genkeypair -v -keystore "<path>" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US".
 ```
+
+The path and that command come from one rule, `getDebugKeystore()`: doctor's debug-keystore
+check reads the same `{ path, createCommand }`, so the check and the build never disagree on
+which keystore signs a debug build. Without a home directory `path` is undefined and the
+command names an unquoted `~/.android`.
 
 No `keystore.properties` is written any more. Dropping `signing.android.keystorePath`
 removes the block *and* a legacy `keystore.properties` left by an older build (a single

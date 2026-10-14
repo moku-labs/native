@@ -90,10 +90,6 @@ export function assertDebugTargets(targets: readonly Target[], flavor: BuildFlav
  *
  * @param ctx - The build pipeline's domain context.
  * @returns Nothing.
- * @example
- * ```ts
- * await runScaffold(ctx);
- * ```
  */
 export async function runScaffold(ctx: BuildContext): Promise<void> {
   await mkdir(ctx.global.projectDir, { recursive: true });
@@ -116,10 +112,6 @@ export type CodegenResult = { mobileInitRan: boolean };
  * @param profile - The build profile generate and the patch pass apply.
  * @returns Whether this pass initialized the mobile tree (the icons phase needs it).
  * @throws {Error} When a mobile target's `gen/` tree is present but incomplete.
- * @example
- * ```ts
- * const { mobileInitRan } = await runCodegen(ctx, deps, "android", "debug");
- * ```
  */
 export async function runCodegen(
   ctx: BuildContext,
@@ -225,10 +217,6 @@ async function readIconSourceStamp(stampPath: string): Promise<string | undefine
  * @param opts - Phase input.
  * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
  * @returns The phase detail: `"up to date"`, `"generated"` or `"placeholder"`.
- * @example
- * ```ts
- * const { detail } = await runIcons(ctx, deps, { mobileInitRan: false });
- * ```
  */
 export async function runIcons(
   ctx: BuildContext,
@@ -271,10 +259,6 @@ export async function runIcons(
  * @param opts.target - The packaging target the icons are for.
  * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
  * @returns The phase detail of {@link runIcons}.
- * @example
- * ```ts
- * const { detail } = await runIconsPhase(ctx, deps, { target: "android", mobileInitRan: false });
- * ```
  */
 async function runIconsPhase(
   ctx: BuildContext,
@@ -316,10 +300,6 @@ function storeAgentRefusal(dist: string, file: string | undefined): Error {
  * @param profile - The profile it was compiled in.
  * @returns Nothing.
  * @throws {Error} The project plugin's link error, or the store refusal.
- * @example
- * ```ts
- * await checkBuiltTree(ctx, deps, "android", "store");
- * ```
  */
 async function checkBuiltTree(
   ctx: BuildContext,
@@ -369,10 +349,6 @@ function formatCompileTickDetail(tick: { crate: string; index?: number; total?: 
  * @param extra - Optional duration/detail to attach.
  * @param extra.durationMs - Elapsed time for a "done"/"error" event.
  * @param extra.detail - Human-readable detail (progress ticks, skip reasons, error text).
- * @example
- * ```ts
- * emitPhase(ctx, "macos", "scaffold", "start");
- * ```
  */
 function emitPhase(
   ctx: BuildContext,
@@ -388,6 +364,64 @@ function emitPhase(
     ...(extra?.durationMs === undefined ? {} : { durationMs: extra.durationMs }),
     ...(extra?.detail === undefined ? {} : { detail: extra.detail })
   });
+}
+
+/** The measured durations of the shared `compile`/`bundle` subprocess. */
+type CompileAndBundleTimings = { compileDurationMs: number; bundleDurationMs: number };
+
+/**
+ * The iOS step that opens `compile`: removes the previous build's output before the
+ * compiler starts, and reports it as compile progress when something was removed. Any other
+ * target is left alone.
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param target - The packaging target being compiled.
+ * @returns Nothing.
+ * @throws {Error} The project plugin's refusal from the guarded remove.
+ */
+async function clearIosBuildOutput(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  target: Target
+): Promise<void> {
+  if (target !== "ios") return;
+  const cleared = await deps.project.clearMobileBuildOutput({ target });
+  if (cleared.removed.length > 0) {
+    emitPhase(ctx, target, "compile", "progress", { detail: CLEARED_BUILD_OUTPUT_DETAIL });
+  }
+}
+
+/**
+ * Closes the phases still open after a successful subprocess and measures both. With a live
+ * transition only `bundle` is open; without one `compile` closes now and `bundle` is
+ * reported as a zero-duration pass.
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param target - The packaging target that was compiled.
+ * @param marks - Monotonic readings of the run.
+ * @param marks.startedAt - When `compile` opened.
+ * @param marks.transitionAt - When `bundle` opened, or undefined when no transition line came.
+ * @param marks.endedAt - When the subprocess and the built-tree checks finished.
+ * @returns The measured `compile` and `bundle` durations.
+ */
+function reportCompileAndBundleDone(
+  ctx: BuildContext,
+  target: Target,
+  marks: { startedAt: number; transitionAt: number | undefined; endedAt: number }
+): CompileAndBundleTimings {
+  const { startedAt, transitionAt, endedAt } = marks;
+  if (transitionAt === undefined) {
+    const compileDurationMs = Math.round(endedAt - startedAt);
+    emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
+    emitPhase(ctx, target, "bundle", "start");
+    emitPhase(ctx, target, "bundle", "done", { durationMs: 0 });
+    return { compileDurationMs, bundleDurationMs: 0 };
+  }
+
+  const bundleDurationMs = Math.round(endedAt - transitionAt);
+  emitPhase(ctx, target, "bundle", "done", { durationMs: bundleDurationMs });
+  return { compileDurationMs: Math.round(transitionAt - startedAt), bundleDurationMs };
 }
 
 /**
@@ -415,16 +449,12 @@ function emitPhase(
  * @returns The measured `compile` and `bundle` phase durations.
  * @throws {Error} Whatever `tauri.build()` or the built-tree checks throw (already reported
  *   via native:phase).
- * @example
- * ```ts
- * const { compileDurationMs } = await runCompileAndBundle(ctx, deps, { target: "macos" });
- * ```
  */
 export async function runCompileAndBundle(
   ctx: BuildContext,
   deps: BuildDeps,
   opts: RunOptions
-): Promise<{ compileDurationMs: number; bundleDurationMs: number }> {
+): Promise<CompileAndBundleTimings> {
   const { target } = opts;
   const profile = profileOf(opts);
   // Monotonic readings: a wall-clock step (NTP) must never yield a negative duration.
@@ -433,13 +463,10 @@ export async function runCompileAndBundle(
 
   emitPhase(ctx, target, "compile", "start");
   try {
-    if (target === "ios") {
-      const cleared = await deps.project.clearMobileBuildOutput({ target });
-      if (cleared.removed.length > 0) {
-        emitPhase(ctx, target, "compile", "progress", { detail: CLEARED_BUILD_OUTPUT_DETAIL });
-      }
-    }
+    // Inside the try: a refused remove is a compile error, not an unattributed throw.
+    await clearIosBuildOutput(ctx, deps, target);
 
+    // One subprocess for both phases; its output drives the live compile→bundle switch.
     await deps.tauri.build({
       target,
       simulator: opts.simulator,
@@ -451,10 +478,6 @@ export async function runCompileAndBundle(
        * bundle phase opens, after which a "compiling" line would contradict the open phase.
        *
        * @param tick - The parsed compile tick.
-       * @example
-       * ```ts
-       * onTick({ crate: "tauri", index: 3, total: 50 });
-       * ```
        */
       onTick: tick => {
         if (transitionAt !== undefined) return;
@@ -465,10 +488,6 @@ export async function runCompileAndBundle(
        * bundling — while it is still running.
        *
        * @param line - A single scrubbed output line.
-       * @example
-       * ```ts
-       * onOutput("Bundling application (App.dmg)");
-       * ```
        */
       onOutput: line => {
         if (transitionAt !== undefined) return;
@@ -480,6 +499,8 @@ export async function runCompileAndBundle(
         emitPhase(ctx, target, "bundle", "start");
       }
     });
+
+    // Still inside the open phase: a failing built-tree check is that phase's error.
     await checkBuiltTree(ctx, deps, target, profile);
   } catch (error) {
     // The failure belongs to whichever phase is still open when the subprocess dies.
@@ -492,18 +513,12 @@ export async function runCompileAndBundle(
     throw error;
   }
 
-  const endedAt = performance.now();
-  if (transitionAt === undefined) {
-    const compileDurationMs = Math.round(endedAt - startedAt);
-    emitPhase(ctx, target, "compile", "done", { durationMs: compileDurationMs });
-    emitPhase(ctx, target, "bundle", "start");
-    emitPhase(ctx, target, "bundle", "done", { durationMs: 0 });
-    return { compileDurationMs, bundleDurationMs: 0 };
-  }
-
-  const bundleDurationMs = Math.round(endedAt - transitionAt);
-  emitPhase(ctx, target, "bundle", "done", { durationMs: bundleDurationMs });
-  return { compileDurationMs: Math.round(transitionAt - startedAt), bundleDurationMs };
+  // Success: close what is still open and report both durations.
+  return reportCompileAndBundleDone(ctx, target, {
+    startedAt,
+    transitionAt,
+    endedAt: performance.now()
+  });
 }
 
 /**
@@ -519,10 +534,6 @@ export async function runCompileAndBundle(
  * @param detailOf - Optional: derives the "done" event's `detail` from the phase's result.
  * @returns The measured phase duration and the phase's own return value.
  * @throws {Error} Rethrows whatever `run` throws, after emitting the error event.
- * @example
- * ```ts
- * const { durationMs } = await runPhase(ctx, "macos", "scaffold", () => runScaffold(ctx));
- * ```
  */
 async function runPhase<T>(
   ctx: BuildContext,
@@ -564,10 +575,6 @@ async function runPhase<T>(
  * @param profile - The build profile codegen generates and patches for.
  * @returns The three measured phase timings, in execution order.
  * @throws {Error} Whatever the failing phase throws (already reported via native:phase).
- * @example
- * ```ts
- * await runPrepare(ctx, deps, "android", "debug");
- * ```
  */
 export async function runPrepare(
   ctx: BuildContext,
@@ -606,10 +613,6 @@ export async function runPrepare(
  * @returns The completed pipeline's result, with all six phase timings and the profile.
  * @throws {Error} Whatever the failing phase throws (already reported via native:phase), or
  *   the debug-target refusal (before any phase event).
- * @example
- * ```ts
- * const result = await runPipeline(ctx, deps, { target: "macos" });
- * ```
  */
 export async function runPipeline(
   ctx: BuildContext,

@@ -142,7 +142,8 @@ const KNOWN_NAMES: readonly string[] = REGISTRY.map(row => row.name);
  * @returns True (narrowing `name` to `keyof CapabilityConfigMap`) if the registry knows it.
  * @example
  * ```ts
- * if (isKnownCapability(entry.name)) resolve(entry.name);
+ * isKnownCapability("store"); // true
+ * isKnownCapability("camera"); // false
  * ```
  */
 export function isKnownCapability(name: string): name is keyof CapabilityConfigMap {
@@ -274,15 +275,15 @@ export function resolveConfiguredCapabilities(
   for (const entry of global.system) {
     if (!isKnownCapability(entry.name)) throw unknownCapabilityError(entry.name);
     const capability = resolve(entry.name, global.capabilities[entry.name]);
-    if (capability.platforms.includes(target)) {
-      resolved.push(capability);
-    }
+    // A row this target does not support is left out, not an error.
+    if (!capability.platforms.includes(target)) continue;
+    resolved.push(capability);
   }
 
+  // The debug profile on android needs the shell even when `config.system` does not name it.
   const impliesShell = profile === "debug" && target === "android";
-  if (impliesShell && !resolved.some(capability => capability.name === "shell")) {
-    resolved.push(resolve("shell", global.capabilities.shell));
-  }
+  const shellMissing = !resolved.some(capability => capability.name === "shell");
+  if (impliesShell && shellMissing) resolved.push(resolve("shell", global.capabilities.shell));
   return resolved;
 }
 

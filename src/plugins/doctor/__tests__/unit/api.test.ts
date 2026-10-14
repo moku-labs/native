@@ -36,7 +36,12 @@ function createLog(): LogApi {
 const projectApi = {
   getRequiredFiles: vi.fn(() => []),
   getCompleteness: vi.fn(() => ({ status: "not-applicable" as const })),
-  getRegistryRows: vi.fn(() => [])
+  getRegistryRows: vi.fn(() => []),
+  getDebugKeystore: vi.fn(() => ({
+    path: undefined,
+    createCommand:
+      "mkdir -p ~/.android && keytool -genkeypair -v -keystore ~/.android/debug.keystore"
+  }))
 };
 const tauriApi = { getVersion: vi.fn(async () => ({ cliVersion: "2.0.0" })) };
 

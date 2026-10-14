@@ -9,7 +9,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { EnvApi } from "@moku-labs/common";
 import type { SigningConfig } from "../../../config";
-import type { PatchResult } from "../types";
+import type { DebugKeystore, PatchResult } from "../types";
 import { writeIfChanged } from "../writer";
 
 const SIGNING_START = "// MOKU-SIGNING-START";
@@ -123,7 +123,8 @@ function debugSigning(keystorePath: string): SigningBlock {
  * @returns The sentinel-delimited Gradle block.
  * @example
  * ```ts
- * renderSigningBlock(debugSigning("/home/me/.android/debug.keystore"));
+ * renderSigningBlock(debugSigning("/home/me/.android/debug.keystore")).split("\n")[4];
+ * // '      storeFile = file("/home/me/.android/debug.keystore")'
  * ```
  */
 function renderSigningBlock(block: SigningBlock): string {
@@ -156,7 +157,8 @@ function renderSigningBlock(block: SigningBlock): string {
  * @returns The content without a moku signing block.
  * @example
  * ```ts
- * removeSigningBlock(patchedGradleKts);
+ * removeSigningBlock("plugins {}\n\n// MOKU-SIGNING-START\nandroid {}\n// MOKU-SIGNING-END\ndependencies {}\n");
+ * // "plugins {}\ndependencies {}\n"
  * ```
  */
 export function removeSigningBlock(existing: string): string {
@@ -223,9 +225,62 @@ function writeSigningBlock(existing: string, block: string): string {
 }
 
 /**
- * Resolves the SDK debug keystore, `<home>/.android/debug.keystore`, where `home` is `HOME`,
- * or `USERPROFILE` on a Windows host that has no `HOME`. Read through `ctx.env`, never
+ * Picks the home directory the debug keystore lives under: `HOME`, or `USERPROFILE` when
+ * `HOME` is unset or empty (a Windows host).
+ *
+ * @param env - The env core API (only `get` is read).
+ * @returns The home directory, or undefined when neither variable holds one.
+ * @example
+ * ```ts
+ * homeDirectory({ get: key => (key === "HOME" ? "" : "/users/me") }); // "/users/me"
+ * ```
+ */
+function homeDirectory(env: Pick<EnvApi, "get">): string | undefined {
+  return env.get("HOME") || env.get("USERPROFILE") || undefined;
+}
+
+/**
+ * Renders the shell command that creates the SDK debug keystore: `mkdir -p` first, since
+ * `keytool` does not create parent directories. Without a known path the command names an
+ * unquoted `~/.android`, so the shell still expands the tilde.
+ *
+ * @param keystorePath - The debug keystore path, or undefined when there is no home directory.
+ * @returns The `mkdir -p … && keytool -genkeypair …` command.
+ * @example
+ * ```ts
+ * keystoreCommand(undefined).startsWith("mkdir -p ~/.android && keytool -genkeypair -v -keystore ~/.android/debug.keystore"); // true
+ * ```
+ */
+function keystoreCommand(keystorePath: string | undefined): string {
+  const directory = keystorePath === undefined ? "~/.android" : `"${path.dirname(keystorePath)}"`;
+  const keystore = keystorePath === undefined ? "~/.android/debug.keystore" : `"${keystorePath}"`;
+  return `mkdir -p ${directory} && keytool -genkeypair -v -keystore ${keystore} -storepass ${DEBUG_KEY_STOREPASS} -alias ${DEBUG_KEY_ALIAS} -keypass ${DEBUG_KEY_STOREPASS} -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"`;
+}
+
+/**
+ * Resolves the SDK debug keystore, `<home>/.android/debug.keystore`, and the command that
+ * creates it — the one rule the debug signing patch and doctor's check both read. Never
+ * throws: without a home directory the path is undefined. Read through `ctx.env`, never
  * `process.env`.
+ *
+ * @param env - The env core API (only `get` is read).
+ * @returns The keystore path (undefined without a home) and its create command.
+ * @example
+ * ```ts
+ * resolveDebugKeystore({ get: key => (key === "HOME" ? "/home/me" : undefined) }).path;
+ * // "/home/me/.android/debug.keystore"
+ * ```
+ */
+export function resolveDebugKeystore(env: Pick<EnvApi, "get">): DebugKeystore {
+  const home = homeDirectory(env);
+  const keystorePath =
+    home === undefined ? undefined : path.join(home, ".android", "debug.keystore");
+  return { path: keystorePath, createCommand: keystoreCommand(keystorePath) };
+}
+
+/**
+ * Resolves the SDK debug keystore path the debug profile signs with, by
+ * {@link resolveDebugKeystore}, and fails when there is no home directory to find it in.
  *
  * @param env - The env core API (only `get` is read).
  * @returns The debug keystore path.
@@ -237,31 +292,33 @@ function writeSigningBlock(existing: string, block: string): string {
  * ```
  */
 export function debugKeystorePath(env: Pick<EnvApi, "get">): string {
-  const home = env.get("HOME") || env.get("USERPROFILE");
-  if (!home) {
+  const keystorePath = resolveDebugKeystore(env).path;
+  if (keystorePath === undefined) {
     throw new Error(
       "[native] the debug profile signs with the debug keystore in your home directory, but neither HOME nor USERPROFILE is set.\n  Set HOME to your home directory and build again."
     );
   }
-  return path.join(home, ".android", "debug.keystore");
+  return keystorePath;
 }
 
 /**
  * Fails early, with the command that creates it, when the debug keystore is missing —
- * instead of deep inside Gradle's `validateSigningRelease`.
+ * instead of deep inside Gradle's `validateSigningRelease`. The command is the one
+ * {@link resolveDebugKeystore} reports, so doctor and the build show the same fix.
  *
  * @param keystorePath - The debug keystore path from {@link debugKeystorePath}.
- * @throws {Error} `[native] debug keystore not found at <path>.` with the `keytool` fix.
+ * @throws {Error} `[native] debug keystore not found at <path>.` with the `mkdir -p … && keytool …` fix.
  * @example
  * ```ts
- * assertDebugKeystore("/home/me/.android/debug.keystore"); // throws when the file is absent
+ * assertDebugKeystore("/nowhere/.android/debug.keystore");
+ * // throws: [native] debug keystore not found at /nowhere/.android/debug.keystore.
  * ```
  */
 export function assertDebugKeystore(keystorePath: string): void {
   if (existsSync(keystorePath)) return;
 
   throw new Error(
-    `[native] debug keystore not found at ${keystorePath}.\n  Create it with: keytool -genkeypair -v -keystore "${keystorePath}" -storepass ${DEBUG_KEY_STOREPASS} -alias ${DEBUG_KEY_ALIAS} -keypass ${DEBUG_KEY_STOREPASS} -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US".`
+    `[native] debug keystore not found at ${keystorePath}.\n  Create it with: ${keystoreCommand(keystorePath)}.`
   );
 }
 

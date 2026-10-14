@@ -82,6 +82,20 @@ export type PageAgentResult = { agent: boolean; file?: string };
 export type CleanResult = { removed: readonly string[] };
 
 /**
+ * The Android SDK debug keystore the debug profile signs with, and the shell command that
+ * creates it. `path` is undefined when the environment names no home directory.
+ *
+ * @example
+ * ```ts
+ * const keystore: DebugKeystore = {
+ *   path: "/home/me/.android/debug.keystore",
+ *   createCommand: 'mkdir -p "/home/me/.android" && keytool -genkeypair -v -keystore "/home/me/.android/debug.keystore" …'
+ * };
+ * ```
+ */
+export type DebugKeystore = { readonly path: string | undefined; readonly createCommand: string };
+
+/**
  * One capability registry row — packaging metadata with per-row research confidence.
  * A row is backed by a real Tauri plugin (crate + npm package + Rust init), by a core
  * Tauri cargo feature (tray), by core permissions alone (back), or by a plugin crate this
@@ -196,7 +210,40 @@ export type Api = {
    * ```
    */
   generate(opts: { target: Target; profile?: BuildProfile | undefined }): Promise<GenerateResult>;
+  /**
+   * Returns where one target's build output lands inside the generated project, read from
+   * `layout.ts`, the one owner of that table: the output root (relative to `projectDir`),
+   * the desktop bundle-format directories with their artifact globs, and the mobile
+   * `gen/<platform>` directory. Build's collect phase globs against it instead of keeping
+   * a copy.
+   *
+   * @param opts - The lookup options.
+   * @param opts.target - The packaging target.
+   * @returns The output root, the bundle formats, and the mobile `gen/` directory.
+   * @example
+   * ```ts
+   * // Collect an iOS build: the output lives in the gen/apple tree, not under bundle/.
+   * app.project.getBundleLayout({ target: "ios" });
+   * // { root: "src-tauri", formats: [], genDirectory: "gen/apple" }
+   * ```
+   */
   getBundleLayout(opts: { target: Target }): BundleLayout;
+  /**
+   * Checks a mobile `gen/<platform>` tree against its required-file set, not mere
+   * existence: a partial `tauri <platform> init` leaves some files out. A desktop target is
+   * `"not-applicable"`, a missing tree `"not-initialized"`, a partial one `"incomplete"`
+   * with the missing paths.
+   *
+   * @param opts - The check options.
+   * @param opts.target - The packaging target to check.
+   * @returns The completeness verdict.
+   * @example
+   * ```ts
+   * // Before the first android build nothing has run `tauri android init` yet.
+   * app.project.getCompleteness({ target: "android" }); // { status: "not-initialized" }
+   * app.project.getCompleteness({ target: "macos" }); // { status: "not-applicable" }
+   * ```
+   */
   getCompleteness(opts: { target: Target }): CompletenessResult;
   /**
    * Runs the idempotent mobile post-init patch pass. Android gets its build-profile
@@ -286,15 +333,152 @@ export type Api = {
     target: MobileTarget;
     profile?: BuildProfile | undefined;
   }): Promise<void>;
+  /**
+   * Deletes derived state: the whole `projectDir` when `target` is omitted, the
+   * `gen/<platform>` tree for a mobile target, that target's bundle-format directories for
+   * a desktop one. `projectDir` must be derived state (inside the cwd or the temp root) and
+   * every candidate inside it; only paths that existed are removed and listed.
+   *
+   * @param opts - The clean options; omit them to clean the whole `projectDir`.
+   * @param opts.target - The packaging target to scope the clean to.
+   * @returns The absolute paths actually removed.
+   * @throws {Error} `[native]` when `projectDir` is not derived state, or a path falls outside it.
+   * @example
+   * ```ts
+   * // Start android over from `tauri android init`; the cwd is /repo/app, projectDir the default.
+   * await app.project.clean({ target: "android" });
+   * // { removed: ["/repo/app/.moku/tauri/src-tauri/gen/android"] }
+   * ```
+   */
   clean(opts?: { target?: Target | undefined }): Promise<CleanResult>;
+  /**
+   * Removes a mobile target's previous build output so the next compile writes into an
+   * empty tree: `gen/apple/build` on iOS (`tauri ios build` fails the second build of a tree
+   * with `Directory not empty`). Android always gets an empty result: Gradle manages its own
+   * `app/build`. Guarded like {@link Api.clean}: the output must be a real directory inside
+   * a derived `projectDir`.
+   *
+   * @param opts - The clear options.
+   * @param opts.target - The mobile platform whose previous build output to remove.
+   * @returns The paths removed — empty when there was nothing to remove.
+   * @throws {Error} `[native] Refusing to remove build output outside projectDir …` for a link out of the tree.
+   * @example
+   * ```ts
+   * // The build plugin clears the last iOS build before it compiles again.
+   * await ctx.require(projectPlugin).clearMobileBuildOutput({ target: "ios" });
+   * // { removed: ["/repo/app/.moku/tauri/src-tauri/gen/apple/build"] }
+   * ```
+   */
   clearMobileBuildOutput(opts: { target: MobileTarget }): Promise<CleanResult>;
+  /**
+   * Resolves a path to the one form every containment guard of this framework compares in:
+   * absolute, symlinks followed, NFC-normalized, and case-folded on a case-insensitive
+   * platform. Build's collect guard borrows it so a single symlink cannot walk around a
+   * lexical check. For comparison only: never a path to display or to hand to the filesystem.
+   *
+   * @param target - The path to resolve, absolute or relative to the process cwd.
+   * @returns The comparable form of the real path.
+   * @example
+   * ```ts
+   * // Build checks that a delivery directory sits inside outDir; the cwd is /repo/app.
+   * app.project.resolveDerivedPath("dist-native/macos"); // "/repo/app/dist-native/macos"
+   * ```
+   */
   resolveDerivedPath(target: string): string;
+  /**
+   * Resolves the 1024x1024 source PNG `tauri icon` expands into the platform icon sets. A
+   * configured `app.icon` is used as is (resolved against the cwd); otherwise an embedded
+   * placeholder is written into `projectDir`, so a brand-new app packages without drawing
+   * an icon first.
+   *
+   * @returns The absolute path to the icon source.
+   * @throws {Error} `[native] app.icon "<path>" was not found at …` when `app.icon` names no file.
+   * @example
+   * ```ts
+   * // No app.icon configured, the cwd is /repo/app: the placeholder is written and used.
+   * await app.project.ensureIconSource(); // "/repo/app/.moku/tauri/placeholder-icon.png"
+   * ```
+   */
   ensureIconSource(): Promise<string>;
+  /**
+   * Resolves one registry row against its optional packaging config into the full
+   * contribution: the row plus its tauri.conf fragment and the Info.plist-sidecar and
+   * manifest seams (both empty for every row today).
+   *
+   * @param name - A capability name known at compile time.
+   * @param config - The capability's packaging parameters (deep-link needs a scheme).
+   * @returns The resolved capability.
+   * @throws {Error} `[native] deep-link capability requires a non-empty scheme.` without a scheme.
+   * @example
+   * ```ts
+   * // What a custom URL scheme adds to tauri.conf.json.
+   * app.project.resolve("deep-link", { mode: "scheme", scheme: "myapp" }).conf;
+   * // { desktop: { schemes: ["myapp"] }, mobile: [{ scheme: ["myapp"], appLink: false }] }
+   * ```
+   */
   resolve<K extends keyof CapabilityConfigMap>(
     name: K,
     config?: CapabilityConfigMap[K]
   ): ResolvedCapability;
+  /**
+   * Narrows a capability name that arrives as a plain string (a `config.system` entry) to
+   * one the registry knows, before it is handed to {@link Api.resolve}.
+   *
+   * @param name - A capability name to test against the registry.
+   * @returns True, narrowing `name`, when the registry has a row for it.
+   * @example
+   * ```ts
+   * // A system entry typed by hand: only registry names resolve.
+   * app.project.isKnownCapability("store"); // true
+   * app.project.isKnownCapability("camera"); // false
+   * ```
+   */
   isKnownCapability(name: string): name is keyof CapabilityConfigMap;
+  /**
+   * Lists every capability registry row — pinned crate and npm ranges, permissions,
+   * platforms and research confidence — as fresh copies, so a caller can never mutate the
+   * registry. Doctor checks the installed versions against them.
+   *
+   * @returns A copy of every registry row, in registry order.
+   * @example
+   * ```ts
+   * // Doctor walks the rows to compare pinned ranges with what is installed.
+   * ctx.require(projectPlugin).getRegistryRows().map(row => row.name);
+   * // ["store", "notification", "clipboard-manager", "tray", "deep-link", "back", "haptics", "shell"]
+   * ```
+   */
   getRegistryRows(): ReadonlyArray<RegistryRow>;
+  /**
+   * Returns the required-file set a mobile `gen/<platform>` tree must carry — the set
+   * {@link Api.getCompleteness} checks, for doctor to name in its report.
+   *
+   * @param opts - The lookup options.
+   * @param opts.target - The mobile platform to list required files for.
+   * @returns The required paths, relative to `src-tauri/gen/<platform>`.
+   * @example
+   * ```ts
+   * // Doctor reports how many required files a complete iOS tree carries.
+   * ctx.require(projectPlugin).getRequiredFiles({ target: "ios" });
+   * // ["project.yml", "Assets.xcassets", "Sources", "ExportOptions.plist"]
+   * ```
+   */
   getRequiredFiles(opts: { target: MobileTarget }): readonly string[];
+  /**
+   * Resolves the Android SDK debug keystore the debug profile signs with,
+   * `<home>/.android/debug.keystore`, and the shell command that creates it. Home is `HOME`,
+   * or `USERPROFILE` when `HOME` is unset or empty — the same rule {@link Api.patchMobile}
+   * signs by, so doctor's check and the build never disagree. Never throws: without a home
+   * directory `path` is undefined and the command names an unquoted `~/.android`. Reads the
+   * environment only, never the filesystem.
+   *
+   * @returns The keystore path and the `mkdir -p … && keytool -genkeypair …` command.
+   * @example
+   * ```ts
+   * // Doctor warns before a debug build that could not be signed; HOME is /home/me.
+   * ctx.require(projectPlugin).getDebugKeystore();
+   * // { path: "/home/me/.android/debug.keystore",
+   * //   createCommand: 'mkdir -p "/home/me/.android" && keytool -genkeypair -v -keystore "/home/me/.android/debug.keystore" …' }
+   * ```
+   */
+  getDebugKeystore(): DebugKeystore;
 };

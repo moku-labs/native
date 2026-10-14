@@ -23,10 +23,10 @@
  *
  * | Field | Type | Default |
  * |---|---|---|
- * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour |
+ * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor?; adaptiveIconInset? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour, `adaptiveIconInset` the Android adaptive icon inset (percent per side, `0 < n ≤ 30`) |
  * | `web` | `{ build; devCommand; devUrl; dist; cwd? }` | `"bun run build"`, `"bun run dev"`, `"http://localhost:5173"`, `"dist"` |
  * | `system` | `ReadonlyArray<{ name: string }>` | `[]` — the composed `@moku-labs/system` plugins |
- * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` — keys: `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics` |
+ * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` — keys: `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics`, `shell` |
  * | `targets` | `readonly Target[]` | `hostTargets(process.platform)` — one desktop target, mobile is opt-in |
  * | `projectDir` | `string` | `".moku/tauri"` — generated Tauri project (gitignored build output) |
  * | `outDir` | `string` | `"dist-native"` — installer delivery root |
@@ -104,8 +104,8 @@ export type { Build, Cli, Doctor, Project, Tauri } from "./plugins";
 // ─── Helpers + Constants ─────────────────────────────────────
 export { hostTargets, PHASE_ORDER, TARGETS } from "./config";
 // The one runtime value a plugin namespace cannot carry: the plugin type namespaces are
-// type-only (`export type * as Tauri`), so the error class travels through the barrel by name.
-export { TauriError } from "./plugins";
+// type-only (`export type * as Tauri`), so the error class is re-exported by name.
+export { TauriError } from "./plugins/tauri/errors";
 
 // ─── Types ───────────────────────────────────────────────────
 export type {

@@ -39,7 +39,8 @@ function defaultSdkRoot(input: CheckInput): string | undefined {
     const localAppData = input.env.get("LOCALAPPDATA");
     return localAppData === undefined ? undefined : path.join(localAppData, "Android", "Sdk");
   }
-  const home = input.env.get("HOME") ?? input.env.get("USERPROFILE");
+  // An empty HOME names no home: fall back to USERPROFILE, as project's keystore rule does.
+  const home = input.env.get("HOME") || input.env.get("USERPROFILE") || undefined;
   if (home === undefined) return undefined;
   return process.platform === "darwin"
     ? path.join(home, "Library", "Android", "sdk")

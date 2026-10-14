@@ -438,6 +438,13 @@ describe("runCompileAndBundle", () => {
       status: "progress",
       detail: "Compiling demo"
     });
+    // The event a progress UI renders, not only the returned timing, carries the zero.
+    expect(emit).toHaveBeenCalledWith("native:phase", {
+      target: "macos",
+      phase: "bundle",
+      status: "done",
+      durationMs: 0
+    });
     expect(result.bundleDurationMs).toBe(0);
   });
 

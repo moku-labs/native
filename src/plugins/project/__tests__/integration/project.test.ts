@@ -380,6 +380,16 @@ describe("complex tier: project plugin (integration)", () => {
       );
     });
 
+    it("getDebugKeystore reads the home through ctx.env, USERPROFILE behind an empty HOME (bug: doctor checks another keystore than the build signs with)", () => {
+      vi.stubEnv("HOME", "");
+      vi.stubEnv("USERPROFILE", "/users/me");
+      const app = createAndroidApp([]);
+
+      expect(app.project.getDebugKeystore().path).toBe(
+        path.join("/users/me", ".android", "debug.keystore")
+      );
+    });
+
     it("patchMobileIcons wraps the Android icon with app.adaptiveIconInset; ios gets nothing", async () => {
       const mipmap = path.join(
         projectDir,

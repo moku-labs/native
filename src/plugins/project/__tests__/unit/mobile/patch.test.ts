@@ -334,7 +334,7 @@ describe("patchMobile", () => {
     const debug = { profile: "debug" as const, appName: "My App", debugKeystore: missing };
 
     await expect(patchMobile(dir, { target: "android" }, {}, [], undefined, debug)).rejects.toThrow(
-      `[native] debug keystore not found at ${missing}.\n  Create it with: keytool -genkeypair -v -keystore "${missing}"`
+      `[native] debug keystore not found at ${missing}.\n  Create it with: mkdir -p "${path.dirname(missing)}" && keytool -genkeypair -v -keystore "${missing}"`
     );
     expect(await readFile(path.join(genDir, "app", "build.gradle.kts"), "utf8")).toBe(
       "plugins {}\n"

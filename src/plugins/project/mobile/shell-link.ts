@@ -26,6 +26,7 @@ const TAURI_SETTINGS = "tauri.settings.gradle";
  * @example
  * ```ts
  * await assertShellLinked({ genDirectory: "/repo/.moku/tauri/src-tauri/gen/android" });
+ * // rejects: [native] the shell plugin is not linked into gen/android … when tauri.settings.gradle has no moku-shell
  * ```
  */
 export async function assertShellLinked(options: { genDirectory: string }): Promise<void> {
@@ -48,10 +49,6 @@ export async function assertShellLinked(options: { genDirectory: string }): Prom
  * @param options.target - The mobile platform that was compiled.
  * @param options.profile - The build profile.
  * @throws {Error} When the shell is composed but not linked.
- * @example
- * ```ts
- * await checkShellLinked({ global: ctx.global, target: "android", profile: "debug" });
- * ```
  */
 export async function checkShellLinked(options: {
   global: Readonly<Config>;

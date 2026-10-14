@@ -112,15 +112,19 @@ export function applyProfileBlock(existing: string, profile: AndroidProfile["pro
   const start = existing.indexOf(PROFILE_START);
   const end = existing.indexOf(PROFILE_END, start);
   const present = start !== -1 && end !== -1;
-
-  if (profile === "debug") {
-    if (!present) return `${existing}${eol}${profileBlock(eol)}${eol}`;
-    return `${existing.slice(0, start)}${profileBlock(eol)}${existing.slice(end + PROFILE_END.length)}`;
-  }
-
-  if (!present) return existing;
-  const from = existing.slice(start - eol.length, start) === eol ? start - eol.length : start;
   const blockEnd = end + PROFILE_END.length;
+
+  // Debug, first pass: append the block on lines of its own.
+  if (profile === "debug" && !present) return `${existing}${eol}${profileBlock(eol)}${eol}`;
+  // Debug, later pass: replace the block in place.
+  if (profile === "debug") {
+    return `${existing.slice(0, start)}${profileBlock(eol)}${existing.slice(blockEnd)}`;
+  }
+  // Store on a tree never built in debug: nothing to undo.
+  if (!present) return existing;
+
+  // Store: cut out exactly what the debug pass inserted, the line endings around it included.
+  const from = existing.slice(start - eol.length, start) === eol ? start - eol.length : start;
   const to = existing.startsWith(eol, blockEnd) ? blockEnd + eol.length : blockEnd;
   return `${existing.slice(0, from)}${existing.slice(to)}`;
 }
@@ -253,10 +257,6 @@ export function applyDebugName(existing: string, appName: string): string {
  * @param result - The lists to record the outcome in.
  * @param result.patched - Paths written.
  * @param result.unchanged - Paths already carrying `content`.
- * @example
- * ```ts
- * await record(projectDir, gradlePath, next, result);
- * ```
  */
 async function record(
   projectDirectory: string,
@@ -346,6 +346,32 @@ function withNetworkAttribute(
 }
 
 /**
+ * Reads what the debug config must keep for the next store pass. A moku config from an
+ * earlier debug pass carries its records over; anything else is the state before debug: the
+ * `<application>` attribute value and the bytes of a hand-made config file.
+ *
+ * @param bytes - The current config file, or undefined when there is none.
+ * @param manifest - The manifest content, or undefined when there is none.
+ * @returns What the store profile puts back.
+ * @example
+ * ```ts
+ * keptNetwork(undefined, undefined); // { attribute: undefined, file: undefined }
+ * ```
+ */
+function keptNetwork(bytes: Buffer | undefined, manifest: string | undefined): KeptNetwork {
+  const config = bytes?.toString("utf8");
+  // An earlier debug pass: carry its records over, never record the moku config itself.
+  if (config?.includes(NETWORK_MARKER)) {
+    return { attribute: keptRecord(config, KEPT_ATTRIBUTE), file: keptRecord(config, KEPT_FILE) };
+  }
+
+  // The first debug pass: keep the attribute and the hand-made file as they are now.
+  const attribute =
+    manifest === undefined ? undefined : applicationAttribute(manifest, NETWORK_ATTRIBUTE);
+  return { attribute: encode(attribute), file: bytes?.toString("base64") };
+}
+
+/**
  * The debug half of the network config patch: writes the cleartext config and points
  * `<application>` at it. What it replaces — a hand-made config file, a previous attribute
  * value — is kept inside the moku config (or carried over from an earlier debug pass), so the
@@ -355,10 +381,6 @@ function withNetworkAttribute(
  * @param genDirectory - The `src-tauri/gen/android` directory.
  * @param log - Where a replaced hand-made config is reported.
  * @param result - The lists to record the outcome in.
- * @example
- * ```ts
- * await applyDebugNetworkConfig(projectDir, genDir, ctx.log, result);
- * ```
  */
 async function applyDebugNetworkConfig(
   projectDirectory: string,
@@ -369,25 +391,20 @@ async function applyDebugNetworkConfig(
   const configPath = androidNetworkConfigPath(genDirectory);
   const manifestPath = androidManifestPath(genDirectory);
   const bytes = existsSync(configPath) ? await readFile(configPath) : undefined;
-  const config = bytes?.toString("utf8");
   const manifest = existsSync(manifestPath) ? await readFile(manifestPath, "utf8") : undefined;
+  const kept = keptNetwork(bytes, manifest);
 
-  let kept: KeptNetwork;
-  if (config?.includes(NETWORK_MARKER)) {
-    kept = { attribute: keptRecord(config, KEPT_ATTRIBUTE), file: keptRecord(config, KEPT_FILE) };
-  } else {
-    const attribute =
-      manifest === undefined ? undefined : applicationAttribute(manifest, NETWORK_ATTRIBUTE);
-    kept = { attribute: encode(attribute), file: bytes?.toString("base64") };
-    if (bytes !== undefined) {
-      log?.warn("project:patchMobile:foreign-network-config", {
-        path: configPath,
-        action: "replaced",
-        detail: "kept inside the debug config; the next store build writes it back"
-      });
-    }
+  // A hand-made config is replaced, never lost: say where it went.
+  const foreign = bytes !== undefined && !bytes.toString("utf8").includes(NETWORK_MARKER);
+  if (foreign) {
+    log?.warn("project:patchMobile:foreign-network-config", {
+      path: configPath,
+      action: "replaced",
+      detail: "kept inside the debug config; the next store build writes it back"
+    });
   }
 
+  // Write the cleartext config, then point `<application>` at it when there is a manifest.
   await record(projectDirectory, configPath, debugNetworkConfig(kept), result);
   if (manifest === undefined) return;
   const next = withNetworkAttribute(manifest, NETWORK_RESOURCE, manifestPath);
@@ -405,10 +422,6 @@ async function applyDebugNetworkConfig(
  * @param genDirectory - The `src-tauri/gen/android` directory.
  * @param log - Where a kept hand-made config is reported.
  * @param result - The lists to record the outcome in.
- * @example
- * ```ts
- * await revertNetworkConfig(projectDir, genDir, ctx.log, result);
- * ```
  */
 async function revertNetworkConfig(
   projectDirectory: string,
@@ -417,8 +430,10 @@ async function revertNetworkConfig(
   result: ResultLists
 ): Promise<void> {
   const configPath = androidNetworkConfigPath(genDirectory);
+  // No config at all: there is nothing to revert.
   if (!existsSync(configPath)) return;
   const config = await readFile(configPath, "utf8");
+  // A config native did not write stays, and so does the attribute naming it (Decision D4).
   if (!config.includes(NETWORK_MARKER)) {
     log?.warn("project:patchMobile:foreign-network-config", {
       path: configPath,
@@ -428,6 +443,7 @@ async function revertNetworkConfig(
     return;
   }
 
+  // Put the hand-made file back, or delete the moku config when there was none before.
   const keptFile = keptRecord(config, KEPT_FILE);
   if (keptFile === undefined) {
     await rm(configPath, { force: true });
@@ -436,6 +452,7 @@ async function revertNetworkConfig(
     await record(projectDirectory, configPath, Buffer.from(keptFile, "base64"), result);
   }
 
+  // Give `<application>` its old attribute value back, or remove the attribute.
   const manifestPath = androidManifestPath(genDirectory);
   if (!existsSync(manifestPath)) return;
   const manifest = await readFile(manifestPath, "utf8");
@@ -469,28 +486,31 @@ export async function patchAndroidProfile(options: {
   profile: AndroidProfile;
 }): Promise<PatchResult> {
   const { projectDirectory, genDirectory, profile } = options;
+  const isDebug = profile.profile === "debug";
   const result: ResultLists = { patched: [], unchanged: [] };
 
+  // 1. Gradle: the `.debug` id suffix block. Debug lists the file even when it was current.
   const gradlePath = path.join(genDirectory, "app", "build.gradle.kts");
   const gradle = await readFile(gradlePath, "utf8");
   const nextGradle = applyProfileBlock(gradle, profile.profile);
-  if (profile.profile === "debug" || nextGradle !== gradle) {
+  if (isDebug || nextGradle !== gradle) {
     await record(projectDirectory, gradlePath, nextGradle, result);
   }
 
+  // 2. strings.xml: the `"<name> (debug)"` label, or the original lines back.
   const stringsPath = androidStringsPath(genDirectory);
   if (existsSync(stringsPath)) {
     const strings = await readFile(stringsPath, "utf8");
-    const nextStrings =
-      profile.profile === "debug"
-        ? applyDebugName(strings, profile.appName)
-        : restoreDebugName(strings);
-    if (profile.profile === "debug" || nextStrings !== strings) {
+    const nextStrings = isDebug
+      ? applyDebugName(strings, profile.appName)
+      : restoreDebugName(strings);
+    if (isDebug || nextStrings !== strings) {
       await record(projectDirectory, stringsPath, nextStrings, result);
     }
   }
 
-  await (profile.profile === "debug"
+  // 3. The network security config: cleartext in debug, the state before debug in store.
+  await (isDebug
     ? applyDebugNetworkConfig(projectDirectory, genDirectory, profile.log, result)
     : revertNetworkConfig(projectDirectory, genDirectory, profile.log, result));
   return result;

@@ -39,11 +39,6 @@ export function hostTarget(platform: NodeJS.Platform = process.platform): Target
  * @param ctx - Plugin context (global config, state, render/confirm seams).
  * @param deps - The project/tauri/build/doctor API slices the verbs delegate to (D-007).
  * @returns The `cli` plugin's public API.
- * @example
- * ```ts
- * const api = createCliApi(ctx, { project, tauri, build, doctor });
- * await api.build({ target: "macos" });
- * ```
  */
 export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
   const { build, doctor, project, tauri } = deps;

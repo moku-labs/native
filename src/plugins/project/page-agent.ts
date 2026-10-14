@@ -124,12 +124,13 @@ async function findAgent(directory: string, walk: Walk): Promise<string | undefi
   for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
     const full = path.join(directory, entry.name);
     const kind = await entryKind(entry, full, walk);
-    if (kind === "directory") {
-      const hit = await findAgent(full, walk);
-      if (hit !== undefined) return hit;
-    } else if (kind === "script" && (await carriesAgent(full))) {
-      return full;
-    }
+    // A script that carries a marker is the hit.
+    if (kind === "script" && (await carriesAgent(full))) return full;
+    // Anything else but a directory (a clean script, a map, a link out of the dist) is skipped.
+    if (kind !== "directory") continue;
+
+    const hit = await findAgent(full, walk);
+    if (hit !== undefined) return hit;
   }
   return undefined;
 }

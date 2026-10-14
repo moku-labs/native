@@ -133,11 +133,6 @@ const realFs: FsFacade = {
  * @param ctx - Plugin context (emit doctor:check; probe seam config; global config).
  * @param deps - The project/tauri API slices the checks read (D-007).
  * @returns The `doctor` plugin's public API.
- * @example
- * ```ts
- * const api = createDoctorApi(ctx, { project, tauri });
- * const report = await api.run({ target: "ios" });
- * ```
  */
 export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
   const probe = ctx.config.probeImpl ?? createRealProbe(ctx.config.probeTimeoutMs);

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { debugKeystorePath, resolveDebugKeystore } from "../../../../project/mobile/signing";
 import { androidDebugSigningCheck } from "../../../checks/android-debug-signing";
 import { createCheckInput, createEnv, createFs } from "./fixtures";
 
@@ -68,5 +69,18 @@ describe("androidDebugSigningCheck.run", () => {
 
     expect(result.status).toBe("warn");
     expect(result.fixIt).toContain("keytool -genkeypair");
+  });
+
+  it("reports the keystore project signs with when HOME is empty (bug: doctor's own `??` home rule drifted from the build's)", async () => {
+    const env = createEnv({ HOME: "", USERPROFILE: "/home/me" });
+    // The path the debug signing patch writes into the Gradle config for this environment.
+    const signedWith = debugKeystorePath(env);
+
+    const result = await androidDebugSigningCheck.run(createCheckInput({ target: "android", env }));
+
+    expect(signedWith).toBe(KEYSTORE);
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain(`at ${signedWith},`);
+    expect(result.fixIt).toBe(resolveDebugKeystore(env).createCommand);
   });
 });

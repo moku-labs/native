@@ -52,10 +52,10 @@ export type FsFacade = {
   readdir(path: string): Promise<string[]>;
 };
 
-/** The project plugin's API surface a check may read — narrowed to doctor's three needs. */
+/** The project plugin's API surface a check may read — narrowed to doctor's four needs. */
 export type CheckProjectApi = Pick<
   ProjectApi,
-  "getRequiredFiles" | "getCompleteness" | "getRegistryRows"
+  "getRequiredFiles" | "getCompleteness" | "getRegistryRows" | "getDebugKeystore"
 >;
 
 /** The tauri plugin's API surface a check may read — the one probe routed through tauri (D-013). */

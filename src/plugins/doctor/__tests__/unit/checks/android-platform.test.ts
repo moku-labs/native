@@ -162,4 +162,20 @@ describe("androidPlatformCheck.run", () => {
 
     expect(result.status).toBe("pass");
   });
+
+  it("falls back to USERPROFILE when HOME is set but empty (bug: `??` keeps the empty HOME)", async () => {
+    const root = path.join("/home/me", "Android", "Sdk");
+    const fs = createFs({
+      directories: { [root]: [], [path.join(root, "platforms")]: ["android-37"] }
+    });
+    const input = createCheckInput({
+      target: "android",
+      env: createEnv({ HOME: "", USERPROFILE: "/home/me" }),
+      fs
+    });
+
+    const result = await withPlatform("linux", () => androidPlatformCheck.run(input));
+
+    expect(result.status).toBe("pass");
+  });
 });

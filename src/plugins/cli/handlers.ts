@@ -25,10 +25,6 @@ export type CliHandlers = {
  *
  * @param ctx - Plugin context (shared console + progress bookkeeping in state).
  * @returns The hook map wired onto the cli plugin.
- * @example
- * ```ts
- * hooks: ctx => createCliHandlers(ctx)
- * ```
  */
 export function createCliHandlers(ctx: CliContext): CliHandlers {
   const ui = ctx.state.ui;
@@ -64,7 +60,7 @@ export function createCliHandlers(ctx: CliContext): CliHandlers {
      * @param payload - The completion event payload.
      * @example
      * ```ts
-     * handlers["native:complete"]({ target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 1 });
+     * handlers["native:complete"]({ target: "macos", outPath: "dist-native/macos", artifacts: [], durationMs: 1, profile: "store" });
      * ```
      */
     "native:complete"(payload) {
