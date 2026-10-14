@@ -48,7 +48,7 @@ that was scheduled earlier. `report.checks` keeps the registry order regardless.
 
 Each module in `checks/` exports one (or, for `cross-repo.ts`, two) `Check` — a pure
 predicate-plus-message factory over an injected `probe`/`fs`/`env`/`project`/`tauri` seam, never a
-raw subprocess/fs call of its own:
+raw subprocess/fs call of its own (`fs` is read-only: `readFile`, `exists`, `readdir`):
 
 | Module | Diagnoses | Posture |
 |---|---|---|
@@ -58,6 +58,8 @@ raw subprocess/fs call of its own:
 | `ios-tools.ts` | `xcodegen` + `pod` on PATH and both rust triples (`aarch64-apple-ios`, `aarch64-apple-ios-sim`) installed (ios, macOS host only); fix-it lists the exact install commands | fail |
 | `ios-platform.ts` | the installed iOS platform: `xcodebuild -showsdks` + `xcrun simctl list runtimes` (ios, macOS host only). Warns only when NO simulator runtime is installed — a runtime newer than the SDK is fine | **warn only** |
 | `android.ts` | `ANDROID_HOME`/SDK, NDK, JDK presence (android) | fail |
+| `android-platform.ts` | the SDK platform the build compiles against is installed: `platforms/android-N` or the minor-version naming `android-N.0` (a real minor platform such as `android-36.1` is a separate package and does not count), under `ANDROID_HOME` → `ANDROID_SDK_ROOT` → the Android Studio default (`~/Library/Android/sdk` on macOS, `~/Android/Sdk` on linux, `%LOCALAPPDATA%\Android\Sdk` on windows). N is `compileSdk` from the generated `gen/android/app/build.gradle.kts`, else 37 (the tauri-cli 2.11 template). Fix-it: `sdkmanager "platforms;android-N"`. `ANDROID_HOME`/`ANDROID_SDK_ROOT` naming a missing directory **fails** (`android.ts` only sees that the var is set); no env var and no SDK at the default location is a **warn** — `android.ts` already fails for it (android) | fail |
+| `android-debug-signing.ts` | the debug keystore `<home>/.android/debug.keystore` (`HOME`, else `USERPROFILE`) a debug build is signed with. The pass names the install steps (`adb install -r <apk>` over a cable; `adb pair` then `adb connect` over Wi-Fi, Android 11+); the warn's fix-it is `mkdir -p <home>/.android && keytool -genkeypair … -alias androiddebugkey`, which doctor never runs (android) | **warn only** |
 | `signing.ts` | signing readiness, presence and counts only (never values): one complete Apple credential set (`APPLE_ID`+`APPLE_PASSWORD`+`APPLE_TEAM_ID`, **or** `APPLE_API_KEY`+`APPLE_API_ISSUER`+`APPLE_API_KEY_PATH`), `signing.apple.teamId` for ios, a count-only keychain probe, `signing.android.keystorePasswordEnv` for android, and `signing.windows.certificateThumbprint` for windows | **warn only** |
 | `completeness.ts` | mobile `gen/` required-file-set via `project.getCompleteness()`; fix-it is always `native clean --target <t>` | fail (not-initialized = pass) |
 | `versions.ts` | `@tauri-apps/*` npm major version vs. the registry-pinned crate range, read from the same root as `web-script.ts`; rows without an npm package (`tray`) are skipped | **warn only** |
@@ -103,6 +105,8 @@ toolchain, so it never flips `report.ok`.
   a value (`ctx.env.get`), into any message or fix-it. The keychain probe parses a **count** of
   codesigning identities, never the identity strings; it is skipped when `signing.apple.signingIdentity`
   is unset or `"-"`, or when `APPLE_CERTIFICATE` is set (CI brings its own keychain).
+  `android-debug-signing` reads one value, the home directory (`HOME`/`USERPROFILE`), a path
+  and never a secret: the debug keystore's passwords are the public `android` defaults.
 - **Domain files**: `types.ts` (`DoctorApi`/`DoctorContext`/`DoctorReport`/`CheckResult`), `api.ts`
   (check selection + parallel dispatch + per-check timeout race + emission), `report.ts` (ok
   computation + settled-rejection → internal-error mapping), `checks/` (the check modules + registry).

@@ -4,7 +4,7 @@
  * per check AS IT SETTLES while the returned results keep the registry order.
  */
 import { spawn } from "node:child_process";
-import { readFile as readFileText } from "node:fs/promises";
+import { access, readdir as readDirectory, readFile as readFileText } from "node:fs/promises";
 import type { Target } from "../../config";
 import { CHECKS } from "./checks";
 import type { Check, CheckInput, FsFacade } from "./checks/types";
@@ -83,7 +83,10 @@ function raceTimeout(
   });
 }
 
-/** Real (non-injected) fs facade — UTF-8 text reads only (every check only reads package.json). */
+/**
+ * Real (non-injected) fs facade — read-only: UTF-8 text reads (package.json, the generated
+ * gradle file), existence probes and directory listings (the Android SDK and keystore).
+ */
 const realFs: FsFacade = {
   /**
    * Reads a file as UTF-8 text.
@@ -95,7 +98,33 @@ const realFs: FsFacade = {
    * await realFs.readFile("/repo/package.json");
    * ```
    */
-  readFile: path => readFileText(path, "utf8")
+  readFile: path => readFileText(path, "utf8"),
+  /**
+   * Whether a file or directory exists; anything `access` refuses is `false`.
+   *
+   * @param path - Absolute or relative path.
+   * @returns `true` when something exists at `path`.
+   * @example
+   * ```ts
+   * await realFs.exists("/Users/me/.android/debug.keystore");
+   * ```
+   */
+  exists: path =>
+    access(path).then(
+      () => true,
+      () => false
+    ),
+  /**
+   * Lists a directory's entry names.
+   *
+   * @param path - Absolute or relative directory path.
+   * @returns The entry names.
+   * @example
+   * ```ts
+   * await realFs.readdir("/Users/me/Library/Android/sdk/platforms");
+   * ```
+   */
+  readdir: path => readDirectory(path)
 };
 
 /**

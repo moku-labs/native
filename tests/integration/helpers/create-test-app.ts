@@ -201,6 +201,8 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
   const projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-project-"));
   const outDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-out-"));
   const iconDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-icon-"));
+  // An empty web root, so the build's page scan never reads the repo's own ./dist.
+  const webDir = await mkdtemp(path.join(tmpdir(), "moku-native-root-web-"));
 
   // The icons phase is pinned to its "up to date" outcome by default: a
   // backdated `app.icon` source plus an already-generated icon set, so a scenario's
@@ -236,7 +238,9 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
     projectDir,
     outDir,
     targets: ["macos"],
-    ...opts?.config
+    ...opts?.config,
+    // The empty web root is a default under the scenario's own `web` — its `cwd` wins.
+    web: { cwd: webDir, ...(opts?.config?.web ?? VALID_APP_CONFIG.web) }
   };
 
   const app = composeApp(createRecorder(events), config, {
@@ -268,11 +272,12 @@ export async function createTestApp(opts?: TestAppOptions): Promise<TestApp> {
       return artifactPath;
     },
 
-    /** Removes the three temp dirs (recursive, force). Call in afterEach. */
+    /** Removes the four temp dirs (recursive, force). Call in afterEach. */
     async cleanup(): Promise<void> {
       await rm(projectDir, { recursive: true, force: true });
       await rm(outDir, { recursive: true, force: true });
       await rm(iconDir, { recursive: true, force: true });
+      await rm(webDir, { recursive: true, force: true });
     }
   };
 }

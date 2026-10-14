@@ -2,7 +2,7 @@
  * @file build plugin — API factory: prepare (scaffold→codegen→icons), run (one target),
  * runAll (sequential multi-target).
  */
-import { runPipeline, runPrepare } from "./pipeline";
+import { assertDebugTargets, profileOf, runPipeline, runPrepare } from "./pipeline";
 import type { Api, BuildContext, BuildDeps, BuildResult } from "./types";
 
 /**
@@ -26,32 +26,28 @@ import type { Api, BuildContext, BuildDeps, BuildResult } from "./types";
 export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
   return {
     /**
-     * Brings the generated project to a buildable state — scaffold, codegen, icons — and
-     * stops there. `dev` calls this before handing the tree to `tauri dev`.
+     * Implements {@link Api.prepare}: the debug-target guard, then the three phases.
      *
-     * @param opts - Prepare options.
-     * @param opts.target - The packaging target to prepare for.
-     * @returns Nothing.
+     * @param opts - See {@link Api.prepare}.
+     * @returns See {@link Api.prepare}.
      * @example
      * ```ts
-     * await app.build.prepare({ target: "macos" });
+     * await api.prepare({ target: "ios", debug: true }); // rejects: asked for ios
      * ```
      */
     async prepare(opts) {
-      await runPrepare(ctx, deps, opts.target);
+      assertDebugTargets([opts.target], opts);
+      await runPrepare(ctx, deps, opts.target, profileOf(opts));
     },
 
     /**
-     * Runs the full per-target pipeline once.
+     * Implements {@link Api.run}: one pipeline pass.
      *
-     * @param opts - Run options.
-     * @param opts.target - The packaging target to build.
-     * @param opts.simulator - iOS: build for the host's simulator arch.
-     * @param opts.aab - Android: emit a store bundle instead of an apk.
-     * @returns The completed pipeline's result.
+     * @param opts - See {@link Api.run}.
+     * @returns See {@link Api.run}.
      * @example
      * ```ts
-     * await app.build.run({ target: "ios", simulator: true });
+     * (await api.run({ target: "android" })).outPath; // "dist-native/android"
      * ```
      */
     run(opts) {
@@ -59,28 +55,30 @@ export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
     },
 
     /**
-     * Runs the pipeline sequentially for every target in `opts.targets` (default:
-     * `ctx.global.targets`), stopping at the first failure.
+     * Implements {@link Api.runAll}: the up-front guard, then one pass per target, in order.
      *
-     * @param opts - Run-all options.
-     * @param opts.targets - The targets to build (default: every configured target).
-     * @param opts.simulator - iOS: build for the host's simulator arch.
-     * @param opts.aab - Android: emit a store bundle instead of an apk.
-     * @returns Every completed target's result, in target order.
-     * @throws {Error} Whatever the first failing target's pipeline throws.
+     * @param opts - See {@link Api.runAll}.
+     * @returns See {@link Api.runAll}.
      * @example
      * ```ts
-     * await app.build.runAll();
+     * await api.runAll({ targets: ["android", "ios"], debug: true }); // rejects before any phase
      * ```
      */
     async runAll(opts = {}) {
       const targets = opts.targets ?? ctx.global.targets;
+      // Every target is checked before the first one starts: nothing is half-built (D2).
+      assertDebugTargets(targets, opts);
       const results: BuildResult[] = [];
       for (const target of targets) {
         // Sequential by design (spec/03 §Overview) — all five targets share one Cargo
         // `target/` lock; Promise.all would only contend, never parallelize.
         results.push(
-          await runPipeline(ctx, deps, { target, simulator: opts.simulator, aab: opts.aab })
+          await runPipeline(ctx, deps, {
+            target,
+            simulator: opts.simulator,
+            aab: opts.aab,
+            debug: opts.debug
+          })
         );
       }
       return results;

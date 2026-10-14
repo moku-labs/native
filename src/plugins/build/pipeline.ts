@@ -6,7 +6,7 @@
  */
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { NativePhase, Target } from "../../config";
+import type { BuildFlavor, BuildProfile, NativePhase, Target } from "../../config";
 import { collectArtifacts } from "./collect";
 import type { BuildContext, BuildDeps, BuildResult, PhaseTiming, RunOptions } from "./types";
 
@@ -47,6 +47,43 @@ function incompleteMobileTreeError(target: Target, missing: readonly string[]): 
 }
 
 /**
+ * Picks the profile a build flavour asks for: `debug` set means the debug profile,
+ * anything else the store one.
+ *
+ * @param flavor - The build flavour of the run.
+ * @returns `"debug"` or `"store"`.
+ * @example
+ * ```ts
+ * profileOf({ debug: true }); // "debug"
+ * ```
+ */
+export function profileOf(flavor: BuildFlavor): BuildProfile {
+  return flavor.debug === true ? "debug" : "store";
+}
+
+/**
+ * Refuses the debug profile for every target but android (Decision D2) — before any phase
+ * runs, and for ALL the targets of a run at once, so nothing is half-built.
+ *
+ * @param targets - Every target the run will build.
+ * @param flavor - The build flavour of the run.
+ * @throws {Error} `[native] --debug builds Android only for now (asked for <target>).` for
+ *   the first target that is not android, when `debug` is set.
+ * @example
+ * ```ts
+ * assertDebugTargets(["android", "ios"], { debug: true }); // throws: asked for ios
+ * ```
+ */
+export function assertDebugTargets(targets: readonly Target[], flavor: BuildFlavor): void {
+  if (flavor.debug !== true) return;
+  const refused = targets.find(target => target !== "android");
+  if (refused === undefined) return;
+  throw new Error(
+    `[native] --debug builds Android only for now (asked for ${refused}).\n  Build the debug profile for android, or drop debug to build ${refused}.`
+  );
+}
+
+/**
  * Runs the `scaffold` phase: ensures `projectDir` exists. Nothing else — the mobile
  * `gen/` tree is initialized in `codegen`, because `tauri ios|android init --ci` refuses
  * to run before `tauri.conf.json` exists on disk.
@@ -76,19 +113,21 @@ export type CodegenResult = { mobileInitRan: boolean };
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
  * @param target - The packaging target being generated for.
+ * @param profile - The build profile generate and the patch pass apply.
  * @returns Whether this pass initialized the mobile tree (the icons phase needs it).
  * @throws {Error} When a mobile target's `gen/` tree is present but incomplete.
  * @example
  * ```ts
- * const { mobileInitRan } = await runCodegen(ctx, deps, "ios");
+ * const { mobileInitRan } = await runCodegen(ctx, deps, "android", "debug");
  * ```
  */
 export async function runCodegen(
   ctx: BuildContext,
   deps: BuildDeps,
-  target: Target
+  target: Target,
+  profile: BuildProfile = "store"
 ): Promise<CodegenResult> {
-  await deps.project.generate({ target });
+  await deps.project.generate({ target, profile });
   if (!isMobileTarget(target)) return { mobileInitRan: false };
 
   let status = deps.project.getCompleteness({ target });
@@ -102,8 +141,8 @@ export async function runCodegen(
     throw incompleteMobileTreeError(target, status.missing);
   }
 
-  await deps.project.patchMobile({ target, runner: deps.tauri.getRunner() });
-  ctx.log.debug("build:codegen", { target, mobileInitRan });
+  await deps.project.patchMobile({ target, runner: deps.tauri.getRunner(), profile });
+  ctx.log.debug("build:codegen", { target, profile, mobileInitRan });
   return { mobileInitRan };
 }
 
@@ -221,6 +260,78 @@ export async function runIcons(
   return { detail: ctx.global.app.icon ? "generated" : "placeholder" };
 }
 
+/**
+ * Runs the whole `icons` phase for one target: {@link runIcons}, then on android the
+ * adaptive icon inset — re-applied on every build, also when the set was up to date,
+ * because `tauri icon` rewrites the launcher files the inset lives in.
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param opts - Phase input.
+ * @param opts.target - The packaging target the icons are for.
+ * @param opts.mobileInitRan - Whether codegen initialized the mobile tree in this pass.
+ * @returns The phase detail of {@link runIcons}.
+ * @example
+ * ```ts
+ * const { detail } = await runIconsPhase(ctx, deps, { target: "android", mobileInitRan: false });
+ * ```
+ */
+async function runIconsPhase(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  opts: { target: Target; mobileInitRan: boolean }
+): Promise<{ detail: string }> {
+  const result = await runIcons(ctx, deps, opts);
+  if (opts.target === "android") await deps.project.patchMobileIcons({ target: opts.target });
+  return result;
+}
+
+/**
+ * Builds the refusal for a store build whose page carries the editor agent (Decision D7).
+ *
+ * @param dist - The configured `web.dist`.
+ * @param file - The agent file, relative to the dist, when the scan named one.
+ * @returns A formatted `[native] ...` error.
+ * @example
+ * ```ts
+ * throw storeAgentRefusal("dist", "page/main-4f2a.js");
+ * ```
+ */
+function storeAgentRefusal(dist: string, file: string | undefined): Error {
+  const where = file === undefined ? dist : path.posix.join(dist, file);
+  return new Error(
+    `[native] store build refused: the page carries the editor agent (${where}).\n  Build with debug: true.`
+  );
+}
+
+/**
+ * The checks at the end of compile/bundle, before anything is collected: on android the
+ * shell link (the project plugin decides whether the profile composes the shell), then the
+ * page — a store build whose page carries the editor agent is refused. They run after the
+ * full compile because tauri runs the web build inside `tauri build`.
+ *
+ * @param ctx - The build pipeline's domain context.
+ * @param deps - The resolved project/tauri APIs.
+ * @param target - The packaging target that was compiled.
+ * @param profile - The profile it was compiled in.
+ * @returns Nothing.
+ * @throws {Error} The project plugin's link error, or the store refusal.
+ * @example
+ * ```ts
+ * await checkBuiltTree(ctx, deps, "android", "store");
+ * ```
+ */
+async function checkBuiltTree(
+  ctx: BuildContext,
+  deps: BuildDeps,
+  target: Target,
+  profile: BuildProfile
+): Promise<void> {
+  if (target === "android") await deps.project.checkShellLinked({ target, profile });
+  const page = await deps.project.detectPageAgent();
+  if (page.agent && profile === "store") throw storeAgentRefusal(ctx.global.web.dist, page.file);
+}
+
 /** Matches a tauri build output line signalling the compile→bundle transition. */
 const BUNDLING_TRANSITION_PATTERN = /bundling/i;
 
@@ -293,11 +404,17 @@ function emitPhase(
  * `Directory not empty`. Removing it is part of compile, so a refusal from the guarded
  * remove surfaces as a compile error rather than an unattributed throw.
  *
+ * The run's profile reaches the engine's web build as `MOKU_NATIVE_PROFILE` in the spawned
+ * tauri CLI's environment. After the subprocess, still inside the open phase, the built tree
+ * is checked ({@link checkBuiltTree}): a failing check is that phase's error, and nothing
+ * is collected.
+ *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
  * @param opts - The target plus the platform build flags to forward.
  * @returns The measured `compile` and `bundle` phase durations.
- * @throws {Error} Whatever `tauri.build()` throws (already reported via native:phase).
+ * @throws {Error} Whatever `tauri.build()` or the built-tree checks throw (already reported
+ *   via native:phase).
  * @example
  * ```ts
  * const { compileDurationMs } = await runCompileAndBundle(ctx, deps, { target: "macos" });
@@ -309,6 +426,7 @@ export async function runCompileAndBundle(
   opts: RunOptions
 ): Promise<{ compileDurationMs: number; bundleDurationMs: number }> {
   const { target } = opts;
+  const profile = profileOf(opts);
   // Monotonic readings: a wall-clock step (NTP) must never yield a negative duration.
   const startedAt = performance.now();
   let transitionAt: number | undefined;
@@ -327,6 +445,7 @@ export async function runCompileAndBundle(
       simulator: opts.simulator,
       aab: opts.aab,
       exportMethod: ctx.global.signing.apple?.exportMethod,
+      env: { MOKU_NATIVE_PROFILE: profile },
       /**
        * Forwards one parsed compile tick as a `native:phase` "progress" event — until the
        * bundle phase opens, after which a "compiling" line would contradict the open phase.
@@ -361,6 +480,7 @@ export async function runCompileAndBundle(
         emitPhase(ctx, target, "bundle", "start");
       }
     });
+    await checkBuiltTree(ctx, deps, target, profile);
   } catch (error) {
     // The failure belongs to whichever phase is still open when the subprocess dies.
     const openPhase: NativePhase = transitionAt === undefined ? "compile" : "bundle";
@@ -441,25 +561,29 @@ async function runPhase<T>(
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
  * @param target - The packaging target to prepare for.
+ * @param profile - The build profile codegen generates and patches for.
  * @returns The three measured phase timings, in execution order.
  * @throws {Error} Whatever the failing phase throws (already reported via native:phase).
  * @example
  * ```ts
- * await runPrepare(ctx, deps, "macos");
+ * await runPrepare(ctx, deps, "android", "debug");
  * ```
  */
 export async function runPrepare(
   ctx: BuildContext,
   deps: BuildDeps,
-  target: Target
+  target: Target,
+  profile: BuildProfile = "store"
 ): Promise<readonly PhaseTiming[]> {
   const scaffold = await runPhase(ctx, target, "scaffold", () => runScaffold(ctx));
-  const codegen = await runPhase(ctx, target, "codegen", () => runCodegen(ctx, deps, target));
+  const codegen = await runPhase(ctx, target, "codegen", () =>
+    runCodegen(ctx, deps, target, profile)
+  );
   const icons = await runPhase(
     ctx,
     target,
     "icons",
-    () => runIcons(ctx, deps, { mobileInitRan: codegen.result.mobileInitRan }),
+    () => runIconsPhase(ctx, deps, { target, mobileInitRan: codegen.result.mobileInitRan }),
     result => result.detail
   );
 
@@ -473,13 +597,15 @@ export async function runPrepare(
 /**
  * Runs the full `scaffold → codegen → icons → compile → bundle → collect` pipeline for
  * ONE target — sequential phases, each timed and reported via `native:phase`, stopping at
- * the first failing phase. Emits `native:complete` on success.
+ * the first failing phase. Emits `native:complete` on success, with the run's profile. A
+ * debug run on any target but android is refused before the first phase.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
- * @param opts - The target plus the platform build flags (`simulator`, `aab`).
- * @returns The completed pipeline's result, with all six phase timings.
- * @throws {Error} Whatever the failing phase throws (already reported via native:phase).
+ * @param opts - The target plus the platform build flags (`simulator`, `aab`, `debug`).
+ * @returns The completed pipeline's result, with all six phase timings and the profile.
+ * @throws {Error} Whatever the failing phase throws (already reported via native:phase), or
+ *   the debug-target refusal (before any phase event).
  * @example
  * ```ts
  * const result = await runPipeline(ctx, deps, { target: "macos" });
@@ -491,9 +617,11 @@ export async function runPipeline(
   opts: RunOptions
 ): Promise<BuildResult> {
   const { target } = opts;
+  assertDebugTargets([target], opts);
+  const profile = profileOf(opts);
   const startedAt = performance.now();
 
-  const phases: PhaseTiming[] = [...(await runPrepare(ctx, deps, target))];
+  const phases: PhaseTiming[] = [...(await runPrepare(ctx, deps, target, profile))];
 
   const { compileDurationMs, bundleDurationMs } = await runCompileAndBundle(ctx, deps, opts);
   phases.push(
@@ -510,6 +638,7 @@ export async function runPipeline(
       {
         simulator: opts.simulator,
         aab: opts.aab,
+        debug: opts.debug,
         resolvePath: deps.project.resolveDerivedPath
       }
     )
@@ -518,7 +647,7 @@ export async function runPipeline(
 
   const durationMs = Math.round(performance.now() - startedAt);
   const { outPath, artifacts } = collect.result;
-  ctx.emit("native:complete", { target, outPath, artifacts, durationMs, profile: "store" });
+  ctx.emit("native:complete", { target, outPath, artifacts, durationMs, profile });
 
-  return { target, outPath, artifacts, durationMs, phases };
+  return { target, outPath, artifacts, durationMs, phases, profile };
 }

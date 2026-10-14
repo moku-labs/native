@@ -27,6 +27,29 @@ export type FsFacade = {
    * ```
    */
   readFile(path: string): Promise<string>;
+  /**
+   * Whether a file or directory exists. Never rejects: anything unreadable is `false`.
+   *
+   * @param path - Absolute or relative file or directory path.
+   * @returns `true` when something exists at `path`.
+   * @example
+   * ```ts
+   * await fs.exists("/Users/me/.android/debug.keystore"); // true once Android Studio ran a debug build
+   * ```
+   */
+  exists(path: string): Promise<boolean>;
+  /**
+   * Lists the entry names of a directory (names only, not paths).
+   *
+   * @param path - Absolute or relative directory path.
+   * @returns The entry names, in the order the file system returns them.
+   * @throws {Error} When the directory cannot be read.
+   * @example
+   * ```ts
+   * await fs.readdir("/Users/me/Library/Android/sdk/platforms"); // ["android-36", "android-37.0"]
+   * ```
+   */
+  readdir(path: string): Promise<string[]>;
 };
 
 /** The project plugin's API surface a check may read — narrowed to doctor's three needs. */

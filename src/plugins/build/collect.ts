@@ -48,6 +48,22 @@ export function bundleRoot(projectDirectory: string, layout: BundleLayout): stri
   return path.join(projectDirectory, layout.root);
 }
 
+/**
+ * Names a build's delivery directory under `outDir`: the target for a store build,
+ * `<target>-debug` for a debug one — so a debug installer never overwrites the store one.
+ *
+ * @param target - The packaging target being collected.
+ * @param opts - The build flavour (`debug` picks the debug directory).
+ * @returns The delivery directory's name.
+ * @example
+ * ```ts
+ * deliveryName("android", { debug: true }); // "android-debug"
+ * ```
+ */
+export function deliveryName(target: Target, opts?: BuildFlavor): string {
+  return opts?.debug === true ? `${target}-debug` : target;
+}
+
 /** Result of a successful collect pass — where the shippable artifacts landed. */
 export type CollectResult = { outPath: string; artifacts: readonly string[] };
 
@@ -178,8 +194,9 @@ function refuseOutside(offending: string, root: string): Error {
 }
 
 /**
- * Locates the finished installer(s) for `target` and copies them into `outDir/<target>/` —
- * the stable delivery location `native:complete` reports. Copies with `recursive: true` so
+ * Locates the finished installer(s) for `target` and copies them into `outDir/<target>/`
+ * (`outDir/<target>-debug/` for a debug build, see {@link deliveryName}) — the stable
+ * delivery location `native:complete` reports. Copies with `recursive: true` so
  * a macOS `.app` bundle (a directory) and single-file installers
  * (`.dmg`/`.exe`/`.msi`/`.AppImage`/`.deb`/`.rpm`/`.ipa`/`.aab`/`.apk`) both work through
  * the same call, and REPLACES an existing destination first — `cp` merges into a directory,
@@ -195,7 +212,8 @@ function refuseOutside(offending: string, root: string): Error {
  * @param outputDirectory - The installer delivery root (`config.outDir`).
  * @param layout - The target's bundle layout, from `project.getBundleLayout`.
  * @param input - The build flavour (`simulator` collects the iOS `.app` instead of an `.ipa`;
- *   `aab` collects the Android store bundle instead of the `.apk`) plus the path resolver
+ *   `aab` collects the Android store bundle instead of the `.apk`; `debug` delivers into
+ *   `<target>-debug`, with the same release patterns) plus the path resolver
  *   the containment guard compares with.
  * @returns The delivery directory and the copied artifact paths.
  * @throws {Error} When no glob pattern for `target` matches any file, or when a path escapes
@@ -223,7 +241,7 @@ export async function collectArtifacts(
     );
   }
 
-  const outPath = path.join(outputDirectory, target);
+  const outPath = path.join(outputDirectory, deliveryName(target, input));
   await mkdir(outPath, { recursive: true });
 
   const artifacts: string[] = [];
