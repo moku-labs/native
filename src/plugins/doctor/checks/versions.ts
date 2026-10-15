@@ -35,10 +35,6 @@ function parseMajor(input: string): number | undefined {
  *
  * @param input - The check input (host-scoped).
  * @returns The check result — "pass" or "warn", never "fail".
- * @example
- * ```ts
- * await run({ target: "host", fs, project, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   // the same root web-script resolves — the consumer's own package.json, never src-tauri's.

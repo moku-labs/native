@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applySigningBlock,
+  assertDebugKeystore,
+  debugKeystorePath,
   patchAndroidSigning,
-  removeSigningBlock
+  removeSigningBlock,
+  resolveDebugKeystore
 } from "../../../mobile/signing";
 import { KEY_PASSWORD_ENV, SIGNING, SIGNING_BLOCK, STORE_PASSWORD_ENV } from "./fixtures";
 
@@ -139,5 +142,98 @@ describe("patchAndroidSigning", () => {
     const unconfigured = await patchAndroidSigning(dir, genDir, {});
     expect(unconfigured.patched).toContain(keystorePropertiesPath);
     expect(existsSync(keystorePropertiesPath)).toBe(false);
+  });
+});
+
+describe("debug signing", () => {
+  let dir: string;
+  let genDir: string;
+  let gradlePath: string;
+  const debugKeystore = "/home/me/.android/debug.keystore";
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "moku-native-debug-signing-"));
+    genDir = path.join(dir, "src-tauri", "gen", "android");
+    gradlePath = path.join(genDir, "app", "build.gradle.kts");
+    await mkdir(path.join(genDir, "app"), { recursive: true });
+    await writeFile(gradlePath, "plugins {}\n", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("signs with the debug keystore and never names the store keystore (bug: a debug build signed with the store key)", async () => {
+    await patchAndroidSigning(dir, genDir, SIGNING, debugKeystore);
+
+    const gradle = await readFile(gradlePath, "utf8");
+    expect(gradle).toContain(`storeFile = file("${debugKeystore}")`);
+    expect(gradle).toContain('keyAlias = "androiddebugkey"');
+    expect(gradle).toContain('storePassword = "android"');
+    expect(gradle).toContain('keyPassword = "android"');
+    expect(gradle).not.toContain(SIGNING.keystorePath);
+    expect(gradle).not.toContain(STORE_PASSWORD_ENV);
+  });
+
+  it("a store pass after a debug pass puts the store keystore back in place", async () => {
+    await patchAndroidSigning(dir, genDir, SIGNING, debugKeystore);
+
+    await patchAndroidSigning(dir, genDir, SIGNING);
+
+    expect(await readFile(gradlePath, "utf8")).toBe(`plugins {}\n\n${SIGNING_BLOCK}\n`);
+  });
+});
+
+/** An env slice answering only the given variables. */
+const env = (values: Partial<Record<string, string>>) => ({ get: (key: string) => values[key] });
+
+describe("debugKeystorePath", () => {
+  it("resolves the keystore under HOME", () => {
+    expect(debugKeystorePath(env({ HOME: "/home/me", USERPROFILE: "/elsewhere" }))).toBe(
+      path.join("/home/me", ".android", "debug.keystore")
+    );
+  });
+
+  it("falls back to USERPROFILE when HOME is unset (bug: debug signing broken on a Windows host)", () => {
+    expect(debugKeystorePath(env({ USERPROFILE: "/users/me" }))).toBe(
+      path.join("/users/me", ".android", "debug.keystore")
+    );
+  });
+
+  it("fails with a fix-it when neither HOME nor USERPROFILE is set", () => {
+    expect(() => debugKeystorePath(env({}))).toThrow(
+      "[native] the debug profile signs with the debug keystore in your home directory, but neither HOME nor USERPROFILE is set."
+    );
+  });
+});
+
+describe("resolveDebugKeystore", () => {
+  it("an empty HOME falls back to USERPROFILE exactly as the debug signing patch does (bug: doctor and build disagree on the keystore)", () => {
+    const windowsHost = env({ HOME: "", USERPROFILE: "/users/me" });
+
+    const keystore = resolveDebugKeystore(windowsHost);
+
+    expect(keystore.path).toBe(path.join("/users/me", ".android", "debug.keystore"));
+    expect(keystore.path).toBe(debugKeystorePath(windowsHost));
+    expect(keystore.createCommand).toBe(
+      `mkdir -p "${path.join("/users/me", ".android")}" && keytool -genkeypair -v -keystore "${keystore.path}" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"`
+    );
+  });
+
+  it("without a home the path is undefined and the command names an unquoted ~ (bug: a quoted tilde the shell never expands)", () => {
+    const keystore = resolveDebugKeystore(env({}));
+
+    expect(keystore.path).toBeUndefined();
+    expect(keystore.createCommand).toMatch(
+      /^mkdir -p ~\/\.android && keytool -genkeypair -v -keystore ~\/\.android\/debug\.keystore /
+    );
+  });
+
+  it("the missing-keystore error shows the same create command (bug: build's fix-it and doctor's drift apart)", () => {
+    const keystore = resolveDebugKeystore(env({ HOME: path.join(tmpdir(), "moku-no-such-home") }));
+
+    expect(() => assertDebugKeystore(keystore.path ?? "")).toThrow(
+      `Create it with: ${keystore.createCommand}.`
+    );
   });
 });

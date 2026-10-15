@@ -21,10 +21,6 @@ type PackageJsonShape = {
  *
  * @param global - Frozen global framework config.
  * @returns The resolved absolute cwd.
- * @example
- * ```ts
- * resolveWebCwd(ctx.global); // "/repo/apps/web" or "/repo"
- * ```
  */
 function resolveWebCwd(global: CheckInput["global"]): string {
   return path.resolve(global.web.cwd ?? ".");
@@ -103,10 +99,6 @@ function describeDirect(keys: string[]): string {
  *
  * @param input - The check input (host-scoped).
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "host", fs, global, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const commands = [

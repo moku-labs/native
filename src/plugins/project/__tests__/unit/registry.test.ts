@@ -1,21 +1,24 @@
 import { describe, expect, it } from "vitest";
 
+import type { Config } from "../../../../config";
 import {
   assertKnownCapabilities,
   isKnownCapability,
   registryRows,
   resolve,
+  resolveConfiguredCapabilities,
   unknownCapabilityError
 } from "../../registry";
+import { baseGlobalConfig } from "./generators/fixtures";
 
 // ---------------------------------------------------------------------------
 // registryRows / isKnownCapability
 // ---------------------------------------------------------------------------
 
 describe("registryRows", () => {
-  it("has exactly 7 rows, one per CapabilityConfigMap key", () => {
+  it("has exactly 8 rows, one per CapabilityConfigMap key", () => {
     const rows = registryRows();
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     expect(rows.map(row => row.name).toSorted()).toEqual(
       [
         "back",
@@ -23,6 +26,7 @@ describe("registryRows", () => {
         "deep-link",
         "haptics",
         "notification",
+        "shell",
         "store",
         "tray"
       ].toSorted()
@@ -54,7 +58,8 @@ describe("registryRows", () => {
 
   it("every plugin-backed row carries no cargo feature", () => {
     for (const row of registryRows()) {
-      if (row.name === "tray" || row.name === "back") continue;
+      // tray is a cargo feature, back core permissions, shell a generated local crate.
+      if (row.name === "tray" || row.name === "back" || row.name === "shell") continue;
       expect(row.cargoFeatures).toEqual([]);
       expect(row.crate).toBeDefined();
       expect(row.npmPackage).toBeDefined();
@@ -69,9 +74,9 @@ describe("registryRows", () => {
     expect(registryRows().find(row => row.name === "store")?.confidence).toBe("high");
   });
 
-  it("every row but tray, back and haptics ships on all 5 targets", () => {
+  it("every row but tray, back, haptics and shell ships on all 5 targets", () => {
     for (const row of registryRows()) {
-      if (row.name === "tray" || row.name === "back" || row.name === "haptics") continue;
+      if (["tray", "back", "haptics", "shell"].includes(row.name)) continue;
       expect(row.platforms).toHaveLength(5);
     }
   });
@@ -143,7 +148,8 @@ describe("unknownCapabilityError", () => {
       "tray",
       "deep-link",
       "back",
-      "haptics"
+      "haptics",
+      "shell"
     ]) {
       expect(error.message).toContain(name);
     }
@@ -239,5 +245,43 @@ describe("resolve", () => {
 
   it("type-level: accepts a well-formed deep-link config at compile time", () => {
     expect(() => resolve("deep-link", { mode: "scheme", scheme: "x" })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveConfiguredCapabilities — the one opt-in path, and debug implying shell
+// ---------------------------------------------------------------------------
+
+/** A config composing exactly `system`, with the given capability parameters. */
+const composing = (
+  system: Config["system"],
+  capabilities: Config["capabilities"] = {}
+): Config => ({ ...baseGlobalConfig, system, capabilities });
+
+/** The names resolved for one target and profile. */
+const names = (...args: Parameters<typeof resolveConfiguredCapabilities>) =>
+  resolveConfiguredCapabilities(...args).map(capability => capability.name);
+
+describe("resolveConfiguredCapabilities", () => {
+  it("composes shell for android when config.system names it, never for ios or macos", () => {
+    const global = composing([{ name: "shell" }]);
+
+    expect(names(global, "android")).toEqual(["shell"]);
+    expect(names(global, "ios")).toEqual([]);
+    expect(names(global, "macos")).toEqual([]);
+  });
+
+  it("capabilities.shell without a system entry composes nothing (bug: two opt-in paths drifting apart)", () => {
+    expect(names(composing([], { shell: {} }), "android")).toEqual([]);
+  });
+
+  it("the debug profile composes shell on android without a system entry (bug: a debug build with no console forwarding)", () => {
+    expect(names(composing([{ name: "store" }]), "android", "debug")).toEqual(["store", "shell"]);
+    // Named AND implied: still one row, or lib.rs registers the plugin twice.
+    expect(names(composing([{ name: "shell" }]), "android", "debug")).toEqual(["shell"]);
+  });
+
+  it("the debug profile composes no shell for a desktop target", () => {
+    expect(names(composing([{ name: "store" }]), "macos", "debug")).toEqual(["store"]);
   });
 });

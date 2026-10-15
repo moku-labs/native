@@ -10,10 +10,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param input - The check input, scoped to the "ios" target.
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "ios", probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const xcodebuildResult = await input.probe("xcodebuild", ["-version"]);

@@ -125,12 +125,13 @@ const spawnUnavailable: SpawnFn = async () => {
   throw new Error("ENOENT");
 };
 
-type SpawnRecorder = { spawn: SpawnFn; calls: Array<{ cmd: readonly string[]; cwd: string }> };
+/** Every spawn call's full options — `cmd`/`cwd`, plus `env` to assert the call shape. */
+type SpawnRecorder = { spawn: SpawnFn; calls: Array<Parameters<SpawnFn>[0]> };
 
 function createSpawnRecorder(): SpawnRecorder {
   const calls: SpawnRecorder["calls"] = [];
   const spawn: SpawnFn = async opts => {
-    calls.push({ cmd: opts.cmd, cwd: opts.cwd });
+    calls.push(opts);
     return { code: 0, signal: null, stdout: "", stderr: "" };
   };
   return { spawn, calls };
@@ -270,6 +271,40 @@ describe("createTauriApi", () => {
       "release-testing"
     ]);
     expect(calls[1]?.cmd.slice(2)).toEqual(["android", "build", "--ci", "--aab"]);
+  });
+
+  it("build() hands env to the spawn exactly as given — the profile must reach the web build", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.build({ target: "android", env: { MOKU_NATIVE_PROFILE: "debug" } });
+
+    expect(calls[0]?.env).toEqual({ MOKU_NATIVE_PROFILE: "debug" });
+    // D1: the debug profile is a release build — env must not leak into the argv as `--debug`.
+    expect(calls[0]?.cmd.slice(2)).toEqual(["android", "build", "--ci", "--apk"]);
+  });
+
+  it("build() without env spawns with no env key — no empty object, no undefined slot", async () => {
+    const { spawn, calls } = createSpawnRecorder();
+    const ctx = createMockCtx({
+      config: {
+        spawnImpl: spawn,
+        nodePath: "/usr/bin/node",
+        readiness: { intervalMs: 1, timeoutMs: 50 }
+      }
+    });
+    const api = createTauriApi(ctx);
+
+    await api.build({ target: "android" });
+
+    expect(Object.keys(calls[0] ?? {})).not.toContain("env");
   });
 
   it("run() falls back to process.cwd() when projectDir does not exist yet", async () => {

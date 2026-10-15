@@ -10,10 +10,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param input - The check input (host-scoped).
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "host", tauri, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const version = await input.tauri.getVersion();

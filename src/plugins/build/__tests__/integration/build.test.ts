@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { NativeCompleteEvent, NativePhaseEvent } from "../../../../config";
 import { coreConfig, createCore, createPlugin, PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
@@ -58,14 +58,18 @@ describe("build plugin integration", () => {
   let projectDir: string;
   let outDir: string;
   let spawnCalls: Array<readonly string[]>;
+  /** An empty web root: the page scan never reads the repo's own ./dist. */
+  let webDir: string;
 
   beforeEach(async () => {
+    webDir = await mkdtemp(path.join(tmpdir(), "moku-native-build-integration-web-"));
     projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-build-integration-project-"));
     outDir = await mkdtemp(path.join(tmpdir(), "moku-native-build-integration-out-"));
     spawnCalls = [];
   });
 
   afterEach(async () => {
+    await rm(webDir, { recursive: true, force: true });
     await rm(projectDir, { recursive: true, force: true });
     await rm(outDir, { recursive: true, force: true });
   });
@@ -77,7 +81,8 @@ describe("build plugin integration", () => {
   const createTestApp = (
     spawnImpl: SpawnFn,
     recordedEvents: RecordedEvent[],
-    arch: NodeJS.Architecture = "arm64"
+    arch: NodeJS.Architecture = "arm64",
+    webCwd: string = webDir
   ) => {
     const recordingSpawn: SpawnFn = spawnOpts => {
       spawnCalls.push(spawnOpts.cmd);
@@ -97,7 +102,12 @@ describe("build plugin integration", () => {
       plugins: [projectPlugin, tauriPlugin, buildPlugin, recorderPlugin]
     });
     return framework.createApp({
-      config: { ...validAppConfig, projectDir, outDir },
+      config: {
+        ...validAppConfig,
+        web: { ...validAppConfig.web, cwd: webCwd },
+        projectDir,
+        outDir
+      },
       pluginConfigs: { tauri: { spawnImpl: recordingSpawn, nodePath: "/usr/bin/node", arch } }
     });
   };
@@ -277,6 +287,84 @@ describe("build plugin integration", () => {
     });
   });
 
+  describe("debug android", () => {
+    it("a debug run applies the debug patches in the gen tree and delivers to <outDir>/android-debug (bug: debug patches never reach a real tree, or the debug apk lands on the store one)", async () => {
+      // The debug keystore lives in the home directory; a clean page in its own web root.
+      // The home is handed over as USERPROFILE: a temp HOME would move os.homedir(), and
+      // with it the projectDir guard's anchor.
+      const home = await mkdtemp(path.join(tmpdir(), "moku-native-build-home-"));
+      const webRoot = await mkdtemp(path.join(tmpdir(), "moku-native-build-web-"));
+      await mkdir(path.join(home, ".android"), { recursive: true });
+      await writeFile(path.join(home, ".android", "debug.keystore"), "keystore", "utf8");
+      vi.stubEnv("HOME", undefined);
+      vi.stubEnv("USERPROFILE", home);
+
+      // A complete gen/android tree, as `tauri android init` leaves it.
+      const genDir = path.join(projectDir, "src-tauri", "gen", "android");
+      await mkdir(path.join(genDir, "app", "src", "main"), { recursive: true });
+      for (const file of ["build.gradle.kts", "settings.gradle", "gradle.properties"]) {
+        await writeFile(path.join(genDir, file), "generated\n", "utf8");
+      }
+      await writeFile(path.join(genDir, "app", "build.gradle.kts"), "plugins {\n}\n", "utf8");
+      const manifestPath = path.join(genDir, "app", "src", "main", "AndroidManifest.xml");
+      await writeFile(
+        manifestPath,
+        '<manifest>\n    <application>\n        <activity android:name=".MainActivity">\n        </activity>\n    </application>\n</manifest>\n',
+        "utf8"
+      );
+
+      let buildEnv: Readonly<Record<string, string>> | undefined;
+      const androidSpawn: SpawnFn = async opts => {
+        if (opts.cmd[2] === "android" && opts.cmd[3] === "build") {
+          buildEnv = opts.env;
+          const apkDir = path.join(
+            genDir,
+            "app",
+            "build",
+            "outputs",
+            "apk",
+            "universal",
+            "release"
+          );
+          await mkdir(apkDir, { recursive: true });
+          await writeFile(path.join(apkDir, "app-universal-release.apk"), "apk-bytes", "utf8");
+          // tauri links the generated shell crate into the Gradle settings during the build.
+          await writeFile(
+            path.join(genDir, "tauri.settings.gradle"),
+            "include ':moku-shell'\n",
+            "utf8"
+          );
+          opts.onLine?.("Bundling application (app-universal-release.apk)");
+        }
+        return { code: 0, signal: null, stdout: "", stderr: "" };
+      };
+
+      try {
+        const app = createTestApp(androidSpawn, [], "arm64", webRoot);
+
+        const result = await app.build.run({ target: "android", debug: true });
+
+        const gradle = await readFile(path.join(genDir, "app", "build.gradle.kts"), "utf8");
+        expect(gradle).toContain('applicationIdSuffix = ".debug"');
+        expect(gradle).toContain(path.join(home, ".android", "debug.keystore"));
+        expect(await readFile(manifestPath, "utf8")).toContain(
+          'android:networkSecurityConfig="@xml/network_security_config"'
+        );
+        expect(buildEnv).toMatchObject({ MOKU_NATIVE_PROFILE: "debug" });
+        expect(result.profile).toBe("debug");
+        expect(result.outPath).toBe(path.join(outDir, "android-debug"));
+        expect(result.artifacts).toEqual([
+          path.join(outDir, "android-debug", "app-universal-release.apk")
+        ]);
+        expect(existsSync(path.join(outDir, "android"))).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(home, { recursive: true, force: true });
+        await rm(webRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("runAll", () => {
     it("runs targets sequentially and stops at the first failing target", async () => {
       let buildCallCount = 0;
@@ -313,9 +401,10 @@ describe("build plugin integration", () => {
     it("run() takes the extended RunOptions and rejects an invalid target at compile time", async () => {
       const app = createTestApp(spawnBuildSucceeds, []);
       expectTypeOf(app.build.run).parameter(0).toEqualTypeOf<RunOptions>();
-      expectTypeOf(app.build.prepare)
-        .parameter(0)
-        .toEqualTypeOf<{ target: import("../../../../config").Target }>();
+      expectTypeOf(app.build.prepare).parameter(0).toEqualTypeOf<{
+        target: import("../../../../config").Target;
+        debug?: boolean | undefined;
+      }>();
       // @ts-expect-error — "amiga" is not a valid Target
       await expect(app.build.run({ target: "amiga" })).rejects.toBeDefined();
     });
@@ -336,7 +425,8 @@ describe("build plugin integration", () => {
           target: "macos",
           outPath: "dist-native/macos",
           artifacts: [],
-          durationMs: 1
+          durationMs: 1,
+          profile: "store"
         })
       ).not.toThrow();
       // @ts-expect-error — native:complete has no `phase` field

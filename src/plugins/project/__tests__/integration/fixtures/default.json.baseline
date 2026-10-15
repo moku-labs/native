@@ -1,0 +1,19 @@
+{
+  "identifier": "default",
+  "description": "Auto-generated capability set for the composed system plugins.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android"
+  ],
+  "permissions": [
+    "core:default",
+    "store:default",
+    "core:app:allow-exit",
+    "haptics:allow-impact-feedback",
+    "haptics:allow-notification-feedback",
+    "haptics:allow-selection-feedback",
+    "haptics:allow-vibrate"
+  ]
+}

@@ -20,10 +20,6 @@ const RUST_TARGET_TRIPLES: Readonly<Record<Target, string>> = {
  *
  * @param input - The check input for one real packaging target.
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "ios", probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const { target } = input;

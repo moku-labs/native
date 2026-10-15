@@ -4,7 +4,7 @@
  * per check AS IT SETTLES while the returned results keep the registry order.
  */
 import { spawn } from "node:child_process";
-import { readFile as readFileText } from "node:fs/promises";
+import { access, readdir as readDirectory, readFile as readFileText } from "node:fs/promises";
 import type { Target } from "../../config";
 import { CHECKS } from "./checks";
 import type { Check, CheckInput, FsFacade } from "./checks/types";
@@ -83,7 +83,10 @@ function raceTimeout(
   });
 }
 
-/** Real (non-injected) fs facade — UTF-8 text reads only (every check only reads package.json). */
+/**
+ * Real (non-injected) fs facade — read-only: UTF-8 text reads (package.json, the generated
+ * gradle file), existence probes and directory listings (the Android SDK and keystore).
+ */
 const realFs: FsFacade = {
   /**
    * Reads a file as UTF-8 text.
@@ -95,7 +98,33 @@ const realFs: FsFacade = {
    * await realFs.readFile("/repo/package.json");
    * ```
    */
-  readFile: path => readFileText(path, "utf8")
+  readFile: path => readFileText(path, "utf8"),
+  /**
+   * Whether a file or directory exists; anything `access` refuses is `false`.
+   *
+   * @param path - Absolute or relative path.
+   * @returns `true` when something exists at `path`.
+   * @example
+   * ```ts
+   * await realFs.exists("/Users/me/.android/debug.keystore");
+   * ```
+   */
+  exists: path =>
+    access(path).then(
+      () => true,
+      () => false
+    ),
+  /**
+   * Lists a directory's entry names.
+   *
+   * @param path - Absolute or relative directory path.
+   * @returns The entry names.
+   * @example
+   * ```ts
+   * await realFs.readdir("/Users/me/Library/Android/sdk/platforms");
+   * ```
+   */
+  readdir: path => readDirectory(path)
 };
 
 /**
@@ -104,11 +133,6 @@ const realFs: FsFacade = {
  * @param ctx - Plugin context (emit doctor:check; probe seam config; global config).
  * @param deps - The project/tauri API slices the checks read (D-007).
  * @returns The `doctor` plugin's public API.
- * @example
- * ```ts
- * const api = createDoctorApi(ctx, { project, tauri });
- * const report = await api.run({ target: "ios" });
- * ```
  */
 export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
   const probe = ctx.config.probeImpl ?? createRealProbe(ctx.config.probeTimeoutMs);
@@ -120,10 +144,6 @@ export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
    * @param check - The check to run.
    * @param scope - The real packaging target, or "host" for host-scoped checks.
    * @returns The completed check result (rejects if the check itself throws).
-   * @example
-   * ```ts
-   * await runCheck(nodeCheck, "host");
-   * ```
    */
   const runCheck = async (check: Check, scope: Target | "host"): Promise<CheckResult> => {
     const input: CheckInput = {
@@ -145,10 +165,6 @@ export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
    *
    * @param entry - The scheduled (check, scope) pair.
    * @returns The check's completed result.
-   * @example
-   * ```ts
-   * await settleCheck({ check: nodeCheck, scope: "host" });
-   * ```
    */
   const settleCheck = async (entry: ScheduledCheck): Promise<CheckResult> => {
     // The check's own per-scope id, so a synthetic result lines up with the live rows the cli
@@ -169,36 +185,20 @@ export function createDoctorApi(ctx: DoctorContext, deps: DoctorDeps): Api {
 
   return {
     /**
-     * Runs every check applicable to `opts.target` (or every configured target + host
-     * checks when omitted), in parallel. Never throws on check failures — a rejected check
-     * becomes an internal-error "fail" result and a check that outruns `probeTimeoutMs`
-     * becomes a "warn" result; `run()` only throws on a genuine internal bug in this
-     * orchestration itself.
+     * Implements {@link Api.run}.
      *
-     * @param opts - Optional scoping.
-     * @param opts.target - A single real packaging target to diagnose, or every configured
-     *   target + host checks when omitted.
-     * @returns The aggregated report — `checks` stays in registry order regardless of the
-     *   order the individual checks settled (and were emitted) in.
-     * @example
-     * ```ts
-     * const report = await app.doctor.run({ target: "ios" });
-     * if (!report.ok) process.exitCode = 1;
-     * ```
+     * @param opts - See {@link Api.run}.
+     * @returns See {@link Api.run}.
      */
     async run(opts) {
       const scopes: ReadonlyArray<Target | "host"> = opts?.target
         ? [opts.target]
         : [...ctx.global.targets, "host" as const];
 
-      const scheduled: ScheduledCheck[] = [];
-      for (const scope of scopes) {
-        for (const check of CHECKS) {
-          if (check.appliesTo(scope, ctx.global)) {
-            scheduled.push({ check, scope });
-          }
-        }
-      }
+      // Scope-major, registry order within a scope: this order is the report's order.
+      const scheduled: ScheduledCheck[] = scopes.flatMap(scope =>
+        CHECKS.filter(check => check.appliesTo(scope, ctx.global)).map(check => ({ check, scope }))
+      );
 
       const results = await Promise.all(scheduled.map(entry => settleCheck(entry)));
 

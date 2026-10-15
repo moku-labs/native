@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  BuildProfile,
   Config as GlobalConfig,
   NativeCompleteEvent,
   NativePhaseEvent,
@@ -15,19 +16,14 @@ import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import { bundleLayout } from "../../../project/layout";
 import { comparableRealPath } from "../../../project/paths";
-import type { CompletenessResult } from "../../../project/types";
+import type { CompletenessResult, PageAgentResult } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
+import { createBuildApi } from "../../api";
 import { bundleRoot } from "../../collect";
-import {
-  ICON_SOURCE_STAMP_FILE,
-  runCodegen,
-  runCompileAndBundle,
-  runIcons,
-  runPipeline,
-  runPrepare,
-  runScaffold
-} from "../../pipeline";
+import { runCompileAndBundle } from "../../compile";
+import { ICON_SOURCE_STAMP_FILE, runIcons } from "../../icons";
+import { runCodegen, runPipeline, runPrepare, runScaffold } from "../../pipeline";
 import type { BuildContext, BuildDeps } from "../../types";
 
 /** The resolved runner pair the tauri mock hands to `project.patchMobile`. */
@@ -36,7 +32,7 @@ const RUNNER: TauriRunner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/taur
 /** A successful one-shot verb result. */
 const okResult = (): RunResult => ({ code: 0, stdout: "", stderr: "", durationMs: 1 });
 
-/** Minimal project-api mock — the four methods the prepare phases call. */
+/** Minimal project-api mock — every method the pipeline phases call. */
 function createProjectMock(iconSource: string) {
   return {
     generate: vi.fn(async () => ({ written: [], unchanged: [], skipped: [] })),
@@ -45,7 +41,12 @@ function createProjectMock(iconSource: string) {
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
     clearMobileBuildOutput: vi.fn(async () => ({ removed: [] as readonly string[] })),
     ensureIconSource: vi.fn(async () => iconSource),
-    resolveDerivedPath: vi.fn((target: string) => comparableRealPath(target))
+    resolveDerivedPath: vi.fn((target: string) => comparableRealPath(target)),
+    patchMobileIcons: vi.fn(async () => ({ patched: [], unchanged: [] })),
+    detectPageAgent: vi.fn(async (): Promise<PageAgentResult> => ({ agent: false })),
+    checkShellLinked: vi.fn((_opts: { target: "ios" | "android"; profile?: BuildProfile }) =>
+      Promise.resolve()
+    )
   };
 }
 
@@ -73,6 +74,7 @@ function createMocks(overrides?: {
   iconSource?: string;
   appIcon?: string;
   signing?: GlobalConfig["signing"];
+  targets?: GlobalConfig["targets"];
   project?: ProjectMock;
   tauri?: TauriMock;
 }): {
@@ -102,7 +104,7 @@ function createMocks(overrides?: {
       },
       system: [],
       capabilities: {},
-      targets: ["macos"],
+      targets: overrides?.targets ?? ["macos"],
       projectDir: overrides?.projectDir ?? "/unused",
       outDir: overrides?.outDir ?? "dist-native",
       signing: overrides?.signing ?? {}
@@ -165,7 +167,7 @@ describe("runCodegen", () => {
     const result = await runCodegen(ctx, deps, "macos");
 
     expect(result).toEqual({ mobileInitRan: false });
-    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "macos" });
+    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "macos", profile: "store" });
     expect(project.patchMobile).not.toHaveBeenCalled();
     expect(tauri.mobileInit).not.toHaveBeenCalled();
   });
@@ -188,7 +190,8 @@ describe("runCodegen", () => {
     expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ target: "ios" });
     expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
       target: "ios",
-      runner: RUNNER
+      runner: RUNNER,
+      profile: "store"
     });
   });
 
@@ -201,7 +204,8 @@ describe("runCodegen", () => {
     expect(tauri.mobileInit).not.toHaveBeenCalled();
     expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
       target: "android",
-      runner: RUNNER
+      runner: RUNNER,
+      profile: "store"
     });
   });
 
@@ -427,6 +431,13 @@ describe("runCompileAndBundle", () => {
       phase: "compile",
       status: "progress",
       detail: "Compiling demo"
+    });
+    // The event a progress UI renders, not only the returned timing, carries the zero.
+    expect(emit).toHaveBeenCalledWith("native:phase", {
+      target: "macos",
+      phase: "bundle",
+      status: "done",
+      durationMs: 0
     });
     expect(result.bundleDurationMs).toBe(0);
   });
@@ -784,5 +795,220 @@ describe("projectPlugin/tauriPlugin identity", () => {
   it("both plugin instances carry the names the build plugin wires them in by", () => {
     expect(projectPlugin.name).toBe("project");
     expect(tauriPlugin.name).toBe("tauri");
+  });
+});
+
+describe("debug profile (A26)", () => {
+  let projectDir: string;
+  let outDir: string;
+
+  /** The release apk name `tauri android build` writes, and collect delivers. */
+  const APK = "app-universal-release.apk";
+
+  /** Drops a release apk where the collect phase globs for it. */
+  async function seedAndroidApk(): Promise<void> {
+    const layout = bundleLayout("android");
+    const apkDirectory = path.join(
+      bundleRoot(projectDir, layout),
+      layout.genDirectory ?? "",
+      "app",
+      "build",
+      "outputs",
+      "apk",
+      "universal",
+      "release"
+    );
+    await mkdir(apkDirectory, { recursive: true });
+    await writeFile(path.join(apkDirectory, APK), "apk-bytes", "utf8");
+  }
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-debug-"));
+    outDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-debug-out-"));
+  });
+
+  afterEach(async () => {
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    "ios",
+    "macos"
+  ] as const)("debug on %s throws before any phase event (bug: half a build, then a confusing failure)", async target => {
+    const { ctx, deps, emit, project } = createMocks({ projectDir, outDir });
+
+    await expect(runPipeline(ctx, deps, { target, debug: true })).rejects.toThrow(
+      `[native] --debug builds Android only for now (asked for ${target}).`
+    );
+    expect(emit).not.toHaveBeenCalled();
+    expect(project.generate).not.toHaveBeenCalled();
+  });
+
+  it("runAll with debug refuses the whole run before the first phase when one target is not Android (bug: android half-built, then ios refused)", async () => {
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+
+    await expect(
+      createBuildApi(ctx, deps).runAll({ targets: ["android", "ios"], debug: true })
+    ).rejects.toThrow("(asked for ios)");
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("prepare with debug refuses a non-Android target before scaffold (bug: a debug tree generated for ios)", async () => {
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+
+    await expect(createBuildApi(ctx, deps).prepare({ target: "ios", debug: true })).rejects.toThrow(
+      "(asked for ios)"
+    );
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("runAll({ debug: true }) passes debug to every pipeline run (bug: the flag is lost in runAll)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project } = createMocks({ projectDir, outDir, targets: ["android"] });
+
+    const [result] = await createBuildApi(ctx, deps).runAll({ debug: true });
+
+    expect(result?.profile).toBe("debug");
+    expect(result?.outPath).toBe(path.join(outDir, "android-debug"));
+    expect(project.generate).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      profile: "debug"
+    });
+  });
+
+  it.each([
+    "debug",
+    "store"
+  ] as const)("prepare hands generate and patchMobile profile %s (bug: debug patches never applied, or applied to a store build)", async profile => {
+    const { ctx, deps, project } = createMocks({ projectDir, outDir });
+
+    await createBuildApi(ctx, deps).prepare({ target: "android", debug: profile === "debug" });
+
+    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "android", profile });
+    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      runner: RUNNER,
+      profile
+    });
+  });
+
+  it("patchMobileIcons runs after tauri.icon (bug: tauri icon overwrites the inset)", async () => {
+    const { ctx, deps, project, tauri } = createMocks({ projectDir, outDir });
+
+    await runPrepare(ctx, deps, "android");
+
+    expect(project.patchMobileIcons).toHaveBeenCalledExactlyOnceWith({ target: "android" });
+    const iconAt = tauri.icon.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    const insetAt = project.patchMobileIcons.mock.invocationCallOrder[0] ?? 0;
+    expect(iconAt).toBeLessThan(insetAt);
+  });
+
+  it("patchMobileIcons runs when the icon set is up to date too (bug: the inset lost when tauri icon is skipped)", async () => {
+    const iconSource = path.join(projectDir, "app-icon.png");
+    await writeFile(iconSource, "source", "utf8");
+    const iconsDirectory = path.join(projectDir, "src-tauri", "icons");
+    await mkdir(iconsDirectory, { recursive: true });
+    await writeFile(path.join(iconsDirectory, "icon.png"), "generated", "utf8");
+    const stats = await stat(iconSource);
+    await writeFile(
+      path.join(iconsDirectory, ICON_SOURCE_STAMP_FILE),
+      [path.resolve(iconSource), stats.size, stats.mtimeMs].join("\n"),
+      "utf8"
+    );
+    const { ctx, deps, project, tauri, emit } = createMocks({
+      projectDir,
+      outDir,
+      iconSource,
+      appIcon: iconSource
+    });
+
+    await runPrepare(ctx, deps, "android");
+
+    expect(tauri.icon).not.toHaveBeenCalled();
+    expect(project.patchMobileIcons).toHaveBeenCalledExactlyOnceWith({ target: "android" });
+    expect(emit).toHaveBeenCalledWith(
+      "native:phase",
+      expect.objectContaining({ phase: "icons", status: "done", detail: "up to date" })
+    );
+  });
+
+  it.each([
+    [true, "debug"],
+    [false, "store"]
+  ] as const)("debug: %s → tauri.build gets env.MOKU_NATIVE_PROFILE %s (bug: the web build cannot tell a store page from a debug page)", async (debug, profile) => {
+    const { ctx, deps, tauri } = createMocks({ projectDir, outDir });
+
+    await runCompileAndBundle(ctx, deps, { target: "android", debug });
+
+    expect(tauri.build).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { MOKU_NATIVE_PROFILE: profile } })
+    );
+  });
+
+  it("checks the shell link with the profile, and a stale tree stops the run before collect (bug: a debug apk whose shell calls all fail)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.checkShellLinked.mockRejectedValue(
+      new Error("[native] the shell plugin is not linked into gen/android.")
+    );
+
+    await expect(runPipeline(ctx, deps, { target: "android", debug: true })).rejects.toThrow(
+      "not linked into gen/android"
+    );
+    expect(project.checkShellLinked).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      profile: "debug"
+    });
+    expect(phaseKeys(emit)).not.toContain("collect:start");
+  });
+
+  it("store + agent page: refused after the compile, collect never runs, the error names the file (bug: an agent page shipped to the store)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.detectPageAgent.mockResolvedValue({ agent: true, file: "page/main-4f2a.js" });
+
+    await expect(runPipeline(ctx, deps, { target: "android" })).rejects.toThrow(
+      "[native] store build refused: the page carries the editor agent (dist/page/main-4f2a.js)."
+    );
+    expect(phaseKeys(emit)).not.toContain("collect:start");
+    expect(existsSync(path.join(outDir, "android"))).toBe(false);
+    expect(emit).not.toHaveBeenCalledWith("native:complete", expect.anything());
+  });
+
+  it("debug + agent page: collected into android-debug beside the untouched store apk, native:complete says debug (bugs: debug refused; debug overwrites store; CLI marks debug as store)", async () => {
+    await seedAndroidApk();
+    const storeApk = path.join(outDir, "android", APK);
+    await mkdir(path.dirname(storeApk), { recursive: true });
+    await writeFile(storeApk, "store-apk", "utf8");
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.detectPageAgent.mockResolvedValue({ agent: true, file: "page/main.js" });
+
+    const result = await runPipeline(ctx, deps, { target: "android", debug: true });
+
+    expect(result.outPath).toBe(path.join(outDir, "android-debug"));
+    expect(result.artifacts).toEqual([path.join(outDir, "android-debug", APK)]);
+    expect(result.profile).toBe("debug");
+    expect(await readFile(storeApk, "utf8")).toBe("store-apk");
+    expect(emit).toHaveBeenCalledWith(
+      "native:complete",
+      expect.objectContaining({ outPath: result.outPath, profile: "debug" })
+    );
+  });
+
+  it("store + clean page: scanned, then collected into android, native:complete says store (bug: every old game refused)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+
+    const result = await runPipeline(ctx, deps, { target: "android" });
+
+    expect(project.detectPageAgent).toHaveBeenCalledOnce();
+    expect(result.outPath).toBe(path.join(outDir, "android"));
+    expect(result.artifacts).toEqual([path.join(outDir, "android", APK)]);
+    expect(result.profile).toBe("store");
+    expect(emit).toHaveBeenCalledWith(
+      "native:complete",
+      expect.objectContaining({ outPath: result.outPath, profile: "store" })
+    );
   });
 });

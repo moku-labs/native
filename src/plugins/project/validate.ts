@@ -41,7 +41,7 @@ const ORIENTATION_PATTERN = /^(?:portrait|landscape|any)$/;
  * @throws {Error} When `value` is set and does not match `pattern`.
  * @example
  * ```ts
- * assertShape("app.version", global.app.version, VERSION_PATTERN, "semantic version", 'Use "1.0.0".');
+ * assertShape("app.version", "1.0", VERSION_PATTERN, "semantic version", 'Use "1.0.0".'); // throws: [native] app.version "1.0" is not a valid semantic version.
  * ```
  */
 function assertShape(
@@ -67,7 +67,7 @@ function assertShape(
  * @throws {Error} When the directory is not derived state this app may delete.
  * @example
  * ```ts
- * assertDerivedDirectory(global.projectDir);
+ * assertDerivedDirectory("/"); // throws: [native] config.projectDir "/" resolves outside the project.
  * ```
  */
 function assertDerivedDirectory(value: string): void {
@@ -89,7 +89,7 @@ function assertDerivedDirectory(value: string): void {
  * @throws {Error} When the directory is one this app must not write installers into.
  * @example
  * ```ts
- * assertDeliveryDirectory(global.outDir);
+ * assertDeliveryDirectory("/"); // throws: [native] config.outDir "/" is a directory this app must not deliver into.
  * ```
  */
 function assertDeliveryDirectory(value: string): void {
@@ -100,25 +100,40 @@ function assertDeliveryDirectory(value: string): void {
   );
 }
 
+/** The adaptive icon inset's upper bound, in percent per side of the 108 dp canvas. */
+const MAX_ICON_INSET = 30;
+
 /**
- * Validates the global config at composition time — throws `[native]`-formatted errors
- * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, a window colour or orientation outside its
- * allowed shape, a `projectDir` outside the project, an `outDir` this app must not
- * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
- * scheme.
+ * Validates `app.adaptiveIconInset`: a finite number above 0 and at most 30 percent per
+ * side. 0 would wrap the icon for nothing, and above 30 the art shrinks below the mask's
+ * visible circle. Config arrives as plain JS too, so the type is not trusted.
  *
- * @param global - Frozen global framework config.
- * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
- *   derived directories, system names, or deep-link config are invalid.
+ * @param inset - The configured inset, or undefined when unset.
+ * @throws {Error} When the inset is set and outside `0 < n ≤ 30`.
  * @example
  * ```ts
- * validateProjectConfig(ctx.global);
+ * assertIconInset(19.44); // ok
+ * assertIconInset(31); // throws: [native] app.adaptiveIconInset must be …
  * ```
  */
-export function validateProjectConfig(global: Readonly<Config>): void {
-  // Stanza 1 — identity and web wiring. Every field below lands verbatim in
-  // tauri.conf.json, where a missing value fails deep inside `tauri build` instead.
+function assertIconInset(inset: number | undefined): void {
+  if (inset === undefined) return;
+  if (Number.isFinite(inset) && inset > 0 && inset <= MAX_ICON_INSET) return;
+
+  throw new Error(
+    `[native] app.adaptiveIconInset must be a number above 0 and at most ${MAX_ICON_INSET}, got ${String(inset)}.\n  Use the percent per side the art needs, such as 19.44, or unset it to leave the icon untouched.`
+  );
+}
+
+/**
+ * Validates the app identity and web wiring: `app.name`, a reverse-DNS `app.identifier`,
+ * and every `web.*` field. Each lands verbatim in tauri.conf.json, where a missing value
+ * fails deep inside `tauri build` instead of at `createApp`.
+ *
+ * @param global - Frozen global framework config.
+ * @throws {Error} When a required identity or web field is missing or malformed.
+ */
+function assertIdentity(global: Readonly<Config>): void {
   if (!global.app.name) {
     throw new Error(
       "[native] app.name is required.\n  Set config.app.name to your app's display name."
@@ -149,6 +164,51 @@ export function validateProjectConfig(global: Readonly<Config>): void {
       "[native] web.dist is required.\n  Set config.web.dist to your web build's output directory."
     );
   }
+}
+
+/**
+ * Validates the deep-link scheme when `deep-link` is composed in `config.system`: the
+ * scheme must be set and shaped like an RFC 3986 scheme, because it lands raw in
+ * Info.plist and AndroidManifest.xml. A composition without deep-link passes untouched.
+ *
+ * @param global - Frozen global framework config.
+ * @throws {Error} When deep-link is composed and its scheme is missing or malformed.
+ */
+function assertDeepLinkScheme(global: Readonly<Config>): void {
+  const usesDeepLink = global.system.some(entry => entry.name === "deep-link");
+  if (!usesDeepLink) return;
+
+  const scheme = global.capabilities["deep-link"]?.scheme;
+  if (!scheme) {
+    throw new Error(
+      '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is missing.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
+    );
+  }
+  assertShape(
+    'capabilities["deep-link"].scheme',
+    scheme,
+    URL_SCHEME_PATTERN,
+    "URL scheme",
+    'Use a scheme that starts with a letter and carries no spaces or separators, such as "myapp".'
+  );
+}
+
+/**
+ * Validates the global config at composition time — throws `[native]`-formatted errors
+ * for missing app identity, missing web wiring, values that would break out of the
+ * generated file they are written into, a window colour, orientation or adaptive icon
+ * inset outside its allowed shape, a `projectDir` outside the project, an `outDir` this app must not
+ * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
+ * scheme.
+ *
+ * @param global - Frozen global framework config.
+ * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
+ *   derived directories, system names, or deep-link config are invalid.
+ */
+export function validateProjectConfig(global: Readonly<Config>): void {
+  // Stanza 1 — identity and web wiring. Every field below lands verbatim in
+  // tauri.conf.json, where a missing value fails deep inside `tauri build` instead.
+  assertIdentity(global);
 
   // Stanza 2 — values that are interpolated VERBATIM into a generated file. A version goes
   // into a Cargo TOML string, a build number into plist/JSON, an env-var name into a Kotlin
@@ -184,6 +244,7 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     "orientation",
     'Use "portrait", "landscape" or "any".'
   );
+  assertIconInset(global.app.adaptiveIconInset);
   assertShape(
     "signing.android.keystorePasswordEnv",
     global.signing.android?.keystorePasswordEnv,
@@ -210,20 +271,5 @@ export function validateProjectConfig(global: Readonly<Config>): void {
   // deep-link is the one row that cannot be packaged from its defaults alone.
   assertKnownCapabilities(global.system);
 
-  const usesDeepLink = global.system.some(entry => entry.name === "deep-link");
-  if (!usesDeepLink) return;
-
-  const scheme = global.capabilities["deep-link"]?.scheme;
-  if (!scheme) {
-    throw new Error(
-      '[native] deep-link is composed in config.system but capabilities["deep-link"].scheme is missing.\n  Set capabilities["deep-link"] = { mode: "scheme", scheme: "yourscheme" }.'
-    );
-  }
-  assertShape(
-    'capabilities["deep-link"].scheme',
-    scheme,
-    URL_SCHEME_PATTERN,
-    "URL scheme",
-    'Use a scheme that starts with a letter and carries no spaces or separators, such as "myapp".'
-  );
+  assertDeepLinkScheme(global);
 }

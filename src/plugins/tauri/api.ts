@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { TauriRunner } from "../../config";
 import { buildArgv, devArgv, iconArgv, infoArgv, mobileInitArgv } from "./argv";
-import { fetchReadinessProbe, startDev } from "./dev";
+import { type DevOrchestrationDeps, fetchReadinessProbe, startDev } from "./dev";
 import { classify } from "./errors";
 import { resolveNodePath, resolveTauriJsPath } from "./resolve";
 import { scrub } from "./scrub";
@@ -20,11 +20,6 @@ const CLI_VERSION_PATTERN = /tauri[- ]cli[^\d]*(\d+\.\d+\.\d+)/i;
  *
  * @param ctx - Plugin context (config seams, state, global config, log, env).
  * @returns The tauri plugin's public API.
- * @example
- * ```ts
- * const api = createTauriApi(ctx);
- * const result = await api.icon({ source: "icon.png" });
- * ```
  */
 export function createTauriApi(ctx: TauriContext): Api {
   const spawnFn = ctx.config.spawnImpl ?? realSpawn;
@@ -33,10 +28,6 @@ export function createTauriApi(ctx: TauriContext): Api {
    * Resolves the `[nodePath, tauriJsPath]` prefix shared by every verb's argv (D-013).
    *
    * @returns The resolved node binary path and tauri CLI entry path.
-   * @example
-   * ```ts
-   * const { nodePath, tauriJsPath } = resolvePaths();
-   * ```
    */
   function resolvePaths(): TauriRunner {
     const nodePath = resolveNodePath({
@@ -55,10 +46,6 @@ export function createTauriApi(ctx: TauriContext): Api {
    * `dev` verb is NOT covered: it always needs the generated project.
    *
    * @returns The directory the subprocess is spawned in.
-   * @example
-   * ```ts
-   * await spawnFn({ cmd, cwd: runCwd() });
-   * ```
    */
   function runCwd(): string {
     const { projectDir } = ctx.global;
@@ -72,21 +59,19 @@ export function createTauriApi(ctx: TauriContext): Api {
    * A non-zero exit is classified from BOTH scrubbed streams, never stderr alone.
    *
    * @param cmd - The full `[nodePath, tauriJsPath, ...]` argv to spawn.
-   * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed).
+   * @param hooks - Optional per-line output/compile-tick callbacks (already scrubbed) and child env.
    * @param hooks.onOutput - Called with each scrubbed output line.
    * @param hooks.onTick - Called with each parsed compile-progress tick.
+   * @param hooks.env - Extra child environment; omitted, the spawn call carries no `env` key.
    * @returns The completed run's result.
    * @throws {Error} A classified `TauriError` on a non-zero exit.
-   * @example
-   * ```ts
-   * await run(infoArgv(nodePath, tauriJsPath));
-   * ```
    */
   async function run(
     cmd: readonly string[],
     hooks?: {
       onOutput?: ((line: string) => void) | undefined;
       onTick?: ((tick: CompileTick) => void) | undefined;
+      env?: Readonly<Record<string, string>> | undefined;
     }
   ): Promise<RunResult> {
     // Monotonic reading: a wall-clock step (NTP) must never yield a negative duration.
@@ -96,10 +81,6 @@ export function createTauriApi(ctx: TauriContext): Api {
      * any compile-progress tick out of it.
      *
      * @param line - A single raw (unscrubbed) output line.
-     * @example
-     * ```ts
-     * handleLine("Compiling serde v1.0.190");
-     * ```
      */
     const handleLine = (line: string): void => {
       const scrubbedLine = scrub(line);
@@ -109,7 +90,14 @@ export function createTauriApi(ctx: TauriContext): Api {
       if (tick) hooks?.onTick?.(tick);
     };
 
-    const result = await spawnFn({ cmd, cwd: runCwd(), onLine: handleLine });
+    // Conditional spread: with no env the call keeps its old shape — no `env: undefined` slot.
+    const env = hooks?.env;
+    const result = await spawnFn({
+      cmd,
+      cwd: runCwd(),
+      onLine: handleLine,
+      ...(env === undefined ? {} : { env })
+    });
     const durationMs = Math.round(performance.now() - startedAt);
     const scrubbedStdout = scrub(result.stdout);
     const scrubbedStderr = scrub(result.stderr);
@@ -125,17 +113,49 @@ export function createTauriApi(ctx: TauriContext): Api {
     return { code: 0, stdout: scrubbedStdout, stderr: scrubbedStderr, durationMs };
   }
 
+  /**
+   * Builds the dev-process line handler: it scrubs each raw line before the line can reach the
+   * log or the caller's callback — the SAME pipeline posture as `run()`'s one-shot verbs.
+   *
+   * @param onOutput - The caller's per-line callback (cli renders these); log-only when omitted.
+   * @returns The `onLine` handler `startDev` feeds every raw output line to.
+   */
+  function scrubbedDevLines(
+    onOutput: ((line: string) => void) | undefined
+  ): (line: string) => void {
+    return line => {
+      const scrubbedLine = scrub(line);
+      ctx.log.debug("tauri:dev:output", { line: scrubbedLine });
+      onOutput?.(scrubbedLine);
+    };
+  }
+
+  /** The real process signal wiring `startDev` installs and removes its SIGINT/SIGTERM handlers with. */
+  const processSignals: Pick<DevOrchestrationDeps, "onSignal" | "offSignal"> = {
+    /**
+     * Installs a real process signal handler (`process.on`).
+     *
+     * @param event - Signal name (`SIGINT`/`SIGTERM`).
+     * @param handler - Handler to install.
+     * @returns The Node.js `process` object (from `process.on`).
+     */
+    onSignal: (event, handler) => process.on(event, handler),
+    /**
+     * Removes a previously installed process signal handler (`process.off`).
+     *
+     * @param event - Signal name (`SIGINT`/`SIGTERM`).
+     * @param handler - Handler to remove.
+     * @returns The Node.js `process` object (from `process.off`).
+     */
+    offSignal: (event, handler) => process.off(event, handler)
+  };
+
   return {
     /**
-     * Regenerates the icon set from a source image (`tauri icon`).
+     * Implements {@link Api.icon}.
      *
-     * @param opts - Icon options.
-     * @param opts.source - Path to the source icon image.
-     * @returns The completed run's result.
-     * @example
-     * ```ts
-     * await app.tauri.icon({ source: "assets/icon.png" });
-     * ```
+     * @param opts - See {@link Api.icon}.
+     * @returns See {@link Api.icon}.
      */
     async icon(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
@@ -144,42 +164,26 @@ export function createTauriApi(ctx: TauriContext): Api {
     },
 
     /**
-     * Runs `tauri build` / `tauri ios|android build` for the given target,
-     * streaming scrubbed output and parsed compile ticks through the callbacks.
+     * Implements {@link Api.build}.
      *
-     * @param opts - Build options (target, artifact flavour, progress callbacks).
-     * @param opts.target - Packaging target.
-     * @param opts.simulator - iOS: build the host's simulator slice instead of a device archive.
-     * @param opts.exportMethod - iOS device builds: the `--export-method` to archive with.
-     * @param opts.aab - Android: emit a store bundle instead of the default installable APK.
-     * @param opts.onTick - Called with parsed compile progress ("Compiling crate N/M").
-     * @param opts.onOutput - Called with each scrubbed output line.
-     * @returns The completed run's result.
-     * @example
-     * ```ts
-     * await app.tauri.build({ target: "ios", simulator: true, onOutput: line => ctx.log.info(line) });
-     * ```
+     * @param opts - See {@link Api.build}.
+     * @returns See {@link Api.build}.
      */
     async build(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
       // `config.arch` is the injectable host arch: undefined lets buildArgv read process.arch.
       return run(buildArgv(nodePath, tauriJsPath, opts, ctx.config.arch), {
         onOutput: opts.onOutput,
-        onTick: opts.onTick
+        onTick: opts.onTick,
+        env: opts.env
       });
     },
 
     /**
-     * Runs `tauri ios|android init` — the ONLY init verbs (D-013). Callers must
-     * check `project.completeness()` is `"not-initialized"` before calling this.
+     * Implements {@link Api.mobileInit}.
      *
-     * @param opts - Mobile init options.
-     * @param opts.target - Mobile target to initialize.
-     * @returns The completed run's result.
-     * @example
-     * ```ts
-     * await app.tauri.mobileInit({ target: "ios" });
-     * ```
+     * @param opts - See {@link Api.mobileInit}.
+     * @returns See {@link Api.mobileInit}.
      */
     async mobileInit(opts) {
       const { nodePath, tauriJsPath } = resolvePaths();
@@ -187,21 +191,13 @@ export function createTauriApi(ctx: TauriContext): Api {
     },
 
     /**
-     * Starts the long-lived dev verb (`tauri dev` / `tauri ios|android dev`).
-     * Returns immediately with a live handle — never awaits `exited` itself.
+     * Implements {@link Api.dev}.
      *
-     * @param opts - Dev options.
-     * @param opts.target - Optional packaging target (desktop-uniform when omitted).
-     * @param opts.onOutput - Called with each scrubbed output line (cli renders these; defaults to log-only).
-     * @returns The live dev handle.
-     * @throws {Error} `[native]` when a dev session is already running.
-     * @example
-     * ```ts
-     * const handle = await app.tauri.dev({ target: "ios" });
-     * await handle.ready;
-     * ```
+     * @param opts - See {@link Api.dev}.
+     * @returns See {@link Api.dev}.
      */
     dev(opts) {
+      // Reject while a session is live: the one handle in state owns its teardown (D-002).
       if (ctx.state.dev) {
         return Promise.reject(
           new Error(
@@ -209,59 +205,27 @@ export function createTauriApi(ctx: TauriContext): Api {
           )
         );
       }
+
+      // Resolve the invocation: the same [node, tauri.js] prefix the one-shot verbs spawn with.
       const { nodePath, tauriJsPath } = resolvePaths();
-      const url = ctx.global.web.devUrl;
-      /**
-       * Scrubs one raw dev-process output line before it can reach any log or
-       * consumer callback — the SAME pipeline posture as `run()`'s one-shot verbs.
-       *
-       * @param line - A single raw (unscrubbed) output line.
-       * @example
-       * ```ts
-       * handleDevLine("Compiling app v0.1.0");
-       * ```
-       */
-      const handleDevLine = (line: string): void => {
-        const scrubbedLine = scrub(line);
-        ctx.log.debug("tauri:dev:output", { line: scrubbedLine });
-        opts.onOutput?.(scrubbedLine);
-      };
+
+      // Start the session in the generated project; ready resolves from the devUrl poll.
       const handle = startDev({
         cmd: devArgv(nodePath, tauriJsPath, opts.target),
         cwd: ctx.global.projectDir,
-        url,
-        onLine: handleDevLine,
+        url: ctx.global.web.devUrl,
+        onLine: scrubbedDevLines(opts.onOutput),
         deps: {
           spawn: spawnFn,
           probeReady: fetchReadinessProbe,
           intervalMs: ctx.config.readiness.intervalMs,
           timeoutMs: ctx.config.readiness.timeoutMs,
-          /**
-           * Installs a real process signal handler (`process.on`).
-           *
-           * @param event - Signal name (`SIGINT`/`SIGTERM`).
-           * @param handler - Handler to install.
-           * @returns The Node.js `process` object (from `process.on`).
-           * @example
-           * ```ts
-           * onSignal("SIGINT", () => {});
-           * ```
-           */
-          onSignal: (event, handler) => process.on(event, handler),
-          /**
-           * Removes a previously installed process signal handler (`process.off`).
-           *
-           * @param event - Signal name (`SIGINT`/`SIGTERM`).
-           * @param handler - Handler to remove.
-           * @returns The Node.js `process` object (from `process.off`).
-           * @example
-           * ```ts
-           * offSignal("SIGINT", handler);
-           * ```
-           */
-          offSignal: (event, handler) => process.off(event, handler)
+          ...processSignals
         }
       });
+
+      // Register the handle until it exits, and park both promises: callers observe
+      // `exited`/`ready` themselves, so neither may surface as an unhandled rejection here.
       ctx.state.dev = handle;
       handle.exited
         .finally(() => {
@@ -278,13 +242,9 @@ export function createTauriApi(ctx: TauriContext): Api {
     },
 
     /**
-     * Probes CLI presence/version via `tauri info` — used by `doctor`.
+     * Implements {@link Api.getVersion}.
      *
-     * @returns The parsed CLI version, or `undefined` when the CLI can't be invoked.
-     * @example
-     * ```ts
-     * const version = await app.tauri.getVersion();
-     * ```
+     * @returns See {@link Api.getVersion}.
      */
     async getVersion() {
       try {
@@ -300,17 +260,9 @@ export function createTauriApi(ctx: TauriContext): Api {
     },
 
     /**
-     * Returns the resolved `node` + `tauri.js` pair every verb spawns with, so
-     * `project.patchMobile` can write the same invocation into the generated
-     * Xcode/Gradle build scripts (tauri emits a bare `node tauri`, which does
-     * not exist).
+     * Implements {@link Api.getRunner}.
      *
-     * @returns The resolved invocation prefix.
-     * @throws {Error} `[native]` when `node` or the tauri CLI cannot be resolved.
-     * @example
-     * ```ts
-     * await app.project.patchMobile({ target: "ios", runner: app.tauri.getRunner() });
-     * ```
+     * @returns See {@link Api.getRunner}.
      */
     getRunner() {
       return resolvePaths();

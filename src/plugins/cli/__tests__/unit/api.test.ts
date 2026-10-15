@@ -165,6 +165,26 @@ describe("createCliApi — build", () => {
     expect(mocks.build.runAll).toHaveBeenCalledWith({ simulator: true, aab: true });
   });
 
+  it("forwards debug to build.run — the flag is not dropped at the CLI boundary", async () => {
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
+
+    await api.build({ target: "android", debug: true });
+
+    expect(mocks.build.run).toHaveBeenCalledWith(
+      expect.objectContaining({ target: "android", debug: true })
+    );
+  });
+
+  it("forwards debug to build.runAll with { all: true }", async () => {
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
+
+    await api.build({ all: true, debug: true });
+
+    expect(mocks.build.runAll).toHaveBeenCalledWith(expect.objectContaining({ debug: true }));
+  });
+
   it("boxes the TauriError stderr tail before rethrowing", async () => {
     const lines: string[] = [];
     const mocks = createMocks();

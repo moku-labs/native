@@ -110,6 +110,62 @@ describe("classify", () => {
     expect(error.kind).toBe("unknown");
   });
 
+  it("names the cause line in the message of an unclassified failure", () => {
+    // Xcode 27 refusing tauri's default deployment target: no bucket matches it, and a bare
+    // "tauri unknown." left the real reason only in the tail, which a thrown error never shows.
+    const log = [
+      "/repo/src-tauri/gen/apple/app.xcodeproj: error: The iOS Simulator deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 14.0, but the range of supported deployment target versions is 15.0 to 27.0.x. (in target 'app_iOS' from project 'app')",
+      "** BUILD FAILED **",
+      'failed to build iOS app: failed to build with xcodebuild: command ["xcodebuild"] exited with code 65',
+      '       Error failed to build iOS app: failed to build with xcodebuild: command ["xcodebuild"] exited with code 65'
+    ].join("\n");
+
+    const error = classify(1, log);
+
+    expect(error.kind).toBe("unknown");
+    expect(error.message).toContain(
+      "deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 14.0"
+    );
+  });
+
+  it("quotes the stated error over a failed-summary line ahead of it", () => {
+    const log = [
+      "note: Run script build phase 'Build Rust Code' will be run during every build",
+      "Build Rust Code failed with a non-zero exit code",
+      "error: Cannot find module '/repo/tauri.js'",
+      'failed to build iOS app: failed to build with xcodebuild: command ["xcodebuild"] exited with code 65'
+    ].join("\n");
+    const error = classify(65, log);
+    expect(error.message).toContain("error: Cannot find module '/repo/tauri.js'");
+    expect(error.message).not.toContain("non-zero exit code");
+  });
+
+  it("falls back to the first cause line when none states an error", () => {
+    const log = ["Compiling app", "module 'x' not found", "bundling failed", "done"].join("\n");
+    expect(classify(1, log).message).toContain("module 'x' not found");
+  });
+
+  it("quotes only from the last 15 cause lines, as the tail does", () => {
+    const stale = "error: an early error that the build recovered from";
+    const recent = Array.from({ length: 15 }, (_, index) => `step ${index} failed`);
+    const error = classify(1, [stale, ...recent].join("\n"));
+    expect(error.message).not.toContain(stale);
+    expect(error.message).toContain("step 0 failed");
+  });
+
+  it("cuts a long cause line in the message and keeps it whole in the tail", () => {
+    const long = `error: ${"x".repeat(400)}`;
+    const error = classify(1, long);
+    expect(error.message).toContain(`${long.slice(0, 300)}…`);
+    expect(error.message).not.toContain(long.slice(0, 301));
+    expect(error.stderrTail).toContain(long);
+  });
+
+  it("names the last output line when no line reads like a cause", () => {
+    const error = classify(1, "Running beforeBuildCommand\nbundling stopped");
+    expect(error.message).toContain("bundling stopped");
+  });
+
   it("ignores an incidental signing mention on an ordinary build-step line", () => {
     // A real xcodebuild log narrates every step; `CodeSign <path>` and the keychain lines it
     // exports are progress output, not the cause, and must never outrank the real error.

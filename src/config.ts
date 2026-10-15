@@ -34,7 +34,29 @@ export type BuildFlavor = {
   simulator?: boolean | undefined;
   /** Android: emit a store bundle (`.aab`) instead of the default installable `.apk`. */
   aab?: boolean | undefined;
+  /**
+   * Build the debug profile instead of the store one: a still-optimized build that installs
+   * next to the store app (`.debug` id, "(debug)" name), is signed with the debug keystore,
+   * forwards the page console and allows cleartext. Unset means the store profile.
+   *
+   * @example
+   * ```ts
+   * await native.build.run({ target: "android", debug: true });
+   * ```
+   */
+  debug?: boolean | undefined;
 };
+
+/**
+ * Which profile a build is made in. `"store"` is the shippable build; `"debug"` is the
+ * on-device test build of {@link BuildFlavor.debug}. The page sees `"store"` as `"release"`.
+ *
+ * @example
+ * ```ts
+ * const profile: BuildProfile = flavor.debug ? "debug" : "store";
+ * ```
+ */
+export type BuildProfile = "store" | "debug";
 
 /** Host platform → the one desktop target that host can package locally. */
 const HOST_TARGET: Partial<Record<NodeJS.Platform, Target>> = {
@@ -89,6 +111,17 @@ export type CapabilityConfigMap = {
   "deep-link": { mode: "scheme"; scheme: string };
   back: Record<string, never>;
   haptics: Record<string, never>;
+  /**
+   * The page bridge `globalThis.__MOKU_NATIVE__` (Android): display rate, thermal state,
+   * safe-area insets, device info. Composed like every capability, by naming it in
+   * `config.system`; this entry only carries its (empty) parameters and composes nothing alone.
+   *
+   * @example
+   * ```ts
+   * createApp({ config: { system: [{ name: "shell" }], capabilities: { shell: {} } } });
+   * ```
+   */
+  shell: Record<string, never>;
 };
 
 /**
@@ -127,7 +160,7 @@ export type AppleSigning = {
   exportMethod?: AppleExportMethod;
   /** Minimum macOS version → `bundle.macOS.minimumSystemVersion`. */
   macosMinimumSystemVersion?: string;
-  /** Minimum iOS version → `bundle.iOS.minimumSystemVersion`. */
+  /** Minimum iOS version → `bundle.iOS.minimumSystemVersion`; `"15.0"` when unset (Xcode 27 rejects Tauri's 14.0). */
   iosMinimumSystemVersion?: string;
 };
 
@@ -177,6 +210,17 @@ export type Config = {
      * dark icons on a light one. Unset leaves the platform default (white in light mode).
      */
     backgroundColor?: string;
+    /**
+     * Android adaptive icon inset, in percent of the 108 dp canvas per side (`0 < n ≤ 30`).
+     * Wraps the launcher foreground in an `<inset>` so full-bleed art survives the mask.
+     * Unset leaves the icon untouched. `19.44` keeps the art inside the 66 dp safe zone.
+     *
+     * @example
+     * ```ts
+     * createApp({ config: { app: { name: "Demo", identifier: "com.acme.demo", adaptiveIconInset: 19.44 } } });
+     * ```
+     */
+    adaptiveIconInset?: number;
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
@@ -209,6 +253,8 @@ export type NativeCompleteEvent = {
   outPath: string;
   artifacts: readonly string[];
   durationMs: number;
+  /** The profile the artifacts were built in — the CLI marks a debug delivery. */
+  profile: BuildProfile;
 };
 
 /**
@@ -235,6 +281,21 @@ const defaultConfig: Config = {
   signing: {}
 };
 
+/**
+ * The Layer-1 config of `@moku-labs/native`: the global {@link Config} defaults, the
+ * framework {@link Events} (`native:phase`, `native:complete`) and the `log`/`env` core
+ * plugins, so every plugin context carries `ctx.log` and `ctx.env`. The `env` core plugin is
+ * seeded with the process-env provider. `src/index.ts` composes it with the five framework
+ * plugins.
+ *
+ * @example
+ * ```ts
+ * // src/index.ts — the framework is this config plus its plugins, in dependency order.
+ * const framework = createCore(coreConfig, {
+ *   plugins: [projectPlugin, tauriPlugin, buildPlugin, doctorPlugin, cliPlugin]
+ * });
+ * ```
+ */
 export const coreConfig = createCoreConfig<Config, Events, [typeof logPlugin, typeof envPlugin]>(
   "native",
   {
@@ -255,6 +316,9 @@ export const coreConfig = createCoreConfig<Config, Events, [typeof logPlugin, ty
 /**
  * Creates a plugin bound to this framework's Config/Events chain.
  *
+ * @param name - Unique plugin id; becomes the plugin's key on the app.
+ * @param spec - Plugin spec (config, state, api, hooks, lifecycle); every type infers from it.
+ * @returns A typed plugin instance for the `createCore` or `createApp` plugins array.
  * @example
  * ```ts
  * export const xxxPlugin = createPlugin("xxx", { api: createXxxApi });
@@ -265,6 +329,10 @@ export const createPlugin = coreConfig.createPlugin;
 /**
  * Creates the framework core from this config (Layer 2 step 2).
  *
+ * @param config - This file's {@link coreConfig}.
+ * @param options - The framework's default plugins (`plugins`), plus optional `pluginConfigs`
+ *   and lifecycle callbacks.
+ * @returns The framework factory carrying `createApp` and `createPlugin`.
  * @example
  * ```ts
  * const framework = createCore(coreConfig, { plugins: [...] });

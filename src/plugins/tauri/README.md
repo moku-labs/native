@@ -14,7 +14,7 @@ runtime, never the platform `.node` addon directly.
 
 ```ts
 app.tauri.icon({ source: "assets/icon.png" }): Promise<RunResult>
-app.tauri.build({ target, simulator?, exportMethod?, aab?, onTick?, onOutput? }): Promise<RunResult>
+app.tauri.build({ target, simulator?, exportMethod?, aab?, onTick?, onOutput?, env? }): Promise<RunResult>
 app.tauri.mobileInit({ target: "ios" | "android" }): Promise<RunResult>
 app.tauri.dev({ target?, onOutput? }): Promise<DevHandle>
 app.tauri.getVersion(): Promise<{ cliVersion: string } | undefined>
@@ -39,6 +39,18 @@ app.tauri.getRunner(): { nodePath: string; tauriJsPath: string }
 
   An option a target does not use is ignored, never an error — the `build` plugin forwards the
   app's whole signing/artifact configuration for every target.
+
+  `env` is the one option that never touches the argv: it is extra environment for the spawned
+  tauri CLI, merged over the inherited one (`realSpawn`), so the web build tauri runs as its
+  `beforeBuildCommand` can read it:
+
+  ```ts
+  await app.tauri.build({ target: "android", env: { MOKU_NATIVE_PROFILE: "debug" } });
+  ```
+
+  The debug profile is still a release build (Decision D1) — `env` adds no `--debug` flag. Without
+  `env` the spawn call carries no `env` key at all, so the child inherits the parent environment
+  exactly as before.
 - **`mobileInit`** — runs `tauri ios|android init`, the ONLY init verbs this plugin exposes
   (plain `tauri init` is never used — the desktop tree is project-generated). Callers must check
   `project.getCompleteness()` is `"not-initialized"` first; this call is not idempotent
@@ -108,6 +120,14 @@ simulator build prints `Warn No code signing certificates found …`, which is h
 it would bucket *every* iOS failure as `signing-failed`. `no code signing` is deliberately not a
 signing pattern; a real refusal says `No signing certificate "…" found` or
 `requires a provisioning profile`.
+
+### The message names the cause
+
+A thrown error is often printed without its tail (a test runner, a log line), so the message
+quotes one line between the bucket and the advice: the first `error:` / `error[…]` /
+`panicked` line among the last 15 signal lines, else the first of those signal lines, else
+the last output line, cut at 300 characters. `[native] tauri unknown.` alone told nobody
+that Xcode had refused the deployment target.
 
 ### `stderrTail`
 

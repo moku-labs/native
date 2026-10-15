@@ -12,10 +12,6 @@ import type { Check, CheckInput } from "./types";
  *
  * @param _input - Unused — this pointer's message never depends on config.
  * @returns The check result — always "warn".
- * @example
- * ```ts
- * await runCors(input);
- * ```
  */
 async function runCors(_input: CheckInput): Promise<CheckResult> {
   return {
@@ -52,10 +48,6 @@ export const crossRepoCorsCheck: Check = {
  *
  * @param _input - Unused — this pointer's message never depends on config beyond appliesTo's own filter.
  * @returns The check result — always "warn".
- * @example
- * ```ts
- * await runDeepLinkWellKnown(input);
- * ```
  */
 async function runDeepLinkWellKnown(_input: CheckInput): Promise<CheckResult> {
   return {

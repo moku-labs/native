@@ -4,6 +4,14 @@ import sonarjs from "eslint-plugin-sonarjs";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
 import tseslint from "typescript-eslint";
 
+// Members of a public `…Api` type in types.ts — the contract the published .d.mts ships (moku jsdoc-examples.md)
+const API_MEMBER_CONTEXTS = [
+  "TSTypeAliasDeclaration[id.name=/Api$/] > TSTypeLiteral > TSPropertySignature",
+  "TSTypeAliasDeclaration[id.name=/Api$/] > TSTypeLiteral > TSMethodSignature",
+  "TSInterfaceDeclaration[id.name=/Api$/] > TSInterfaceBody > TSPropertySignature",
+  "TSInterfaceDeclaration[id.name=/Api$/] > TSInterfaceBody > TSMethodSignature"
+];
+
 export default [
   // 1. Global ignores
   {
@@ -127,9 +135,47 @@ export default [
       "jsdoc/require-param-description": "error",
       "jsdoc/require-returns": "error",
       "jsdoc/require-returns-description": "error",
-      "jsdoc/require-example": "error",
+      "jsdoc/require-example": "off",
       "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
       "unicorn/require-module-specifiers": "off"
+    }
+  },
+
+  // 6b. Public contract files: every documented export carries a scenario @example (moku jsdoc-examples.md lint table)
+  {
+    files: ["src/**/types.ts", "src/config.ts", "src/index.ts"],
+    rules: {
+      "jsdoc/require-example": "error"
+    }
+  },
+  {
+    // Every `…Api` member is the public contract: JSDoc + a scenario @example, no exemption
+    files: ["src/**/types.ts"],
+    rules: {
+      "jsdoc/require-jsdoc": [
+        "error",
+        {
+          require: {
+            ArrowFunctionExpression: true,
+            ClassDeclaration: true,
+            FunctionDeclaration: true,
+            FunctionExpression: true,
+            MethodDefinition: true
+          },
+          contexts: ["TSInterfaceDeclaration", "TSTypeAliasDeclaration", ...API_MEMBER_CONTEXTS]
+        }
+      ],
+      "jsdoc/require-example": [
+        "error",
+        {
+          contexts: [
+            "ArrowFunctionExpression",
+            "FunctionDeclaration",
+            "FunctionExpression",
+            ...API_MEMBER_CONTEXTS
+          ]
+        }
+      ]
     }
   },
 

@@ -359,3 +359,48 @@ describe("patchAndroidManifest", () => {
     expect(existsSync(manifestPath)).toBe(false);
   });
 });
+
+/** The network-config attribute entry, set to `value` or removed with `undefined`. */
+const networkConfig = (value: string | undefined): ManifestEntry[] => [
+  { kind: "application-attribute", name: "android:networkSecurityConfig", value }
+];
+
+/** The template manifest with `line` as the first attribute line of `<application>`. */
+const withApplicationLine = (line: string) =>
+  androidManifest().replace("    <application\n", `    <application\n        ${line}\n`);
+
+describe("applyManifestEntries — application attributes", () => {
+  it("sets the attribute on <application>, the main activity untouched (bug: the cleartext attribute lands on the activity, where Android ignores it)", () => {
+    expect(
+      applyManifestEntries(
+        androidManifest(),
+        networkConfig("@xml/network_security_config"),
+        MANIFEST_PATH
+      )
+    ).toBe(withApplicationLine('android:networkSecurityConfig="@xml/network_security_config"'));
+  });
+
+  it("replaces an existing application attribute in place", () => {
+    const existing = withApplicationLine('android:networkSecurityConfig="@xml/hand_made"');
+
+    expect(
+      applyManifestEntries(existing, networkConfig("@xml/network_security_config"), MANIFEST_PATH)
+    ).toBe(withApplicationLine('android:networkSecurityConfig="@xml/network_security_config"'));
+  });
+
+  it("removes the application attribute with its line, restoring the template bytes", () => {
+    const existing = withApplicationLine(
+      'android:networkSecurityConfig="@xml/network_security_config"'
+    );
+
+    expect(applyManifestEntries(existing, networkConfig(undefined), MANIFEST_PATH)).toBe(
+      androidManifest()
+    );
+  });
+
+  it("fails with a fix-it when there is no <application> to set the attribute on", () => {
+    expect(() =>
+      applyManifestEntries("<manifest>\n</manifest>\n", networkConfig("@xml/x"), MANIFEST_PATH)
+    ).toThrow(`[native] Could not find the <application> element in ${MANIFEST_PATH}.`);
+  });
+});

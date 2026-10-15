@@ -54,6 +54,12 @@ const STDERR_TAIL_LINES = 10;
 /** How many extracted cause lines are kept ahead of the separator. */
 const SIGNAL_LINES = 15;
 
+/** Longest cause line quoted in the error message; the full line stays in the tail. */
+const MESSAGE_CAUSE_MAX_CHARS = 300;
+
+/** A cause line that states an error outright, rather than a `failed` summary. */
+const ERROR_LINE_PATTERN = /\berror\b[:[]|panicked/i;
+
 /** Marks where the extracted cause lines end and the raw trailing lines begin. */
 const TAIL_SEPARATOR = "…";
 
@@ -145,6 +151,9 @@ const ADVICE: Record<TauriErrorKind, string> = {
 /**
  * Classifies a non-zero tauri CLI exit into a {@link TauriError}.
  *
+ * The message names the cause line itself: a thrown error is often printed without its
+ * tail (a test runner, a log line), and "tauri unknown." alone says nothing.
+ *
  * Only CAUSE lines are classified (the same filter the tail builder uses): a 50k-line
  * xcodebuild log narrates `CodeSign <path>` and exports the whole keychain environment, and
  * one such incidental mention would otherwise decide the taxonomy for the entire build.
@@ -162,10 +171,39 @@ export function classify(code: number | null, scrubbedOutput: string): TauriErro
   const lines = scrubbedOutput.split(/\r?\n/).filter(line => line.length > 0);
   const classifiable = signalLines(lines);
 
+  // The bucket is decided over cause lines only, never over progress narration.
   const match = TAXONOMY_PATTERNS.find(({ test }) => classifiable.some(line => test.test(line)));
   const kind: TauriErrorKind = match?.kind ?? (code === null ? "cancelled" : "unknown");
-  const message = `[native] tauri ${kind.replaceAll("-", " ")}.\n  ${ADVICE[kind]}`;
+
+  // The message quotes the cause itself: a thrown error is often printed without its tail.
+  const cause = causeLine(classifiable, lines);
+  const causeText = cause === undefined ? "" : `\n  ${cause}`;
+
+  const message = `[native] tauri ${kind.replaceAll("-", " ")}.${causeText}\n  ${ADVICE[kind]}`;
   return new TauriError(kind, message, { exitCode: code, stderrTail: buildTail(lines) });
+}
+
+/**
+ * Picks the one line the error message quotes, from the same window the tail keeps (the
+ * last {@link SIGNAL_LINES} cause lines): the first real error in it — in an xcodebuild log
+ * the root error precedes tauri's `failed to build …` wrappers — else the first cause line,
+ * else the last output line. Long lines are cut; the tail keeps them whole.
+ *
+ * @param causes - The deduplicated cause lines, in order.
+ * @param lines - Every non-empty line of the scrubbed output, in order.
+ * @returns The trimmed line to quote, or `undefined` when there was no output at all.
+ * @example
+ * ```ts
+ * causeLine(["failed to build", "error: Cannot find module 'x'"], []); // "error: Cannot find module 'x'"
+ * ```
+ */
+function causeLine(causes: readonly string[], lines: readonly string[]): string | undefined {
+  const window = causes.slice(-SIGNAL_LINES);
+  const picked = window.find(line => ERROR_LINE_PATTERN.test(line)) ?? window[0] ?? lines.at(-1);
+  const line = picked?.trim();
+  if (!line) return undefined;
+  if (line.length <= MESSAGE_CAUSE_MAX_CHARS) return line;
+  return `${line.slice(0, MESSAGE_CAUSE_MAX_CHARS)}…`;
 }
 
 /**

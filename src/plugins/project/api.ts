@@ -1,72 +1,56 @@
 /**
  * @file project plugin — API factory: capability resolution, generation, and the mobile
- * patch/completeness/clean delegations. Composition-time validation lives in `validate.ts`.
+ * patch/icon/link/completeness/clean delegations, plus the page agent scan. Composition-time
+ * validation lives in `validate.ts`.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Config, MobileTarget, Target } from "../../config";
+import type { BuildProfile, Config, MobileTarget, Target } from "../../config";
 import { clean, clearMobileBuildOutput } from "./clean";
 import { generateBuildScript } from "./generators/build-script";
 import { generateCapabilities } from "./generators/capabilities";
 import { generateCargo } from "./generators/cargo";
 import { generateEntitlements } from "./generators/entitlements";
 import { generateRust } from "./generators/rust";
+import { generateShell } from "./generators/shell";
 import { generateSidecar } from "./generators/sidecar";
 import { generateTauriConf } from "./generators/tauri-conf";
 import type { GeneratorInput } from "./generators/types";
 import { placeholderIconPng } from "./icon";
 import type { BundleLayout } from "./layout";
-import { bundleLayout } from "./layout";
+import { bundleLayout, genDirectoryPath } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
+import { patchAndroidIcon } from "./mobile/icon";
 import { patchMobile } from "./mobile/patch";
+import { checkShellLinked } from "./mobile/shell-link";
+import { debugKeystorePath, resolveDebugKeystore } from "./mobile/signing";
 import { orientationManifest } from "./orientation";
+import { detectPageAgent } from "./page-agent";
 import { comparableRealPath } from "./paths";
-import { isKnownCapability, registryRows, resolve, unknownCapabilityError } from "./registry";
+import {
+  isKnownCapability,
+  registryRows,
+  resolve,
+  resolveConfiguredCapabilities
+} from "./registry";
 import type {
+  AndroidProfile,
   Api,
+  DebugKeystore,
   GenerateResult,
   ManifestEntry,
   PatchMobileOptions,
-  ProjectContext,
-  ResolvedCapability
+  PatchResult,
+  ProjectContext
 } from "./types";
 import { writeIfChanged } from "./writer";
 
 /**
- * Resolves every capability configured on `config.system` against the registry, scoped
- * to rows whose `platforms` include the target (D-012: the whole packaging composition
- * is data-driven from this one pass).
- *
- * @param global - Frozen global framework config.
- * @param target - The packaging target being generated for.
- * @returns The resolved capabilities applicable to this target.
- * @throws {Error} When `config.system` names a capability the registry doesn't know.
- * @example
- * ```ts
- * resolveConfiguredCapabilities(ctx.global, "ios");
- * ```
- */
-function resolveConfiguredCapabilities(
-  global: Readonly<Config>,
-  target: GeneratorInput["target"]
-): ResolvedCapability[] {
-  const resolved: ResolvedCapability[] = [];
-  for (const entry of global.system) {
-    if (!isKnownCapability(entry.name)) throw unknownCapabilityError(entry.name);
-    const capability = resolve(entry.name, global.capabilities[entry.name]);
-    if (capability.platforms.includes(target)) {
-      resolved.push(capability);
-    }
-  }
-  return resolved;
-}
-
-/**
- * Collects what the Android main activity must carry: the `activity-attribute` entries of
- * every capability resolved for android, then the orientation lock. Orientation comes
- * last so it wins a clash, the same order the iOS sidecar merges in. It is always present:
- * an unset orientation asks for `android:screenOrientation` to be absent, which removes a
- * lock a previous build left in the gen/ tree.
+ * Collects what the Android manifest must carry: the attribute entries of every capability
+ * resolved for android, then the orientation lock. Orientation comes last so it wins a
+ * clash, the same order the iOS sidecar merges in. It is always present: an unset
+ * orientation asks for `android:screenOrientation` to be absent, which removes a lock a
+ * previous build left in the gen/ tree.
  *
  * @param global - Frozen global framework config.
  * @returns The manifest entries for `patchMobile`'s Android pass.
@@ -80,57 +64,37 @@ function resolveConfiguredCapabilities(
 function androidManifestEntries(global: Readonly<Config>): ManifestEntry[] {
   const fromCapabilities = resolveConfiguredCapabilities(global, "android")
     .flatMap(capability => capability.manifest)
-    .filter(entry => entry.kind === "activity-attribute");
+    .filter(entry => entry.kind !== "child");
   return [...fromCapabilities, ...orientationManifest(global.app.orientation)];
 }
 
 /**
- * Returns the required-file set a mobile `gen/<platform>` tree must carry — the options
- * object keeps every target-scoped API method reading the same way.
+ * Implements {@link Api.getRequiredFiles}.
  *
- * @param opts - The lookup options.
+ * @param opts - See {@link Api.getRequiredFiles}.
  * @param opts.target - The mobile platform to list required files for.
- * @returns The required paths, relative to `src-tauri/gen/<platform>`.
- * @example
- * ```ts
- * getRequiredFiles({ target: "android" });
- * ```
+ * @returns See {@link Api.getRequiredFiles}.
  */
 function getRequiredFiles(opts: { target: MobileTarget }): readonly string[] {
   return requiredFiles(opts.target);
 }
 
 /**
- * Returns where one target's build output lands inside the generated project — read from
- * `layout.ts`, the single owner of that table, so build's collect phase never keeps a copy.
+ * Implements {@link Api.getBundleLayout}.
  *
- * @param opts - The lookup options.
+ * @param opts - See {@link Api.getBundleLayout}.
  * @param opts.target - The packaging target.
- * @returns The output root, bundle formats, and mobile `gen/` directory for that target.
- * @example
- * ```ts
- * getBundleLayout({ target: "macos" });
- * ```
+ * @returns See {@link Api.getBundleLayout}.
  */
 function getBundleLayout(opts: { target: Target }): BundleLayout {
   return bundleLayout(opts.target);
 }
 
 /**
- * Resolves a path to the one comparable form every containment guard in this framework
- * compares in: absolute, symlinks followed, and case-folded where the filesystem is. This
- * plugin owns that rule (the clean guard and the config check are built on it), and build's
- * collect guard borrows it through the API rather than keeping a second, lexical copy — a
- * lexical guard is walked around by a single symlink.
+ * Implements {@link Api.resolveDerivedPath}.
  *
- * For comparison only — the result is never a path to display or to hand to the filesystem.
- *
- * @param target - The path to resolve, absolute or relative to the process cwd.
- * @returns The comparable form of the real path.
- * @example
- * ```ts
- * resolveDerivedPath("dist-native/macos"); // "/repo/app/dist-native/macos"
- * ```
+ * @param target - See {@link Api.resolveDerivedPath}.
+ * @returns See {@link Api.resolveDerivedPath}.
  */
 function resolveDerivedPath(target: string): string {
   return comparableRealPath(target);
@@ -138,34 +102,31 @@ function resolveDerivedPath(target: string): string {
 
 /**
  * Creates the project plugin API surface — capability registry + `.moku/tauri`
- * generators + write-if-changed writer + mobile completeness/patch/clean.
+ * generators (the shell crate among them) + write-if-changed writer + mobile
+ * completeness/patch/icon/link/clean + the page agent scan.
  *
- * @param ctx - Plugin context (global config, log).
+ * @param ctx - Plugin context (global config, log, env).
  * @returns The `project` plugin's public API.
- * @example
- * ```ts
- * const api = createProjectApi(ctx);
- * await api.generate({ target: "macos" });
- * ```
  */
 export function createProjectApi(ctx: ProjectContext): Api {
   /**
-   * Write/refresh every pure artifact for `opts.target` into `projectDir` via
-   * write-if-changed.
+   * Implements {@link Api.generate}.
    *
-   * @param opts - The generate options.
+   * @param opts - See {@link Api.generate}.
    * @param opts.target - The packaging target to generate for.
-   * @returns Which paths were written, left unchanged, or skipped.
-   * @example
-   * ```ts
-   * await generateArtifacts({ target: "macos" });
-   * ```
+   * @param opts.profile - The build profile; `"store"` when omitted.
+   * @returns See {@link Api.generate}.
    */
   const generateArtifacts = async (opts: {
     target: GeneratorInput["target"];
+    profile?: BuildProfile | undefined;
   }): Promise<GenerateResult> => {
-    const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target);
+    // Resolve the capabilities this target and profile compose.
+    const profile = opts.profile ?? "store";
+    const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target, profile);
     const input: GeneratorInput = { global: ctx.global, target: opts.target, capabilities };
+
+    // Render every generated artifact, the shell crate last.
     const artifacts = [
       ...generateTauriConf(input),
       ...generateCargo(input),
@@ -173,9 +134,11 @@ export function createProjectApi(ctx: ProjectContext): Api {
       ...generateRust(input),
       ...generateCapabilities(input),
       ...generateEntitlements(input),
-      ...generateSidecar(input)
+      ...generateSidecar(input),
+      ...generateShell(input, profile)
     ];
 
+    // Write each one only when its content changed, and sort it into its bucket.
     const buckets: Record<"written" | "unchanged" | "skipped", string[]> = {
       written: [],
       unchanged: [],
@@ -187,8 +150,11 @@ export function createProjectApi(ctx: ProjectContext): Api {
       buckets[action].push(fullPath);
       ctx.log.debug("project:generate:artifact", { path: fullPath, action });
     }
+
+    // Report the pass, then hand the buckets back.
     ctx.log.info("project:generate", {
       target: opts.target,
+      profile,
       written: buckets.written.length,
       unchanged: buckets.unchanged.length
     });
@@ -196,84 +162,138 @@ export function createProjectApi(ctx: ProjectContext): Api {
   };
 
   /**
-   * Checks the mobile `gen/<platform>` required-file completeness gate for `opts.target`.
+   * Implements {@link Api.getCompleteness}.
    *
-   * @param opts - The completeness check options.
+   * @param opts - See {@link Api.getCompleteness}.
    * @param opts.target - The packaging target to check.
-   * @returns The completeness verdict.
-   * @example
-   * ```ts
-   * checkCompleteness({ target: "android" });
-   * ```
+   * @returns See {@link Api.getCompleteness}.
    */
   const checkCompleteness = (opts: { target: GeneratorInput["target"] }) =>
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Implements {@link Api.patchMobile}: hands Android its manifest entries and
-   * `app.backgroundColor` (the status bar icons follow it), then logs.
+   * Builds the Android profile one patch pass applies. The debug profile resolves the debug
+   * keystore from `ctx.env` here (`HOME` ?? `USERPROFILE`), so the patch itself never reads
+   * the environment.
+   *
+   * @param opts - See {@link Api.patchMobile}.
+   * @returns The Android profile with its app name, keystore and log.
+   */
+  const androidProfile = (opts: PatchMobileOptions): AndroidProfile => {
+    if (opts.target !== "android" || opts.profile !== "debug") {
+      return { profile: "store", log: ctx.log };
+    }
+    return {
+      profile: "debug",
+      appName: ctx.global.app.name,
+      debugKeystore: debugKeystorePath(ctx.env),
+      log: ctx.log
+    };
+  };
+
+  /**
+   * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
+   * entries and `app.backgroundColor` (the status bar icons follow it), then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
-   * @example
-   * ```ts
-   * await runPatchMobile({ target: "ios" }); // { patched: [], unchanged: [] } before `tauri ios init`
-   * ```
    */
   const runPatchMobile = async (opts: PatchMobileOptions) => {
     const manifest = opts.target === "android" ? androidManifestEntries(ctx.global) : [];
+    const profile = androidProfile(opts);
     const result = await patchMobile(
       ctx.global.projectDir,
       opts,
       ctx.global.signing,
       manifest,
-      ctx.global.app.backgroundColor
+      ctx.global.app.backgroundColor,
+      profile
     );
-    ctx.log.info("project:patchMobile", { target: opts.target, patched: result.patched.length });
+    ctx.log.info("project:patchMobile", {
+      target: opts.target,
+      profile: profile.profile,
+      patched: result.patched.length
+    });
     return result;
   };
 
   /**
-   * Resolves the 1024x1024 source PNG `tauri icon` expands into the platform icon sets.
-   * A configured `app.icon` is used verbatim; otherwise an embedded placeholder is written
-   * into `projectDir`, so a brand-new app packages without drawing an icon first.
+   * Implements {@link Api.patchMobileIcons}: the adaptive icon inset on Android, nothing on
+   * iOS.
    *
-   * @returns The absolute path to the icon source.
-   * @throws {Error} When `app.icon` is set but no file exists there.
-   * @example
-   * ```ts
-   * await tauri.icon({ source: await ensureIconSource() });
-   * ```
+   * @param opts - See {@link Api.patchMobileIcons}.
+   * @param opts.target - The mobile platform whose icons to patch.
+   * @returns See {@link Api.patchMobileIcons}.
    */
-  const ensureIconSource = async (): Promise<string> => {
-    const configured = ctx.global.app.icon;
-    if (configured) {
-      const resolved = path.resolve(configured);
-      if (!existsSync(resolved)) {
-        throw new Error(
-          `[native] app.icon "${configured}" was not found at ${resolved}.\n  Point config.app.icon at a 1024x1024 PNG, or unset it to use the generated placeholder.`
-        );
-      }
-      return resolved;
-    }
-
-    const placeholder = path.resolve(ctx.global.projectDir, "placeholder-icon.png");
-    const action = await writeIfChanged(placeholder, placeholderIconPng(), ctx.global.projectDir);
-    ctx.log.debug("project:ensureIconSource", { path: placeholder, action });
-    return placeholder;
+  const runPatchMobileIcons = async (opts: { target: MobileTarget }): Promise<PatchResult> => {
+    if (opts.target !== "android") return { patched: [], unchanged: [] };
+    const result = await patchAndroidIcon({
+      projectDirectory: ctx.global.projectDir,
+      genDirectory: genDirectoryPath(ctx.global.projectDir, opts.target),
+      inset: ctx.global.app.adaptiveIconInset
+    });
+    ctx.log.debug("project:patchMobileIcons", {
+      target: opts.target,
+      patched: result.patched.length
+    });
+    return result;
   };
 
   /**
-   * Deletes derived state for the given scope (whole projectDir, a mobile gen/ tree, or
-   * a desktop bundle output).
+   * Implements {@link Api.detectPageAgent} over `<web.cwd ?? .>/<web.dist>`.
    *
-   * @param opts - The clean options.
+   * @returns See {@link Api.detectPageAgent}.
+   */
+  const runDetectPageAgent = () =>
+    detectPageAgent({ root: ctx.global.web.cwd ?? ".", dist: ctx.global.web.dist });
+
+  /**
+   * Implements {@link Api.checkShellLinked}, the store profile when omitted.
+   *
+   * @param opts - See {@link Api.checkShellLinked}.
+   * @param opts.target - The mobile platform that was compiled.
+   * @param opts.profile - The build profile; `"store"` when omitted.
+   * @returns See {@link Api.checkShellLinked}.
+   */
+  const runCheckShellLinked = (opts: {
+    target: MobileTarget;
+    profile?: BuildProfile | undefined;
+  }): Promise<void> =>
+    checkShellLinked({
+      global: ctx.global,
+      target: opts.target,
+      profile: opts.profile ?? "store"
+    });
+
+  /**
+   * Implements {@link Api.ensureIconSource}.
+   *
+   * @returns See {@link Api.ensureIconSource}.
+   * @throws {Error} See {@link Api.ensureIconSource}.
+   */
+  const ensureIconSource = async (): Promise<string> => {
+    const configured = ctx.global.app.icon;
+    if (!configured) {
+      const placeholder = path.resolve(ctx.global.projectDir, "placeholder-icon.png");
+      const action = await writeIfChanged(placeholder, placeholderIconPng(), ctx.global.projectDir);
+      ctx.log.debug("project:ensureIconSource", { path: placeholder, action });
+      return placeholder;
+    }
+
+    const resolved = path.resolve(configured);
+    if (existsSync(resolved)) return resolved;
+
+    throw new Error(
+      `[native] app.icon "${configured}" was not found at ${resolved}.\n  Point config.app.icon at a 1024x1024 PNG, or unset it to use the generated placeholder.`
+    );
+  };
+
+  /**
+   * Implements {@link Api.clean}.
+   *
+   * @param opts - See {@link Api.clean}.
    * @param opts.target - The optional packaging target to scope the clean to.
-   * @returns The list of paths actually removed.
-   * @example
-   * ```ts
-   * await runClean({ target: "android" });
-   * ```
+   * @returns See {@link Api.clean}.
    */
   const runClean = async (opts: { target?: Target | undefined } = {}) => {
     const result = await clean(ctx.global.projectDir, opts.target);
@@ -282,17 +302,11 @@ export function createProjectApi(ctx: ProjectContext): Api {
   };
 
   /**
-   * Removes the previous build output of a mobile target, so the next compile writes into
-   * an empty tree — iOS only (Gradle manages Android's own `build` tree). Guarded by the
-   * same derived-path rule as {@link runClean}.
+   * Implements {@link Api.clearMobileBuildOutput}.
    *
-   * @param opts - The clear options.
+   * @param opts - See {@link Api.clearMobileBuildOutput}.
    * @param opts.target - The mobile platform whose previous build output to remove.
-   * @returns The paths actually removed — empty when there was nothing to remove.
-   * @example
-   * ```ts
-   * await runClearMobileBuildOutput({ target: "ios" });
-   * ```
+   * @returns See {@link Api.clearMobileBuildOutput}.
    */
   const runClearMobileBuildOutput = async (opts: { target: MobileTarget }) => {
     const result = await clearMobileBuildOutput(ctx.global.projectDir, opts.target);
@@ -303,11 +317,21 @@ export function createProjectApi(ctx: ProjectContext): Api {
     return result;
   };
 
+  /**
+   * Implements {@link Api.getDebugKeystore} over `ctx.env`.
+   *
+   * @returns See {@link Api.getDebugKeystore}.
+   */
+  const getDebugKeystore = (): DebugKeystore => resolveDebugKeystore(ctx.env);
+
   return {
     generate: generateArtifacts,
     getBundleLayout,
     getCompleteness: checkCompleteness,
     patchMobile: runPatchMobile,
+    patchMobileIcons: runPatchMobileIcons,
+    detectPageAgent: runDetectPageAgent,
+    checkShellLinked: runCheckShellLinked,
     clean: runClean,
     clearMobileBuildOutput: runClearMobileBuildOutput,
     resolveDerivedPath,
@@ -315,6 +339,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
     resolve,
     isKnownCapability,
     getRegistryRows: registryRows,
-    getRequiredFiles
+    getRequiredFiles,
+    getDebugKeystore
   };
 }

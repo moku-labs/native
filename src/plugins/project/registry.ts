@@ -1,16 +1,19 @@
 /**
- * @file project plugin — capability registry (7 rows) + typed resolve/isKnownCapability.
+ * @file project plugin — capability registry (8 rows), typed resolve/isKnownCapability, and
+ * the one pass that composes the configured capabilities for a target and profile.
  */
-import type { CapabilityConfigMap } from "../../config";
+import type { BuildProfile, CapabilityConfigMap, Config, Target } from "../../config";
 import type { RegistryRow, ResolvedCapability, TauriConfFragment } from "./types";
 
 /**
- * The seven capability registry rows (the first five spike (a), Tauri 2.9.x
+ * The eight capability registry rows (the first five spike (a), Tauri 2.9.x
  * source-verified 2026-07-03; `back` and `haptics` against Tauri 2.12.1). Five rows are
  * backed by a real official Tauri plugin (crate + npm package + Rust init). `tray` is a
  * core Tauri CARGO FEATURE — it carries no crate, no npm package and no Rust init, only
  * `cargoFeatures: ["tray-icon"]`, and its `confidence: "low"` flags that divergence.
  * `back` is core permissions alone: its whole API ships in `@tauri-apps/api/app`.
+ * `shell` is the plugin crate this framework generates itself (`generators/shell`), linked
+ * by path; its `confidence: "medium"` flags that it is verified on one device only.
  */
 const REGISTRY: readonly RegistryRow[] = [
   {
@@ -113,6 +116,19 @@ const REGISTRY: readonly RegistryRow[] = [
     ],
     platforms: ["ios", "android"],
     confidence: "high"
+  },
+  {
+    name: "shell",
+    // The page bridge `globalThis.__MOKU_NATIVE__`: generated under projectDir, linked by
+    // path, never published. Its permission set is the crate's own permissions/default.toml.
+    localCrate: { name: "tauri-plugin-moku-shell", directory: "plugins/moku-shell" },
+    rustInit: "tauri_plugin_moku_shell::init()",
+    cargoFeatures: [],
+    permissions: ["moku-shell:default"],
+    // Android only while the iOS shell is deferred (Decision D6): on iOS the row is filtered
+    // out like any platform-limited row, and the page has no `__MOKU_NATIVE__`.
+    platforms: ["android"],
+    confidence: "medium"
   }
 ];
 
@@ -126,7 +142,8 @@ const KNOWN_NAMES: readonly string[] = REGISTRY.map(row => row.name);
  * @returns True (narrowing `name` to `keyof CapabilityConfigMap`) if the registry knows it.
  * @example
  * ```ts
- * if (isKnownCapability(entry.name)) resolve(entry.name);
+ * isKnownCapability("store"); // true
+ * isKnownCapability("camera"); // false
  * ```
  */
 export function isKnownCapability(name: string): name is keyof CapabilityConfigMap {
@@ -141,7 +158,7 @@ export function isKnownCapability(name: string): name is keyof CapabilityConfigM
  * @returns A formatted, throw-ready Error.
  * @example
  * ```ts
- * if (!isKnownCapability(name)) throw unknownCapabilityError(name);
+ * unknownCapabilityError("camera").message.startsWith('[native] Unknown capability "camera"'); // true
  * ```
  */
 export function unknownCapabilityError(name: string): Error {
@@ -159,7 +176,7 @@ export function unknownCapabilityError(name: string): Error {
  * @throws {Error} When any entry name is not a known capability.
  * @example
  * ```ts
- * assertKnownCapabilities(ctx.global.system);
+ * assertKnownCapabilities([{ name: "camera" }]); // throws: [native] Unknown capability "camera" in config.system.
  * ```
  */
 export function assertKnownCapabilities(system: ReadonlyArray<{ name: string }>): void {
@@ -230,6 +247,47 @@ export function resolve<K extends keyof CapabilityConfigMap>(
 }
 
 /**
+ * Resolves every capability configured on `config.system` against the registry, scoped to
+ * rows whose `platforms` include the target (D-012: the whole packaging composition is
+ * data-driven from this one pass). Naming a capability in `config.system` is the ONE way to
+ * compose it — `config.capabilities` only carries parameters. The debug profile is the one
+ * exception: on android it composes `shell` even unnamed, because console forwarding and
+ * WebView debugging live there (Decision D3).
+ *
+ * @param global - Frozen global framework config.
+ * @param target - The packaging target being generated for.
+ * @param profile - The build profile; `"store"` when omitted.
+ * @returns The resolved capabilities applicable to this target, in `config.system` order,
+ *   the implied shell last.
+ * @throws {Error} When `config.system` names a capability the registry doesn't know.
+ * @example
+ * ```ts
+ * resolveConfiguredCapabilities({ ...config, system: [{ name: "store" }] }, "android", "debug").map(row => row.name);
+ * // ["store", "shell"]
+ * ```
+ */
+export function resolveConfiguredCapabilities(
+  global: Readonly<Config>,
+  target: Target,
+  profile: BuildProfile = "store"
+): ResolvedCapability[] {
+  const resolved: ResolvedCapability[] = [];
+  for (const entry of global.system) {
+    if (!isKnownCapability(entry.name)) throw unknownCapabilityError(entry.name);
+    const capability = resolve(entry.name, global.capabilities[entry.name]);
+    // A row this target does not support is left out, not an error.
+    if (!capability.platforms.includes(target)) continue;
+    resolved.push(capability);
+  }
+
+  // The debug profile on android needs the shell even when `config.system` does not name it.
+  const impliesShell = profile === "debug" && target === "android";
+  const shellMissing = !resolved.some(capability => capability.name === "shell");
+  if (impliesShell && shellMissing) resolved.push(resolve("shell", global.capabilities.shell));
+  return resolved;
+}
+
+/**
  * Registry data consumed by `doctor`: pinned crate/npm ranges, mobile required-file
  * sets (via `requiredFiles`), and per-row confidence markers.
  *
@@ -237,7 +295,7 @@ export function resolve<K extends keyof CapabilityConfigMap>(
  * @example
  * ```ts
  * registryRows().map(row => row.name);
- * // ["store", "notification", "clipboard-manager", "tray", "deep-link", "back", "haptics"]
+ * // ["store", "notification", "clipboard-manager", "tray", "deep-link", "back", "haptics", "shell"]
  * ```
  */
 export function registryRows(): ReadonlyArray<RegistryRow> {

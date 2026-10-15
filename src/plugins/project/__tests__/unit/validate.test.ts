@@ -255,3 +255,22 @@ describe("validateProjectConfig — derived directory containment", () => {
     );
   });
 });
+
+describe("validateProjectConfig — adaptive icon inset", () => {
+  it.each([
+    0,
+    31,
+    Number.NaN,
+    Number.POSITIVE_INFINITY
+  ])("rejects %s as app.adaptiveIconInset (bug: an inset that hides the icon)", adaptiveIconInset => {
+    expect(() =>
+      validateProjectConfig(config({ app: { ...VALID.app, adaptiveIconInset } }))
+    ).toThrow("[native] app.adaptiveIconInset must be");
+  });
+
+  it.each([19.44, 30])("accepts %s as app.adaptiveIconInset", adaptiveIconInset => {
+    expect(() =>
+      validateProjectConfig(config({ app: { ...VALID.app, adaptiveIconInset } }))
+    ).not.toThrow();
+  });
+});

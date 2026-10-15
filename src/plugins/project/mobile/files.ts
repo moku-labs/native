@@ -3,7 +3,9 @@
  * touch". Both iOS patches (the runner-command rewrite and the Xcode build-settings patch)
  * read the same list from here, so neither can drift into a file the other does not know
  * about — and neither ever descends into `gen/apple/build` or `gen/android/build`, which
- * belong to the toolchain. The Android status bar patch finds its MainActivity.kt here too.
+ * belong to the toolchain. The Android status bar patch finds its MainActivity.kt here too,
+ * the profile patches their `strings.xml` and network security config, and the icon inset
+ * its adaptive icon directory.
  */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -17,6 +19,9 @@ const MAIN_ACTIVITY_FILE = "MainActivity.kt";
 
 /** Where `tauri android init` writes the app's Kotlin sources, below `gen/android`. */
 const ANDROID_JAVA_SEGMENTS = ["app", "src", "main", "java"];
+
+/** Where `tauri android init` writes the app's resources, below `gen/android`. */
+const ANDROID_RESOURCE_SEGMENTS = ["app", "src", "main", "res"];
 
 /** Derived directories a patch scan never descends into — the toolchain owns them. */
 const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
@@ -54,10 +59,6 @@ export async function iosPatchFiles(genDirectory: string): Promise<string[]> {
  * @param directory - The directory to walk (a missing directory yields nothing).
  * @param accept - Predicate over the file name.
  * @returns Every accepted file path below `directory`.
- * @example
- * ```ts
- * await collectFiles(buildSrcDirectory, name => name.endsWith(".kt"));
- * ```
  */
 async function collectFiles(
   directory: string,
@@ -136,4 +137,56 @@ export async function androidMainActivityFiles(genDirectory: string): Promise<st
     name => name === MAIN_ACTIVITY_FILE
   );
   return found.toSorted();
+}
+
+/**
+ * Returns the app's string resources, where the debug profile renames the app.
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The `res/values/strings.xml` path of that tree.
+ * @example
+ * ```ts
+ * androidStringsPath("/repo/.moku/tauri/src-tauri/gen/android");
+ * // "/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res/values/strings.xml"
+ * ```
+ */
+export function androidStringsPath(genDirectory: string): string {
+  return path.join(genDirectory, ...ANDROID_RESOURCE_SEGMENTS, "values", "strings.xml");
+}
+
+/**
+ * Returns the network security config the debug profile writes and the store profile
+ * deletes again (only when it carries the moku marker).
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The `res/xml/network_security_config.xml` path of that tree.
+ * @example
+ * ```ts
+ * androidNetworkConfigPath("/repo/.moku/tauri/src-tauri/gen/android");
+ * // "/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res/xml/network_security_config.xml"
+ * ```
+ */
+export function androidNetworkConfigPath(genDirectory: string): string {
+  return path.join(
+    genDirectory,
+    ...ANDROID_RESOURCE_SEGMENTS,
+    "xml",
+    "network_security_config.xml"
+  );
+}
+
+/**
+ * Returns the directory `tauri icon` writes the adaptive launcher icons into
+ * (`ic_launcher.xml`, `ic_launcher_round.xml`).
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The `res/mipmap-anydpi-v26` directory of that tree.
+ * @example
+ * ```ts
+ * androidAdaptiveIconDirectory("/repo/.moku/tauri/src-tauri/gen/android");
+ * // "/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res/mipmap-anydpi-v26"
+ * ```
+ */
+export function androidAdaptiveIconDirectory(genDirectory: string): string {
+  return path.join(genDirectory, ...ANDROID_RESOURCE_SEGMENTS, "mipmap-anydpi-v26");
 }

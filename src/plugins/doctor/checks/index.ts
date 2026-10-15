@@ -3,6 +3,8 @@
  * (the providers pattern, spec/15 §1).
  */
 import { androidCheck } from "./android";
+import { androidDebugSigningCheck } from "./android-debug-signing";
+import { androidPlatformCheck } from "./android-platform";
 import { completenessCheck } from "./completeness";
 import { crossRepoCorsCheck, crossRepoDeepLinkCheck } from "./cross-repo";
 import { iosPlatformCheck } from "./ios-platform";
@@ -28,6 +30,8 @@ export const CHECKS: readonly Check[] = [
   iosToolsCheck,
   iosPlatformCheck,
   androidCheck,
+  androidPlatformCheck,
+  androidDebugSigningCheck,
   signingCheck,
   completenessCheck,
   versionsCheck,

@@ -27,10 +27,6 @@ const LEGAL_NOTE = "unsigned and simulator builds are legal";
  *
  * @param input - The check input.
  * @returns Whether to run the keychain probe.
- * @example
- * ```ts
- * shouldProbeKeychain(input); // false when signing.apple.signingIdentity is unset
- * ```
  */
 function shouldProbeKeychain(input: CheckInput): boolean {
   const identity = input.global.signing.apple?.signingIdentity;
@@ -44,10 +40,6 @@ function shouldProbeKeychain(input: CheckInput): boolean {
  *
  * @param input - The check input (uses the injected probe seam).
  * @returns How many codesigning identities `security` listed (0 when the probe fails).
- * @example
- * ```ts
- * await countCodesigningIdentities(input); // 2
- * ```
  */
 async function countCodesigningIdentities(input: CheckInput): Promise<number> {
   const result = await input.probe("security", ["find-identity", "-v", "-p", "codesigning"]);
@@ -64,10 +56,6 @@ async function countCodesigningIdentities(input: CheckInput): Promise<number> {
  *
  * @param input - The check input, scoped to "ios" or "macos".
  * @returns The check result — "pass" or "warn", never "fail".
- * @example
- * ```ts
- * await checkAppleSigning({ target: "macos", env, probe, ... });
- * ```
  */
 async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
   const { target } = input;
@@ -128,10 +116,6 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
  *
  * @param input - The check input, scoped to "android".
  * @returns The check result — "pass" or "warn", never "fail".
- * @example
- * ```ts
- * checkAndroidSigning({ target: "android", env, global, ... });
- * ```
  */
 function checkAndroidSigning(input: CheckInput): CheckResult {
   const envName = input.global.signing.android?.keystorePasswordEnv;
@@ -169,10 +153,6 @@ function checkAndroidSigning(input: CheckInput): CheckResult {
  *
  * @param input - The check input, scoped to "windows".
  * @returns The check result — "pass" or "warn", never "fail".
- * @example
- * ```ts
- * checkWindowsSigning({ target: "windows", global, ... });
- * ```
  */
 function checkWindowsSigning(input: CheckInput): CheckResult {
   const thumbprint = input.global.signing.windows?.certificateThumbprint;
@@ -199,10 +179,6 @@ function checkWindowsSigning(input: CheckInput): CheckResult {
  *
  * @param input - The check input, scoped to "ios", "macos", "android" or "windows".
  * @returns The check result.
- * @example
- * ```ts
- * await run({ target: "ios", env, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   if (input.target === "android") return checkAndroidSigning(input);

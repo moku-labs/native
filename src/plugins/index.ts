@@ -1,7 +1,7 @@
-// biome-ignore-all assist/source/organizeImports: two-section barrel layout (instances → type namespaces) is house style
+// biome-ignore-all assist/source/organizeImports: sectioned barrel layout (instances → values → type namespaces) is house style
 /**
- * Plugin barrel — re-exports all framework plugin instances, the one plugin-owned runtime
- * helper, and the per-plugin type namespaces.
+ * Plugin barrel — re-exports all framework plugin instances, the plugin runtime values a
+ * type namespace cannot carry, and the per-plugin type namespaces.
  */
 
 // ─── Plugin Instances ────────────────────────────────────────
@@ -11,9 +11,7 @@ export { doctorPlugin } from "./doctor";
 export { projectPlugin } from "./project";
 export { tauriPlugin } from "./tauri";
 
-// ─── Helpers ─────────────────────────────────────────────────
-// The type namespaces below carry TYPES ONLY, so the one runtime value a plugin owns —
-// the error class consumers `instanceof`-check — is re-exported by name here.
+// ─── Plugin Values ───────────────────────────────────────────
 export { TauriError } from "./tauri/errors";
 
 // ─── Plugin Types (type-only namespace re-exports) ───────────

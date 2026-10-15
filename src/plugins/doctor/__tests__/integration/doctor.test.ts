@@ -1,6 +1,6 @@
 /* eslint-disable unicorn/no-null -- fixture mirrors tauri.version()'s real `{ cliVersion } | null`
    contract, exercised here through a fake tauri CLI spawn instead of a fake probe. */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
@@ -199,6 +199,40 @@ describe("doctor plugin integration", () => {
     for (const resolve of resolvers) resolve();
     const report = await reportPromise;
     expect(report.checks.length).toBeGreaterThanOrEqual(startedCommands.length);
+  });
+
+  it("run({ target: 'android' }) reports the SDK platform and debug keystore read from the real fs", async () => {
+    // A real SDK with platforms/android-37 and a real home with the debug keystore: both
+    // checks pass only when the real fs facade's exists/readdir actually read the disk.
+    // The env reaches ctx.env through an env provider, so process.env (and with it
+    // os.homedir(), which project's projectDir guard reads) stays untouched.
+    const sdk = path.join(projectDir, "sdk");
+    const home = path.join(projectDir, "home");
+    await mkdir(path.join(sdk, "platforms", "android-37"), { recursive: true });
+    await mkdir(path.join(home, ".android"), { recursive: true });
+    await writeFile(path.join(home, ".android", "debug.keystore"), "");
+    const env = { ANDROID_HOME: sdk, HOME: home };
+    const app = framework.createApp({
+      config: { ...validAppConfig, projectDir, targets: ["android"] },
+      pluginConfigs: {
+        doctor: { probeImpl: probeAlwaysOk },
+        tauri: { spawnImpl: spawnTauriInfo, nodePath: "/usr/bin/node" },
+        env: { providers: [{ name: "doctor-android-test", load: () => env }] }
+      }
+    });
+
+    const report = await app.doctor.run({ target: "android" });
+
+    const ids = report.checks.map(result => result.id);
+    const toolchain = ids.indexOf("android-toolchain");
+    expect(ids.slice(toolchain, toolchain + 3)).toEqual([
+      "android-toolchain",
+      "android-platform",
+      "android-debug-signing"
+    ]);
+    const statusOf = (id: string) => report.checks.find(result => result.id === id)?.status;
+    expect(statusOf("android-platform")).toBe("pass");
+    expect(statusOf("android-debug-signing")).toBe("pass");
   });
 
   it("a rejecting check does not sink the whole report", async () => {

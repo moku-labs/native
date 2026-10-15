@@ -62,10 +62,6 @@ function parseSimulatorSdks(stdout: string): readonly string[] {
  *
  * @param input - The check input, scoped to the "ios" target.
  * @returns The check result — "pass" or "warn", never "fail".
- * @example
- * ```ts
- * await run({ target: "ios", probe, ... });
- * ```
  */
 async function run(input: CheckInput): Promise<CheckResult> {
   const [sdks, runtimes] = await Promise.all([
