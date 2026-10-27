@@ -1827,7 +1827,8 @@ try {
   Node API surfaces. tauri.dev() carries an onOutput render seam for cli.
 - A26 native shell (2026-10-14, .planning/decisions.md, numbered D1–D9 there):
   page contract A + native N3 — a versioned __MOKU_NATIVE__ v1 + moku-native:* DOM events +
-  --moku-safe-* CSS variables, implemented by the generated local plugin
+  --moku-safe-* CSS variables (since 2026-10-27 the shell writes --moku-device-safe-*, so a
+  page's own --moku-safe-* rule wins), implemented by the generated local plugin
   tauri-plugin-moku-shell; D1 the debug profile is a release build with debug marks (not
   `tauri android build --debug`); D2 debug is Android-only in this change; D3 the debug
   profile implies the shell; D4 the store profile owns (only) the moku network security
