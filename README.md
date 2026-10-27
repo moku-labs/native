@@ -108,7 +108,7 @@ Each `build.run({ target })` walks the phase pipeline `scaffold → codegen → 
 |---|---|
 | `display.setFrameRate(fps \| null)` / `display.maxHz` | Picks the slowest display mode at or above `fps` at the current resolution (`null` restores the default); `maxHz` is the panel's top rate. |
 | `thermal.read()` | Thermal status and ADPF headroom; a `moku-native:thermal` event on `window` on every status change. |
-| `insets.current` | Safe-area insets in CSS px, mirrored to `--moku-safe-top/right/bottom/left` on `<html>`, with a `moku-native:insets` event on `window`. |
+| `insets.current` | Safe-area insets in CSS px, mirrored to `--moku-device-safe-top/right/bottom/left` on `<html>` (a page's own `--moku-safe-*` wins over them), with a `moku-native:insets` event on `window`. |
 | `device`, `ready` | Model, manufacturer and SDK level, filled in once `ready` resolves (it never rejects). |
 | `build` | `{ profile: "release" \| "debug", id }` — baked in at generate time. |
 | `share(file)` | Debug builds only: writes the bytes to the app cache and opens the share sheet. |

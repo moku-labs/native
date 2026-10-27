@@ -133,11 +133,13 @@ describe("shellPageScript — the page contract v1", () => {
 
     page.__MOKU_NATIVE_PUSH__?.("insets", { top: 24, right: 0, bottom: 48, left: 0 });
 
+    // Bug: written as --moku-safe-*, the inline insets beat a page's own --moku-safe-* rule, and
+    // a HUD that adds a gap to the insets lay under the status bar (A26, 34 px instead of 55).
     expect(Object.fromEntries(style)).toEqual({
-      "--moku-safe-top": "24px",
-      "--moku-safe-right": "0px",
-      "--moku-safe-bottom": "48px",
-      "--moku-safe-left": "0px"
+      "--moku-device-safe-top": "24px",
+      "--moku-device-safe-right": "0px",
+      "--moku-device-safe-bottom": "48px",
+      "--moku-device-safe-left": "0px"
     });
     expect(events.at(-1)).toEqual({
       type: "moku-native:insets",

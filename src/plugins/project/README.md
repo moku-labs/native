@@ -431,11 +431,16 @@ type MokuNative = {
 
 | Push | On the page |
 |---|---|
-| `insets` (status bars and cutout for top/left/right, navigation bars and cutout for bottom, in dp) | `--moku-safe-top`, `--moku-safe-right`, `--moku-safe-bottom`, `--moku-safe-left` (`<n>px`) on `document.documentElement.style`, `insets.current` updated, then `moku-native:insets` dispatched on `window` with the insets as `detail` |
+| `insets` (status bars and cutout for top/left/right, navigation bars and cutout for bottom, in dp) | `--moku-device-safe-top`, `--moku-device-safe-right`, `--moku-device-safe-bottom`, `--moku-device-safe-left` (`<n>px`) on `document.documentElement.style`, `insets.current` updated, then `moku-native:insets` dispatched on `window` with the insets as `detail` |
 | `thermal` (every thermal status change, API 29+) | `moku-native:thermal` dispatched on `window`, `detail` = the full thermal reading |
 
 The script also asks for the last insets once at start, so a push that came before it is not
-lost. Pages read them as `var(--moku-safe-top, env(safe-area-inset-top))`.
+lost. Pages read them as
+`var(--moku-safe-top, var(--moku-device-safe-top, env(safe-area-inset-top)))`, the chain of
+`@moku-labs/game`. The shell writes `--moku-device-safe-*` and not `--moku-safe-*`: a property
+in the root's `style` attribute beats every stylesheet rule, so a page that sets `--moku-safe-*`
+itself from the insets (the insets plus a gap of its own) keeps its rule. The editor writes the
+same four properties for a device preset in its iframe.
 
 **iOS.** Deferred (Decision D6). WKWebView caps `requestAnimationFrame` at 60 Hz on ProMotion
 with no public API, so a future iOS shell will answer `setFrameRate` with
