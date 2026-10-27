@@ -888,12 +888,13 @@ type MokuNative = {
   the shell writes them to cacheDir/moku-share/<name> and opens the share sheet.
 - Debug: console.log|info|warn|error|debug still run and also reach logcat under the tag
   `moku-page` (arguments stringified, objects as JSON, at most 4000 characters).
-- Pushes via globalThis.__MOKU_NATIVE_PUSH__: `insets` sets --moku-safe-top, --moku-safe-right,
-  --moku-safe-bottom, --moku-safe-left (`<n>px`) on document.documentElement.style, updates
+- Pushes via globalThis.__MOKU_NATIVE_PUSH__: `insets` sets --moku-device-safe-top, --moku-device-safe-right,
+  --moku-device-safe-bottom, --moku-device-safe-left (`<n>px`) on document.documentElement.style, updates
   insets.current and dispatches `moku-native:insets` on window; `thermal` (every status
   change, API 29+) dispatches `moku-native:thermal` with the reading as detail. The script
   also asks for the last insets once at start. Pages read them as
-  var(--moku-safe-top, env(safe-area-inset-top)).
+  var(--moku-safe-top, var(--moku-device-safe-top, env(safe-area-inset-top))); a page's own
+  --moku-safe-* rule wins, since the shell never writes --moku-safe-* inline.
 
 WebView origin per platform (location.origin of the packaged page):
 | Platform | Origin |

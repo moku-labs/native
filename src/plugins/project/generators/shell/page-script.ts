@@ -45,13 +45,17 @@ const CONTRACT_BODY = String.raw`  var MAX_SHARE_BYTES = 32 * 1024 * 1024;
     g.dispatchEvent(new g.CustomEvent(type, { detail: detail }));
   }
 
+  // The system insets go in --moku-device-safe-*, never in --moku-safe-*: an inline property on
+  // the root beats every stylesheet rule, so a page that sets --moku-safe-* from the insets (a gap
+  // added to them) would lose its rule. A page reads them as
+  // var(--moku-safe-top, var(--moku-device-safe-top, env(safe-area-inset-top))).
   function paintInsets() {
     var root = g.document && g.document.documentElement;
     if (!root) return false;
-    root.style.setProperty("--moku-safe-top", state.insets.top + "px");
-    root.style.setProperty("--moku-safe-right", state.insets.right + "px");
-    root.style.setProperty("--moku-safe-bottom", state.insets.bottom + "px");
-    root.style.setProperty("--moku-safe-left", state.insets.left + "px");
+    root.style.setProperty("--moku-device-safe-top", state.insets.top + "px");
+    root.style.setProperty("--moku-device-safe-right", state.insets.right + "px");
+    root.style.setProperty("--moku-device-safe-bottom", state.insets.bottom + "px");
+    root.style.setProperty("--moku-device-safe-left", state.insets.left + "px");
     return true;
   }
 
