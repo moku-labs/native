@@ -206,6 +206,24 @@ describe("patchAndroidWindowBackground", () => {
     expect(result).toEqual({ patched: [colourFile, dayThemes], unchanged: [] });
   });
 
+  it("leaves a night theme file without the app theme as it is", async () => {
+    const otherNight = GENERATED_THEMES.replace("Theme.my_app", "Theme.other");
+    await seed(nightThemes, otherNight);
+
+    const result = await patchAndroidWindowBackground(dir, genDir, "#10161d");
+
+    expect(result).toEqual({ patched: [colourFile, dayThemes], unchanged: [nightThemes] });
+    expect(await readFile(nightThemes, "utf8")).toBe(otherNight);
+  });
+
+  it("refuses a day theme file without the app theme when a colour is set", async () => {
+    await seed(dayThemes, GENERATED_THEMES.replace("Theme.my_app", "Theme.other"));
+
+    await expect(patchAndroidWindowBackground(dir, genDir, "#10161d")).rejects.toThrow(
+      `[native] ${dayThemes} has no <style name="Theme.my_app"> to set the window background in.`
+    );
+  });
+
   it("throws without a manifest theme when a colour is set, and does nothing when unset", async () => {
     await seed(manifestPath, androidManifest().replace(' android:theme="@style/Theme.my_app"', ""));
 

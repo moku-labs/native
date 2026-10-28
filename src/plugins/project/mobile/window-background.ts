@@ -28,6 +28,9 @@ const MARKER = "<!-- moku:native window background -->";
 /** The colour resource the theme items point at. */
 const COLOUR_NAME = "moku_window_background";
 
+/** The unqualified resource directory: the day theme and the colour resource live there. */
+const VALUES_DIRECTORY = "values";
+
 /** The theme file `tauri android init` writes per resource qualifier. */
 const THEMES_FILE = "themes.xml";
 
@@ -163,7 +166,7 @@ async function themeFiles(resourceDirectory: string): Promise<string[]> {
   const entries = await readdir(resourceDirectory, { withFileTypes: true });
   // Sorted by directory name: as full paths `values-night/` would sort before `values/`.
   return entries
-    .filter(entry => entry.isDirectory() && entry.name.startsWith("values"))
+    .filter(entry => entry.isDirectory() && entry.name.startsWith(VALUES_DIRECTORY))
     .map(entry => entry.name)
     .toSorted()
     .map(name => path.join(resourceDirectory, name, THEMES_FILE))
@@ -246,26 +249,22 @@ export async function patchAndroidWindowBackground(
 ): Promise<PatchResult> {
   const colour = backgroundColor === undefined ? undefined : androidColour(backgroundColor);
   const resourceDirectory = androidResourceDirectory(genDirectory);
-  const dayThemes = path.join(resourceDirectory, "values", THEMES_FILE);
+  const dayThemes = path.join(resourceDirectory, VALUES_DIRECTORY, THEMES_FILE);
 
   // A colour needs the app theme and the day theme file before anything is written.
   const styleName = colour === undefined ? "" : await appThemeName(genDirectory);
   if (colour !== undefined && !existsSync(dayThemes)) throw initError(`${dayThemes} not found`);
 
   const result: ResultLists = { patched: [], unchanged: [] };
-  const colourPath = path.join(resourceDirectory, "values", `${COLOUR_NAME}.xml`);
+  const colourPath = path.join(resourceDirectory, VALUES_DIRECTORY, `${COLOUR_NAME}.xml`);
   await syncColourFile(projectDirectory, colourPath, colour, result);
 
   // The day file must hold the app theme; a qualified one (values-night) gets it when it does.
   for (const file of await themeFiles(resourceDirectory)) {
     const source = await readFile(file, "utf8");
     const holdsTheme = file === dayThemes || source.includes(`<style name="${styleName}"`);
-    const patched = applyWindowBackground(
-      source,
-      styleName,
-      colour !== undefined && holdsTheme,
-      file
-    );
+    const enabled = colour !== undefined && holdsTheme;
+    const patched = applyWindowBackground(source, styleName, enabled, file);
     const action = await writeIfChanged(file, patched, projectDirectory);
     (action === "written" ? result.patched : result.unchanged).push(file);
   }

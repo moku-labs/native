@@ -158,8 +158,9 @@ async function patchAndroid(options: {
  * Deterministic, idempotent post-init patch pass over an existing complete gen/ tree.
  * Android gets, in this order, its build-profile patches, its release signing block, the
  * main activity's manifest attributes, the system bar style in MainActivity.kt, the window
- * and icon-splash background in the app theme, then the runner command. The profile patches run before signing so that the store profile cuts
- * its Gradle block out byte for byte, wherever the signing block sits. iOS gets the Xcode
+ * and icon-splash background in the app theme, then the runner command. The profile
+ * patches run before signing so that the store profile cuts its Gradle block out byte for
+ * byte, wherever the signing block sits. iOS gets the Xcode
  * entitlements-modification setting (without it the SECOND build of the same tree fails),
  * then the runner command. The runner rewrite runs only when the caller supplies a
  * `runner`. iOS takes no manifest entries, no background colour and no profile: its
