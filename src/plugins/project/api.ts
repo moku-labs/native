@@ -193,7 +193,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
 
   /**
    * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
-   * entries and `app.backgroundColor` (the status bar icons follow it), then logs.
+   * entries and `app.backgroundColor` (the status bar icons and the window background follow it), then
+   * logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.

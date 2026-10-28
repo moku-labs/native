@@ -140,6 +140,22 @@ export async function androidMainActivityFiles(genDirectory: string): Promise<st
 }
 
 /**
+ * Returns the directory `tauri android init` writes the app's resources into, where the
+ * window background patch finds every `values*\/themes.xml`.
+ *
+ * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @returns The `app/src/main/res` directory of that tree.
+ * @example
+ * ```ts
+ * androidResourceDirectory("/repo/.moku/tauri/src-tauri/gen/android");
+ * // "/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res"
+ * ```
+ */
+export function androidResourceDirectory(genDirectory: string): string {
+  return path.join(genDirectory, ...ANDROID_RESOURCE_SEGMENTS);
+}
+
+/**
  * Returns the app's string resources, where the debug profile renames the app.
  *
  * @param genDirectory - The `src-tauri/gen/android` directory.

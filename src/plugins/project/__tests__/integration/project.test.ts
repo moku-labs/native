@@ -29,7 +29,7 @@ const validAppConfig = {
 const manifestWithMainActivity = (extra: string) =>
   [
     "<manifest>",
-    "    <application>",
+    '    <application android:theme="@style/Theme.test_app">',
     "        <activity",
     ...(extra ? [`            ${extra}`] : []),
     '            android:name=".MainActivity">',
@@ -39,6 +39,10 @@ const manifestWithMainActivity = (extra: string) =>
     "</manifest>",
     ""
   ].join("\n");
+
+/** The day `themes.xml` of a gen/android tree, where the app theme lives. */
+const themesPath = (genDir: string) =>
+  path.join(genDir, "app", "src", "main", "res", "values", "themes.xml");
 
 /** A captured pre-change artifact. */
 const baseline = (name: string) =>
@@ -79,8 +83,9 @@ describe("complex tier: project plugin (integration)", () => {
   };
 
   /**
-   * Seeds the gen/android files the Android patch pass reads: the manifest, and the
-   * generated MainActivity.kt the status bar style is written into.
+   * Seeds the gen/android files the Android patch pass reads: the manifest, the
+   * generated MainActivity.kt the status bar style is written into, and the app theme the
+   * window background is written into.
    */
   const seedAndroid = async (manifest: string) => {
     const genDir = path.join(projectDir, "src-tauri", "gen", "android");
@@ -90,6 +95,12 @@ describe("complex tier: project plugin (integration)", () => {
     await writeFile(path.join(genDir, "app", "build.gradle.kts"), "plugins {}\n", "utf8");
     await writeFile(manifestPath, manifest, "utf8");
     await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
+    await mkdir(path.dirname(themesPath(genDir)), { recursive: true });
+    await writeFile(
+      themesPath(genDir),
+      '<resources>\n    <style name="Theme.test_app" parent="Theme.Material3.DayNight.NoActionBar">\n    </style>\n</resources>\n',
+      "utf8"
+    );
     return manifestPath;
   };
 
@@ -276,6 +287,26 @@ describe("complex tier: project plugin (integration)", () => {
       expect(await readFile(activityPath, "utf8")).toContain(
         "enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT), navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))"
       );
+    });
+
+    it("patchMobile paints the Android window and icon splash in app.backgroundColor", async () => {
+      const genDir = path.join(projectDir, "src-tauri", "gen", "android");
+      await seedAndroid(manifestWithMainActivity(""));
+      const app = createMobileApp();
+
+      await app.project.patchMobile({ target: "android" });
+
+      const themes = await readFile(themesPath(genDir), "utf8");
+      expect(themes).toContain(
+        '<item name="android:windowBackground">@color/moku_window_background</item>'
+      );
+      expect(themes).toContain('<item name="android:windowSplashScreenBackground"');
+      expect(
+        await readFile(
+          path.join(path.dirname(themesPath(genDir)), "moku_window_background.xml"),
+          "utf8"
+        )
+      ).toContain('<color name="moku_window_background">#10161d</color>');
     });
 
     it("patchMobile removes a stale Android lock when the orientation is unset", async () => {
