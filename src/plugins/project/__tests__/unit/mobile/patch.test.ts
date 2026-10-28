@@ -292,13 +292,22 @@ describe("patchMobile", () => {
     expect(existsSync(path.join(genDir, "app"))).toBe(false);
   });
 
-  it("android styles the status bar after the manifest and before the runner — one report", async () => {
+  it("android styles the status bar and the window background after the manifest and before the runner — one report", async () => {
     const genDir = await seedAndroid();
     const gradlePath = path.join(genDir, "app", "build.gradle.kts");
     const manifestPath = await seedAndroidManifest(genDir);
     const activityPath = mainActivityPath(genDir);
     await mkdir(path.dirname(activityPath), { recursive: true });
     await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
+    const valuesDir = path.join(genDir, "app", "src", "main", "res", "values");
+    const themesPath = path.join(valuesDir, "themes.xml");
+    const colourPath = path.join(valuesDir, "moku_window_background.xml");
+    await mkdir(valuesDir, { recursive: true });
+    await writeFile(
+      themesPath,
+      '<resources>\n    <style name="Theme.my_app" parent="P">\n    </style>\n</resources>\n',
+      "utf8"
+    );
     const buildSrcDir = path.join(genDir, "buildSrc", "src", "main", "java");
     await mkdir(buildSrcDir, { recursive: true });
     const taskPath = path.join(buildSrcDir, "BuildTask.kt");
@@ -314,10 +323,13 @@ describe("patchMobile", () => {
     );
 
     expect(result).toEqual({
-      patched: [manifestPath, activityPath, taskPath],
+      patched: [manifestPath, activityPath, colourPath, themesPath, taskPath],
       unchanged: [gradlePath]
     });
     expect(await readFile(activityPath, "utf8")).toContain("SystemBarStyle.dark(");
+    expect(await readFile(themesPath, "utf8")).toContain(
+      '<item name="android:windowBackground">@color/moku_window_background</item>'
+    );
   });
 
   it("android fails with a fix-it when a colour meets a tree without MainActivity.kt", async () => {

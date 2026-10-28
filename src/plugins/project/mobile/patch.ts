@@ -4,7 +4,8 @@
  * `profile.ts` (the Android build-profile patches), `signing.ts` (the Android
  * release-signing block), `manifest.ts` (the Android main activity's attributes, such as
  * the orientation lock), `system-bars.ts` (the Android status bar icon style from
- * `app.backgroundColor`), `runner.ts` (the Xcode / Android-Studio runner command) and
+ * `app.backgroundColor`), `window-background.ts` (the Android window and icon-splash
+ * background from the same colour), `runner.ts` (the Xcode / Android-Studio runner command) and
  * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work).
  */
 import { existsSync } from "node:fs";
@@ -17,6 +18,7 @@ import { patchAndroidProfile } from "./profile";
 import { patchRunner } from "./runner";
 import { assertDebugKeystore, patchAndroidSigning } from "./signing";
 import { patchAndroidSystemBars } from "./system-bars";
+import { patchAndroidWindowBackground } from "./window-background";
 import { patchXcodeSettings } from "./xcode-settings";
 
 /** The profile of a pass whose caller names none: the store profile, warnings dropped. */
@@ -73,8 +75,8 @@ async function patchIos(
 
 /**
  * The Android half of {@link patchMobile}: the build-profile patches, the release signing
- * block, the main activity's manifest attributes, the status bar style, then the runner
- * command when the caller supplies a runner.
+ * block, the main activity's manifest attributes, the status bar style, the window
+ * background, then the runner command when the caller supplies a runner.
  *
  * @param options - What to patch.
  * @param options.projectDirectory - The Tauri project root.
@@ -82,7 +84,8 @@ async function patchIos(
  * @param options.runner - The absolute Node/tauri.js runner pair, or undefined to keep it.
  * @param options.signing - The full signing config (only `.android` is consulted).
  * @param options.manifest - Android manifest entries for the main activity.
- * @param options.backgroundColor - `app.backgroundColor`, which the status bar icons follow.
+ * @param options.backgroundColor - `app.backgroundColor`, which the status bar icons and the
+ *   window background follow.
  * @param options.profile - The Android build profile.
  * @returns The paths patched vs. left unchanged, merged over every patch.
  * @throws {Error} When the `gen/android` tree (or its `app/build.gradle.kts`) is missing, the
@@ -129,7 +132,18 @@ async function patchAndroid(options: {
     genDirectory,
     options.backgroundColor
   );
-  const androidResults = [profileResult, signingResult, manifestResult, systemBarsResult];
+  const windowResult = await patchAndroidWindowBackground(
+    projectDirectory,
+    genDirectory,
+    options.backgroundColor
+  );
+  const androidResults = [
+    profileResult,
+    signingResult,
+    manifestResult,
+    systemBarsResult,
+    windowResult
+  ];
   if (!runner) return mergePatchResults(...androidResults);
 
   // The runner command last, only when the caller names one.
@@ -143,9 +157,10 @@ async function patchAndroid(options: {
 /**
  * Deterministic, idempotent post-init patch pass over an existing complete gen/ tree.
  * Android gets, in this order, its build-profile patches, its release signing block, the
- * main activity's manifest attributes, the system bar style in MainActivity.kt, then the
- * runner command. The profile patches run before signing so that the store profile cuts
- * its Gradle block out byte for byte, wherever the signing block sits. iOS gets the Xcode
+ * main activity's manifest attributes, the system bar style in MainActivity.kt, the window
+ * and icon-splash background in the app theme, then the runner command. The profile
+ * patches run before signing so that the store profile cuts its Gradle block out byte for
+ * byte, wherever the signing block sits. iOS gets the Xcode
  * entitlements-modification setting (without it the SECOND build of the same tree fails),
  * then the runner command. The runner rewrite runs only when the caller supplies a
  * `runner`. iOS takes no manifest entries, no background colour and no profile: its
@@ -156,14 +171,15 @@ async function patchAndroid(options: {
  * @param opts - The mobile platform, and optionally the absolute Node/tauri.js runner pair.
  * @param signing - The full signing config (only `.android` is consulted).
  * @param manifest - Android manifest entries for the main activity (ignored on iOS).
- * @param backgroundColor - `app.backgroundColor`; the Android status bar icons follow it
- *   (ignored on iOS).
+ * @param backgroundColor - `app.backgroundColor`; the Android status bar icons, window
+ *   background and icon-splash background follow it (ignored on iOS).
  * @param profile - The Android build profile; the store profile when omitted.
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
  * @throws {Error} When the Android `gen/android` tree (or its `app/build.gradle.kts`) is
  *   missing, the debug keystore is missing in the debug profile (before anything is
  *   written), manifest entries meet a missing manifest or an unclear main activity, or a
- *   background colour meets a tree without exactly one MainActivity.kt to style.
+ *   background colour meets a tree without exactly one MainActivity.kt to style or without
+ *   the app theme to set the window background in.
  */
 export async function patchMobile(
   projectDirectory: string,
