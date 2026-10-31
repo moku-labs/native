@@ -18,7 +18,7 @@ import { shellRustArtifacts } from "./rust";
  * @returns The crate's artifacts, paths relative to `projectDir`; empty without the shell.
  * @example
  * ```ts
- * generateShell({ global, target: "android", capabilities: [resolve("shell")] }, "debug")[0]?.path;
+ * generateShell({ global, target: "android", capabilities: [resolve("shell")], profile: "debug" }, "debug")[0]?.path;
  * // "plugins/moku-shell/Cargo.toml"
  * ```
  */

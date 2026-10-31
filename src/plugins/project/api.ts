@@ -124,7 +124,12 @@ export function createProjectApi(ctx: ProjectContext): Api {
     // Resolve the capabilities this target and profile compose.
     const profile = opts.profile ?? "store";
     const capabilities = resolveConfiguredCapabilities(ctx.global, opts.target, profile);
-    const input: GeneratorInput = { global: ctx.global, target: opts.target, capabilities };
+    const input: GeneratorInput = {
+      global: ctx.global,
+      target: opts.target,
+      capabilities,
+      profile
+    };
 
     // Render every generated artifact, the shell crate last.
     const artifacts = [
@@ -194,7 +199,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
   /**
    * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
    * entries and `app.backgroundColor` (the status bar icons and the window background
-   * follow it), then logs.
+   * follow it), hands iOS `ios.privacyManifest`, then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
@@ -208,7 +213,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
       ctx.global.signing,
       manifest,
       ctx.global.app.backgroundColor,
-      profile
+      profile,
+      ctx.global.ios?.privacyManifest
     );
     ctx.log.info("project:patchMobile", {
       target: opts.target,

@@ -3,10 +3,12 @@
  * plugin's `onInit`, so a misconfigured app fails at `createApp` with a `[native]` fix-it
  * instead of deep inside `tauri build`.
  */
+import path from "node:path";
 import type { Config } from "../../config";
 import { isDeliveryPath, isDerivedPath } from "./paths";
 import { assertKnownCapabilities } from "./registry";
 
+/** Reverse-DNS app identifier: at least two dot-separated labels. */
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/i;
 
 /** `MAJOR.MINOR.PATCH` with an optional pre-release/build suffix — lands raw in Cargo TOML. */
@@ -26,6 +28,9 @@ const HEX_COLOUR_PATTERN = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
 
 /** The three `Orientation` values — plain-JS config can carry anything else. */
 const ORIENTATION_PATTERN = /^(?:portrait|landscape|any)$/;
+
+/** `MAJOR.MINOR[.PATCH]` — lands raw in `project.yml` and `project.pbxproj`. */
+const IOS_VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?$/;
 
 /**
  * Validates one free-text config value that is interpolated verbatim into a generated
@@ -126,6 +131,73 @@ function assertIconInset(inset: number | undefined): void {
 }
 
 /**
+ * Tells a plain object from everything else `typeof` calls an object: `null`, a `Date`, a
+ * class instance. Only a plain object renders as a `<dict>` with its entries in it.
+ *
+ * @param value - The configured value.
+ * @returns True, narrowing `value`, when it is a plain object.
+ * @example
+ * ```ts
+ * isPlainObject({ a: 1 }); // true
+ * isPlainObject(new Date(0)); // false
+ * ```
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value instanceof Object && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/**
+ * Validates one `ios.infoPlist` value and everything below it. Config arrives as plain JS
+ * too, and anything but a string, a boolean, an array or a plain object would render as an
+ * empty `<dict>`, so the `PlistValue` type is not trusted.
+ *
+ * @param field - The dotted config path of the value, used verbatim in the error.
+ * @param value - The configured value.
+ * @throws {Error} When the value, or one nested in it, is not a plist value.
+ * @example
+ * ```ts
+ * assertPlistValue("ios.infoPlist.Build", 7); // throws: [native] ios.infoPlist.Build is not a plist value.
+ * ```
+ */
+function assertPlistValue(field: string, value: unknown): void {
+  if (typeof value === "string" || typeof value === "boolean") return;
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    throw new Error(
+      `[native] ${field} is not a plist value.\n  Use a string, a boolean, an array or a plain object.`
+    );
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    assertPlistValue(`${field}.${key}`, child);
+  }
+}
+
+/**
+ * Validates `ios`: the privacy manifest must be an absolute path, because the patch pass
+ * runs from whichever cwd started the build, and every `infoPlist` value must be a plist
+ * value.
+ *
+ * @param ios - The configured `ios` block, or undefined when unset.
+ * @throws {Error} When the manifest path is relative or a plist value is invalid.
+ * @example
+ * ```ts
+ * assertIosConfig({ privacyManifest: "PrivacyInfo.xcprivacy" }); // throws: [native] ios.privacyManifest "PrivacyInfo.xcprivacy" must be an absolute path.
+ * ```
+ */
+function assertIosConfig(ios: Config["ios"]): void {
+  const privacyManifest = ios?.privacyManifest;
+  if (privacyManifest !== undefined && !path.isAbsolute(privacyManifest)) {
+    throw new Error(
+      `[native] ios.privacyManifest "${privacyManifest}" must be an absolute path.\n  Resolve it first, such as with path.resolve("PrivacyInfo.xcprivacy").`
+    );
+  }
+
+  for (const [key, value] of Object.entries(ios?.infoPlist ?? {})) {
+    assertPlistValue(`ios.infoPlist.${key}`, value);
+  }
+}
+
+/**
  * Validates the app identity and web wiring: `app.name`, a reverse-DNS `app.identifier`,
  * and every `web.*` field. Each lands verbatim in tauri.conf.json, where a missing value
  * fails deep inside `tauri build` instead of at `createApp`.
@@ -197,13 +269,13 @@ function assertDeepLinkScheme(global: Readonly<Config>): void {
  * Validates the global config at composition time — throws `[native]`-formatted errors
  * for missing app identity, missing web wiring, values that would break out of the
  * generated file they are written into, a window colour, orientation or adaptive icon
- * inset outside its allowed shape, a `projectDir` outside the project, an `outDir` this app must not
- * deliver into, unknown `config.system` names, or a `deep-link` composition missing its
- * scheme.
+ * inset outside its allowed shape, an `ios` block a build could not use, a `projectDir`
+ * outside the project, an `outDir` this app must not deliver into, unknown `config.system`
+ * names, or a `deep-link` composition missing its scheme.
  *
  * @param global - Frozen global framework config.
- * @throws {Error} When identity, web wiring, interpolated values, presentation fields,
- *   derived directories, system names, or deep-link config are invalid.
+ * @throws {Error} When identity, web wiring, interpolated values, presentation fields, the
+ *   `ios` block, derived directories, system names, or deep-link config are invalid.
  */
 export function validateProjectConfig(global: Readonly<Config>): void {
   // Stanza 1 — identity and web wiring. Every field below lands verbatim in
@@ -259,6 +331,14 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     "environment variable name",
     'Reference the password by variable NAME, such as "ANDROID_KEY_PASSWORD" — never the password itself.'
   );
+  assertShape(
+    "signing.apple.iosMinimumSystemVersion",
+    global.signing.apple?.iosMinimumSystemVersion,
+    IOS_VERSION_PATTERN,
+    "iOS version",
+    'Use a version such as "16.0".'
+  );
+  assertIosConfig(global.ios);
 
   // Stanza 3 — the directories this framework writes into and deletes from. projectDir is
   // checked with the same containment rule the destructive clean guard uses, so a

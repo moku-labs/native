@@ -1,7 +1,9 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { SigningConfig } from "../../../../../config";
 import { signingCheck } from "../../../checks/signing";
 import type { ProbeFn } from "../../../types";
-import { baseGlobalConfig, createCheckInput, createEnv } from "./fixtures";
+import { baseGlobalConfig, createCheckInput, createEnv, createFs } from "./fixtures";
 
 /** A complete notarization credential set (app-specific password flavour). */
 const NOTARIZATION_ENV = {
@@ -48,6 +50,41 @@ function createProbe(stdout: string): ProbeFn {
  */
 function withApple(apple: { teamId?: string; signingIdentity?: string }) {
   return { ...baseGlobalConfig, signing: { apple } };
+}
+
+/** The two android password env-var NAMES a full store signing config references. */
+const ANDROID_PASSWORD_VARS = {
+  // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- config-safe env var NAME, not a secret value (spec's own field name).
+  keystorePasswordEnv: "KEYSTORE_PW",
+  // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- config-safe env var NAME, not a secret value (spec's own field name).
+  keyPasswordEnv: "KEY_PW"
+};
+
+/** An absolute keystore path: Gradle's `file()` takes it as it stands. */
+const ABSOLUTE_KEYSTORE = path.join(path.sep, "secrets", "release.jks");
+
+/** Where Gradle's `file("release.jks")` lands: the `app` module of the fixture's `projectDir`. */
+const GRADLE_RELATIVE_KEYSTORE = path.join(
+  ".moku/tauri",
+  "src-tauri",
+  "gen",
+  "android",
+  "app",
+  "release.jks"
+);
+
+/** Sentinel values of the two password vars: the check may ask whether they exist, nothing more. */
+const STORE_SECRET = "store-secret-value";
+const KEY_SECRET = "key-secret-value";
+
+/**
+ * Builds a global config whose `signing.android` carries the given fields.
+ *
+ * @param android - The `signing.android` fields under test.
+ * @returns A frozen-shaped global config fixture.
+ */
+function withAndroid(android: NonNullable<SigningConfig["android"]>) {
+  return { ...baseGlobalConfig, signing: { android } };
 }
 
 describe("signingCheck.appliesTo", () => {
@@ -263,5 +300,136 @@ describe("signingCheck.run — android", () => {
 
     expect(result.status).toBe("pass");
     expect(result.message).not.toContain("hunter2");
+  });
+});
+
+describe("signingCheck.run — android key password and keystore file", () => {
+  it("warns naming the key password var with an export fix-it (bug: Gradle signs with a null key password)", async () => {
+    const result = await signingCheck.run(
+      createCheckInput({
+        target: "android",
+        global: withAndroid(ANDROID_PASSWORD_VARS),
+        env: createEnv({ KEYSTORE_PW: STORE_SECRET })
+      })
+    );
+
+    expect(result).toMatchObject({ id: "signing-android", target: "android", status: "warn" });
+    expect(result.message).toContain('"KEY_PW"');
+    expect(result.fixIt).toContain("export KEY_PW");
+  });
+
+  it("warns naming the path when the keystore file is missing (bug: doctor is green, then Gradle fails on the file)", async () => {
+    const input = createCheckInput({
+      target: "android",
+      global: withAndroid({
+        keystorePasswordEnv: ANDROID_PASSWORD_VARS.keystorePasswordEnv,
+        keystorePath: ABSOLUTE_KEYSTORE
+      }),
+      env: createEnv({ KEYSTORE_PW: STORE_SECRET }),
+      fs: createFs()
+    });
+
+    const result = await signingCheck.run(input);
+
+    expect(result).toMatchObject({ id: "signing-android", target: "android", status: "warn" });
+    expect(result.message).toContain(ABSOLUTE_KEYSTORE);
+    expect(result.fixIt).toContain(ABSOLUTE_KEYSTORE);
+    expect(result.fixIt).toContain("signing.android.keystorePath");
+    expect(input.fs.exists).toHaveBeenCalledWith(ABSOLUTE_KEYSTORE);
+  });
+
+  it("looks a relative keystore path up under gen/android/app, where Gradle's file() resolves it (bug: checked from the consumer root)", async () => {
+    const global = withAndroid({
+      keystorePasswordEnv: ANDROID_PASSWORD_VARS.keystorePasswordEnv,
+      keystorePath: "release.jks"
+    });
+    const env = createEnv({ KEYSTORE_PW: STORE_SECRET });
+
+    const found = await signingCheck.run(
+      createCheckInput({
+        target: "android",
+        global,
+        env,
+        fs: createFs({ files: { [GRADLE_RELATIVE_KEYSTORE]: "" } })
+      })
+    );
+    const notThere = await signingCheck.run(
+      createCheckInput({
+        target: "android",
+        global,
+        env,
+        fs: createFs({ files: { "release.jks": "" } })
+      })
+    );
+
+    expect(found.status).toBe("pass");
+    expect(notThere.status).toBe("warn");
+    expect(notThere.message).toContain(GRADLE_RELATIVE_KEYSTORE);
+  });
+
+  it("passes when both password vars are set and the keystore exists", async () => {
+    const result = await signingCheck.run(
+      createCheckInput({
+        target: "android",
+        global: withAndroid({ ...ANDROID_PASSWORD_VARS, keystorePath: ABSOLUTE_KEYSTORE }),
+        env: createEnv({ KEYSTORE_PW: STORE_SECRET, KEY_PW: KEY_SECRET }),
+        fs: createFs({ files: { [ABSOLUTE_KEYSTORE]: "" } })
+      })
+    );
+
+    expect(result).toMatchObject({ id: "signing-android", target: "android", status: "pass" });
+  });
+
+  it("keeps the order: store password first, then key password, then the keystore (bug: the new warnings hide the older one)", async () => {
+    const global = withAndroid({ ...ANDROID_PASSWORD_VARS, keystorePath: ABSOLUTE_KEYSTORE });
+
+    const nothingSet = await signingCheck.run(
+      createCheckInput({ target: "android", global, env: createEnv({ KEY_PW: KEY_SECRET }) })
+    );
+    const storeSet = await signingCheck.run(
+      createCheckInput({ target: "android", global, env: createEnv({ KEYSTORE_PW: STORE_SECRET }) })
+    );
+
+    expect(nothingSet.message).toBe('[native] android signing env var "KEYSTORE_PW" is not set.');
+    expect(storeSet.message).toContain('"KEY_PW"');
+  });
+
+  it.each([
+    {
+      outcome: "the key password warning",
+      values: { KEYSTORE_PW: STORE_SECRET },
+      files: { [ABSOLUTE_KEYSTORE]: "" },
+      status: "warn"
+    },
+    {
+      outcome: "the keystore warning",
+      values: { KEYSTORE_PW: STORE_SECRET, KEY_PW: KEY_SECRET },
+      files: {},
+      status: "warn"
+    },
+    {
+      outcome: "the pass",
+      values: { KEYSTORE_PW: STORE_SECRET, KEY_PW: KEY_SECRET },
+      files: { [ABSOLUTE_KEYSTORE]: "" },
+      status: "pass"
+    }
+  ])("neither reads nor prints a password value on $outcome", async ({ values, files, status }) => {
+    const env = createEnv(values);
+    const readValue = vi.spyOn(env, "get");
+
+    const result = await signingCheck.run(
+      createCheckInput({
+        target: "android",
+        global: withAndroid({ ...ANDROID_PASSWORD_VARS, keystorePath: ABSOLUTE_KEYSTORE }),
+        env,
+        fs: createFs({ files })
+      })
+    );
+
+    const printed = `${result.message} ${result.fixIt ?? ""}`;
+    expect(result.status).toBe(status);
+    expect(printed).not.toContain(STORE_SECRET);
+    expect(printed).not.toContain(KEY_SECRET);
+    expect(readValue).not.toHaveBeenCalled();
   });
 });

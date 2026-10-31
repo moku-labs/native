@@ -19,6 +19,13 @@ const deepLinkConf = {
   mobile: [{ scheme: ["mycoolapp"], appLink: false }]
 };
 
+/** The conf of a target whose `app.buildNumber` is `buildNumber`. */
+const confWithBuildNumber = (target: "android" | "ios" | "macos", buildNumber: string) => {
+  const app = { name: "My Cool App", identifier: "com.example.mycoolapp", buildNumber };
+  const [artifact] = generateTauriConf(generatorInputWith(target, { app }));
+  return JSON.parse(artifact?.content ?? "{}");
+};
+
 describe("generateTauriConf", () => {
   it("emits bundle.windows.certificateThumbprint only when it is configured", () => {
     const signed = JSON.parse(
@@ -50,7 +57,8 @@ describe("generateTauriConf", () => {
       beforeDevCommand: { script: "bun run dev", cwd: path.resolve(".") },
       beforeBuildCommand: { script: "bun run build", cwd: path.resolve(".") },
       devUrl: "http://localhost:5173",
-      frontendDist: "../../../dist"
+      frontendDist: "../../../dist",
+      removeUnusedCommands: true
     });
   });
 
@@ -196,5 +204,59 @@ describe("generateTauriConf", () => {
     const conf = JSON.parse(generateTauriConf(input)[0]?.content ?? "{}");
 
     expect(conf.app.windows).toEqual([{ title: "My Cool App", backgroundColor: "#10161d" }]);
+  });
+
+  describe("bundle.android.versionCode", () => {
+    it("is a JSON number on android (bug: Tauri refuses a string versionCode)", () => {
+      expect(confWithBuildNumber("android", "42").bundle.android).toStrictEqual({
+        versionCode: 42
+      });
+    });
+
+    it.each([
+      ["1", 1],
+      ["2100000000", 2_100_000_000]
+    ])("accepts the bound %s (bug: an edge a store accepts is refused)", (buildNumber, versionCode) => {
+      expect(confWithBuildNumber("android", buildNumber).bundle.android).toEqual({ versionCode });
+    });
+
+    it.each([
+      "0",
+      "2100000001",
+      "1.0.3",
+      "007",
+      "99999999999999999999"
+    ])("refuses %s on android (bug: Tauri fails on it deep inside the build)", buildNumber => {
+      expect(() => confWithBuildNumber("android", buildNumber)).toThrow(
+        `[native] app.buildNumber "${buildNumber}" is not a valid Android versionCode.\n  Use a whole number from 1 to 2100000000, such as "42".`
+      );
+    });
+
+    it.each([
+      "ios",
+      "macos"
+    ] as const)("leaves %s alone (bug: a legal bundle version is refused, or a number leaks onto another platform)", target => {
+      const conf = confWithBuildNumber(target, "1.0.3");
+
+      expect(conf.bundle.android).toEqual({});
+      expect(JSON.stringify(conf.bundle.android)).not.toContain("versionCode");
+    });
+
+    it("keeps android empty without a build number", () => {
+      expect(confFor("android").bundle.android).toEqual({});
+    });
+  });
+
+  describe("build.removeUnusedCommands", () => {
+    it.each([
+      "macos",
+      "android"
+    ] as const)("strips unused commands from a store build on %s (bug: every plugin command stays in the binary)", target => {
+      expect(confFor(target, "store").build.removeUnusedCommands).toBe(true);
+    });
+
+    it("stays out of a debug build (bug: the debug page loses a command it calls)", () => {
+      expect(confFor("android", "debug").build).not.toHaveProperty("removeUnusedCommands");
+    });
   });
 });

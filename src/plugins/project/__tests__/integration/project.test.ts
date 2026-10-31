@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 import type { BuildProfile, Target } from "../../../../config";
 import { coreConfig, createCore } from "../../../../config";
 import { projectPlugin } from "../../index";
-import { mainActivityPath, REAL_MAIN_ACTIVITY } from "../unit/mobile/fixtures";
+import {
+  mainActivityPath,
+  REAL_MAIN_ACTIVITY,
+  REAL_PBXPROJ,
+  REAL_PROJECT_YML
+} from "../unit/mobile/fixtures";
 
 // ---------------------------------------------------------------------------
 // Complex tier: project plugin (integration)
@@ -104,7 +109,10 @@ describe("complex tier: project plugin (integration)", () => {
     return manifestPath;
   };
 
-  /** The fixtures under `fixtures/` were captured from this app BEFORE the shell existed. */
+  /**
+   * The fixtures under `fixtures/` were captured from this app BEFORE the shell existed;
+   * the Cargo one has since gained the `[profile.release]` table every app gets.
+   */
   const createAndroidApp = (system: ReadonlyArray<{ name: string }>) => {
     const framework = createCore(coreConfig, { plugins: [projectPlugin] });
     return framework.createApp({
@@ -116,6 +124,17 @@ describe("complex tier: project plugin (integration)", () => {
         capabilities: {}
       }
     });
+  };
+
+  /** Seeds the real files of a kept gen/apple tree; returns their paths. */
+  const seedApple = async () => {
+    const genDir = path.join(projectDir, "src-tauri", "gen", "apple");
+    const projectYml = path.join(genDir, "project.yml");
+    const pbxproj = path.join(genDir, "store-probe.xcodeproj", "project.pbxproj");
+    await mkdir(path.dirname(pbxproj), { recursive: true });
+    await writeFile(projectYml, REAL_PROJECT_YML, "utf8");
+    await writeFile(pbxproj, REAL_PBXPROJ, "utf8");
+    return { projectYml, pbxproj, manifest: path.join(genDir, "PrivacyInfo.xcprivacy") };
   };
 
   /** A generated file below `src-tauri`. */
@@ -495,6 +514,57 @@ describe("complex tier: project plugin (integration)", () => {
       expectTypeOf(app.project.generate)
         .parameter(0)
         .toEqualTypeOf<{ target: Target; profile?: BuildProfile | undefined }>();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: store builds
+  // -------------------------------------------------------------------------
+
+  describe("runtime: store builds", () => {
+    it("the profile reaches tauri.conf.json, an omitted one is the store one (bug: a store build keeps every command, or a debug build loses one)", async () => {
+      const app = createAndroidApp([]);
+
+      await app.project.generate({ target: "android" });
+      expect(await generated("tauri.conf.json")).toContain('"removeUnusedCommands": true');
+
+      await app.project.generate({ target: "android", profile: "debug" });
+      expect(await generated("tauri.conf.json")).not.toContain("removeUnusedCommands");
+    });
+
+    it("patchMobile moves a kept iOS tree to the configured minimum and carries config.ios into it (bug: the config never reaches the patch)", async () => {
+      const { projectYml, pbxproj, manifest } = await seedApple();
+      const source = path.join(projectDir, "app.xcprivacy");
+      await writeFile(source, "<plist/>\n", "utf8");
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: {
+          ...validAppConfig,
+          projectDir,
+          signing: { apple: { iosMinimumSystemVersion: "26.0" } },
+          ios: { privacyManifest: source, infoPlist: { ITSAppUsesNonExemptEncryption: false } }
+        }
+      });
+
+      await app.project.generate({ target: "ios" });
+      await app.project.patchMobile({ target: "ios" });
+
+      expect(await generated("Info.ios.plist")).toContain(
+        "  <key>ITSAppUsesNonExemptEncryption</key>\n  <false/>"
+      );
+      expect(await readFile(manifest, "utf8")).toBe("<plist/>\n");
+      expect(await readFile(projectYml, "utf8")).toContain("    iOS: 26.0\n");
+      expect(await readFile(pbxproj, "utf8")).toContain("IPHONEOS_DEPLOYMENT_TARGET = 26.0;");
+    });
+
+    it("rejects a relative ios.privacyManifest at createApp", () => {
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+
+      expect(() =>
+        framework.createApp({
+          config: { ...validAppConfig, projectDir, ios: { privacyManifest: "app.xcprivacy" } }
+        })
+      ).toThrow('[native] ios.privacyManifest "app.xcprivacy" must be an absolute path.');
     });
   });
 

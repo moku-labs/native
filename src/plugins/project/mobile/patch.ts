@@ -5,14 +5,17 @@
  * release-signing block), `manifest.ts` (the Android main activity's attributes, such as
  * the orientation lock), `system-bars.ts` (the Android status bar icon style from
  * `app.backgroundColor`), `window-background.ts` (the Android window and icon-splash
- * background from the same colour), `runner.ts` (the Xcode / Android-Studio runner command) and
- * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work).
+ * background from the same colour), `runner.ts` (the Xcode / Android-Studio runner command),
+ * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work)
+ * and `ios-project.ts` (the iOS deployment target and privacy manifest).
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SigningConfig, TauriRunner } from "../../../config";
+import { DEFAULT_IOS_MINIMUM_SYSTEM_VERSION } from "../generators/tauri-conf";
 import { genDirectoryPath } from "../layout";
 import type { AndroidProfile, ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
+import { patchDeploymentTarget, patchPrivacyManifest, readPrivacyManifest } from "./ios-project";
 import { patchAndroidManifest } from "./manifest";
 import { patchAndroidProfile } from "./profile";
 import { patchRunner } from "./runner";
@@ -44,33 +47,53 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
 }
 
 /**
- * The iOS half of {@link patchMobile}: the Xcode entitlements-modification setting, then the
- * runner command when the caller supplies a runner. A tree that was never initialised is
- * left alone and reports nothing.
+ * The iOS half of {@link patchMobile}: the Xcode entitlements-modification setting, the
+ * deployment target, the privacy manifest, then the runner command when the caller supplies
+ * a runner. A tree that was never initialised is left alone and reports nothing.
  *
- * @param projectDirectory - The Tauri project root.
- * @param genDirectory - The `src-tauri/gen/apple` directory.
- * @param runner - The absolute Node/tauri.js runner pair, or undefined to keep the runner.
- * @returns The paths patched vs. left unchanged, merged over both patches.
+ * @param options - What to patch.
+ * @param options.projectDirectory - The Tauri project root.
+ * @param options.genDirectory - The `src-tauri/gen/apple` directory.
+ * @param options.runner - The absolute Node/tauri.js runner pair, or undefined to keep it.
+ * @param options.minimumVersion - The iOS deployment target to write.
+ * @param options.privacyManifest - `ios.privacyManifest`; unset removes one a previous pass
+ *   added.
+ * @returns The paths patched vs. left unchanged, merged over every patch.
+ * @throws {Error} When the privacy manifest source is missing (before anything is written),
+ *   or a project file lacks a line a patch needs.
  */
-async function patchIos(
-  projectDirectory: string,
-  genDirectory: string,
-  runner: TauriRunner | undefined
-): Promise<PatchResult> {
+async function patchIos(options: {
+  projectDirectory: string;
+  genDirectory: string;
+  runner: TauriRunner | undefined;
+  minimumVersion: string;
+  privacyManifest: string | undefined;
+}): Promise<PatchResult> {
+  const { projectDirectory, genDirectory, runner } = options;
+
   // No gen/apple tree yet: nothing to patch.
   if (!existsSync(genDirectory)) return { patched: [], unchanged: [] };
 
+  // Read the manifest before anything is written.
+  const manifest = await readPrivacyManifest(options.privacyManifest);
+
   // The entitlements setting: without it the second build of the same tree fails.
   const settingsResult = await patchXcodeSettings(projectDirectory, genDirectory);
-  if (!runner) return settingsResult;
+  const deploymentResult = await patchDeploymentTarget(
+    projectDirectory,
+    genDirectory,
+    options.minimumVersion
+  );
+  const privacyResult = await patchPrivacyManifest(projectDirectory, genDirectory, manifest);
+  const iosResults = [settingsResult, deploymentResult, privacyResult];
+  if (!runner) return mergePatchResults(...iosResults);
 
-  // The runner command, only when the caller names one.
+  // The runner command last, only when the caller names one.
   const runnerResult = await patchRunner(projectDirectory, genDirectory, {
     target: "ios",
     runner
   });
-  return mergePatchResults(settingsResult, runnerResult);
+  return mergePatchResults(...iosResults, runnerResult);
 }
 
 /**
@@ -162,24 +185,31 @@ async function patchAndroid(options: {
  * patches run before signing so that the store profile cuts its Gradle block out byte for
  * byte, wherever the signing block sits. iOS gets the Xcode
  * entitlements-modification setting (without it the SECOND build of the same tree fails),
- * then the runner command. The runner rewrite runs only when the caller supplies a
- * `runner`. iOS takes no manifest entries, no background colour and no profile: its
- * orientation lock and signing travel through the generated `Info.ios.plist` sidecar and
- * tauri.conf.json, and its status bar adapts to the page on its own.
+ * the deployment target and the privacy manifest (a kept tree never runs xcodegen again, so
+ * both land in `project.yml` AND `project.pbxproj`), then the runner command. The runner
+ * rewrite runs only when the caller supplies a `runner`. iOS takes no manifest entries, no
+ * background colour and no profile: its orientation lock and signing travel through the
+ * generated `Info.ios.plist` sidecar and tauri.conf.json, and its status bar adapts to the
+ * page on its own.
  *
  * @param projectDirectory - The Tauri project root.
  * @param opts - The mobile platform, and optionally the absolute Node/tauri.js runner pair.
- * @param signing - The full signing config (only `.android` is consulted).
+ * @param signing - The full signing config (`.android` on Android, the iOS minimum in
+ *   `.apple` on iOS).
  * @param manifest - Android manifest entries for the main activity (ignored on iOS).
  * @param backgroundColor - `app.backgroundColor`; the Android status bar icons, window
  *   background and icon-splash background follow it (ignored on iOS).
  * @param profile - The Android build profile; the store profile when omitted.
+ * @param privacyManifest - `ios.privacyManifest`, an absolute path; unset removes one a
+ *   previous pass added (ignored on Android).
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
  * @throws {Error} When the Android `gen/android` tree (or its `app/build.gradle.kts`) is
  *   missing, the debug keystore is missing in the debug profile (before anything is
- *   written), manifest entries meet a missing manifest or an unclear main activity, or a
+ *   written), manifest entries meet a missing manifest or an unclear main activity, a
  *   background colour meets a tree without exactly one MainActivity.kt to style or without
- *   the app theme to set the window background in.
+ *   the app theme to set the window background in; or when the iOS privacy manifest source
+ *   is missing (before anything is written), or `project.yml` or `project.pbxproj` lacks a
+ *   line a patch needs.
  */
 export async function patchMobile(
   projectDirectory: string,
@@ -187,12 +217,21 @@ export async function patchMobile(
   signing: SigningConfig,
   manifest: readonly ManifestEntry[] = [],
   backgroundColor?: string,
-  profile: AndroidProfile = STORE_PROFILE
+  profile: AndroidProfile = STORE_PROFILE,
+  privacyManifest?: string
 ): Promise<PatchResult> {
   const genDirectory = genDirectoryPath(projectDirectory, opts.target);
 
-  // iOS: the Xcode setting and the runner command only.
-  if (opts.target === "ios") return patchIos(projectDirectory, genDirectory, opts.runner);
+  // iOS: the Xcode project files, and the runner command.
+  if (opts.target === "ios") {
+    return patchIos({
+      projectDirectory,
+      genDirectory,
+      runner: opts.runner,
+      minimumVersion: signing.apple?.iosMinimumSystemVersion ?? DEFAULT_IOS_MINIMUM_SYSTEM_VERSION,
+      privacyManifest
+    });
+  }
 
   // Android: the full ordered pass.
   return patchAndroid({

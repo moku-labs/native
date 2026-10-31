@@ -1,7 +1,7 @@
 /**
  * @file project plugin generators — shared GeneratorInput/Artifact types.
  */
-import type { Config, Target } from "../../../config";
+import type { BuildProfile, Config, Target } from "../../../config";
 import type { ResolvedCapability } from "../types";
 
 /**
@@ -15,6 +15,8 @@ export type GeneratorInput = {
   target: Target;
   /** Capabilities resolved from `config.system`, filtered to rows whose `platforms` include `target`. */
   capabilities: readonly ResolvedCapability[];
+  /** The build profile being generated for. */
+  profile: BuildProfile;
 };
 
 /** One pure generated file — a project-relative path (from `projectDir`) plus its full content. */
