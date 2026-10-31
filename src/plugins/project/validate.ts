@@ -8,6 +8,7 @@ import type { Config } from "../../config";
 import { isDeliveryPath, isDerivedPath } from "./paths";
 import { assertKnownCapabilities } from "./registry";
 
+/** Reverse-DNS app identifier: at least two dot-separated labels. */
 const IDENTIFIER_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/i;
 
 /** `MAJOR.MINOR.PATCH` with an optional pre-release/build suffix — lands raw in Cargo TOML. */

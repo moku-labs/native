@@ -153,7 +153,19 @@ function sectionBounds(
  * @throws {Error} `[native]` when the `mainGroup` line, the group or its list is not there.
  * @example
  * ```ts
- * rootGroupChildren(splitLines(realPbxproj)); // the index of the root group's `children = (`
+ * const text = [
+ *   "/* Begin PBXGroup section *\/",
+ *   "\t\tAA = {",
+ *   "\t\t\tisa = PBXGroup;",
+ *   "\t\t\tchildren = (",
+ *   "\t\t\t);",
+ *   "\t\t};",
+ *   "/* End PBXGroup section *\/",
+ *   "/* Begin PBXProject section *\/",
+ *   "\t\t\tmainGroup = AA;",
+ *   "/* End PBXProject section *\/"
+ * ].join("\n");
+ * rootGroupChildren(splitLines(text)); // 3
  * ```
  */
 function rootGroupChildren(lines: readonly SourceLine[]): number {
@@ -193,7 +205,13 @@ function rootGroupChildren(lines: readonly SourceLine[]): number {
  * @throws {Error} `[native]` when the section or its list is not there.
  * @example
  * ```ts
- * resourcesFiles(splitLines(realPbxproj)); // the index of the Resources phase's `files = (`
+ * const text = [
+ *   "/* Begin PBXResourcesBuildPhase section *\/",
+ *   "\t\t\tisa = PBXResourcesBuildPhase;",
+ *   "\t\t\tfiles = (",
+ *   "/* End PBXResourcesBuildPhase section *\/"
+ * ].join("\n");
+ * resourcesFiles(splitLines(text)); // 2
  * ```
  */
 function resourcesFiles(lines: readonly SourceLine[]): number {
@@ -369,9 +387,12 @@ function firstTargetSource(lines: readonly SourceLine[]): { index: number; line:
     targets + 1,
     lines.length
   );
+
   const index = sources + 1;
   const line = lines[index];
-  if (targets === -1 || sources === -1 || !line || !YML_LIST_ITEM_PATTERN.test(line.body)) {
+  const hasSourcesList =
+    targets !== -1 && sources !== -1 && YML_LIST_ITEM_PATTERN.test(line?.body ?? "");
+  if (!line || !hasSourcesList) {
     throw missingAnchorError("the target's sources list", PROJECT_YML_FILE);
   }
   return { index, line };
@@ -442,10 +463,6 @@ export async function readPrivacyManifest(
  *   is `project.yml`.
  * @returns The paths patched vs. left unchanged.
  * @throws {Error} What the transform throws.
- * @example
- * ```ts
- * await rewriteProjectFiles(projectDir, genDir, text => text); // every file unchanged
- * ```
  */
 async function rewriteProjectFiles(
   projectDirectory: string,
@@ -479,6 +496,7 @@ async function rewriteProjectFiles(
  * @example
  * ```ts
  * await patchDeploymentTarget(projectDir, path.join(projectDir, "src-tauri/gen/apple"), "26.0");
+ * // { patched: [".../gen/apple/project.yml", ".../gen/apple/app.xcodeproj/project.pbxproj"], unchanged: [] }
  * ```
  */
 export async function patchDeploymentTarget(
@@ -514,6 +532,7 @@ export async function patchPrivacyManifest(
   genDirectory: string,
   manifest: Uint8Array | undefined
 ): Promise<PatchResult> {
+  // Name the manifest in every project file, or drop it from them.
   const enabled = manifest !== undefined;
   const { patched, unchanged } = await rewriteProjectFiles(
     projectDirectory,
@@ -525,12 +544,12 @@ export async function patchPrivacyManifest(
   );
   if (patched.length + unchanged.length === 0) return { patched, unchanged };
 
+  // With the option on, the file follows the configured bytes.
   const manifestPath = iosPrivacyManifestPath(genDirectory);
   if (manifest !== undefined) {
     const action = await writeIfChanged(manifestPath, manifest, projectDirectory);
-    return action === "written"
-      ? { patched: [...patched, manifestPath], unchanged }
-      : { patched, unchanged: [...unchanged, manifestPath] };
+    if (action === "written") return { patched: [...patched, manifestPath], unchanged };
+    return { patched, unchanged: [...unchanged, manifestPath] };
   }
 
   // Single named file inside gen/apple, never a recursive remove.

@@ -82,6 +82,20 @@ function androidVersionCode(input: GeneratorInput): number | undefined {
 }
 
 /**
+ * Whether a platform block carries anything worth writing.
+ *
+ * @param block - A compacted block.
+ * @returns True when the block has at least one key.
+ * @example
+ * ```ts
+ * hasEntries({}); // false
+ * ```
+ */
+function hasEntries(block: Record<string, string>): boolean {
+  return Object.keys(block).length > 0;
+}
+
+/**
  * Builds the `bundle` block — icon set, optional store metadata, and the signing
  * identifiers. `iOS` and `android` always exist (Tauri expects the keys), `iOS` always
  * carries a deployment target Xcode accepts, and `android` carries a `versionCode` on an
@@ -97,6 +111,7 @@ function androidVersionCode(input: GeneratorInput): number | undefined {
  * ```
  */
 function buildBundle(input: GeneratorInput) {
+  // Each platform block holds only what is configured.
   const { app, signing } = input.global;
   const apple = signing.apple ?? {};
   const windows = compact([["certificateThumbprint", signing.windows?.certificateThumbprint]]);
@@ -110,6 +125,7 @@ function buildBundle(input: GeneratorInput) {
     ["bundleVersion", app.buildNumber]
   ]);
 
+  // `iOS` and `android` always exist; `macOS` and `windows` only with something in them.
   return {
     active: true,
     targets: "all",
@@ -120,8 +136,8 @@ function buildBundle(input: GeneratorInput) {
       ["minimumSystemVersion", apple.iosMinimumSystemVersion ?? DEFAULT_IOS_MINIMUM_SYSTEM_VERSION],
       ["bundleVersion", app.buildNumber]
     ]),
-    ...(Object.keys(macOS).length > 0 ? { macOS } : {}),
-    ...(Object.keys(windows).length > 0 ? { windows } : {}),
+    ...(hasEntries(macOS) ? { macOS } : {}),
+    ...(hasEntries(windows) ? { windows } : {}),
     android: versionCode === undefined ? {} : { versionCode }
   };
 }
@@ -170,7 +186,8 @@ function buildPlugins(
  * @throws {Error} `[native]` on android when `app.buildNumber` is not a valid `versionCode`.
  * @example
  * ```ts
- * generateTauriConf({ global, target: "ios", capabilities: [], profile: "store" });
+ * generateTauriConf({ global, target: "ios", capabilities: [], profile: "store" })[0]?.path;
+ * // "src-tauri/tauri.conf.json"
  * ```
  */
 export function generateTauriConf(input: GeneratorInput): Artifact[] {

@@ -58,7 +58,8 @@ const SETUP_END = ["        })?;", "      }", "      Ok(())", "    })"];
  * @returns Artifacts for `src-tauri/src/lib.rs` and `src-tauri/src/main.rs`.
  * @example
  * ```ts
- * generateRust({ global, target: "android", capabilities: [], profile: "store" });
+ * generateRust({ global, target: "android", capabilities: [], profile: "store" }).map(file => file.path);
+ * // ["src-tauri/src/lib.rs", "src-tauri/src/main.rs"]
  * ```
  */
 export function generateRust(input: GeneratorInput): Artifact[] {

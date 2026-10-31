@@ -20,6 +20,9 @@ const APPLE_CREDENTIAL_SETS: ReadonlyArray<{ label: string; vars: readonly strin
   }
 ];
 
+/** The scopes that carry a signing identifier or env ref. */
+const SIGNING_TARGETS: ReadonlySet<string> = new Set(["ios", "macos", "android", "windows"]);
+
 /** Every signing message repeats this — doctor never fails a build over signing. */
 const LEGAL_NOTE = "unsigned and simulator builds are legal";
 
@@ -69,6 +72,7 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
   const { target } = input;
   const id = `signing-${target}`;
 
+  // One complete credential set.
   const satisfied = APPLE_CREDENTIAL_SETS.find(set => set.vars.every(name => input.env.has(name)));
   if (!satisfied) {
     const options = APPLE_CREDENTIAL_SETS.map(set => set.vars.join(" + ")).join(", or ");
@@ -81,6 +85,7 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
     };
   }
 
+  // iOS signs for a team.
   if (target === "ios" && !input.global.signing.apple?.teamId) {
     return {
       id,
@@ -91,6 +96,7 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
     };
   }
 
+  // Nothing in the keychain to ask about.
   if (!shouldProbeKeychain(input)) {
     return {
       id,
@@ -100,6 +106,7 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
     };
   }
 
+  // At least one identity for the configured signing.
   const identityCount = await countCodesigningIdentities(input);
   if (identityCount === 0) {
     return {
@@ -147,6 +154,7 @@ async function missingKeystore(input: CheckInput): Promise<string | undefined> {
 async function checkAndroidSigning(input: CheckInput): Promise<CheckResult> {
   const envName = input.global.signing.android?.keystorePasswordEnv;
 
+  // No signing at all is legal for a dev build.
   if (!envName) {
     return {
       id: "signing-android",
@@ -156,6 +164,7 @@ async function checkAndroidSigning(input: CheckInput): Promise<CheckResult> {
       fixIt: "set signing.android.keystorePasswordEnv to sign release builds"
     };
   }
+  // The store password's variable.
   if (!input.env.has(envName)) {
     return {
       id: "signing-android",
@@ -166,6 +175,7 @@ async function checkAndroidSigning(input: CheckInput): Promise<CheckResult> {
     };
   }
 
+  // The key password's variable, when it has its own.
   const keyPasswordVariable = input.global.signing.android?.keyPasswordEnv;
   if (keyPasswordVariable && !input.env.has(keyPasswordVariable)) {
     return {
@@ -177,6 +187,7 @@ async function checkAndroidSigning(input: CheckInput): Promise<CheckResult> {
     };
   }
 
+  // The keystore file itself.
   const keystore = await missingKeystore(input);
   if (keystore !== undefined) {
     return {
@@ -264,7 +275,6 @@ export const signingCheck: Check = {
    * signingCheck.appliesTo("android", global); // true
    * ```
    */
-  appliesTo: target =>
-    target === "ios" || target === "macos" || target === "android" || target === "windows",
+  appliesTo: target => SIGNING_TARGETS.has(target),
   run
 };

@@ -41,7 +41,7 @@ export type BuildFlavor = {
    *
    * @example
    * ```ts
-   * await native.build.run({ target: "android", debug: true });
+   * await app.build.run({ target: "android", debug: true });
    * ```
    */
   debug?: boolean | undefined;
