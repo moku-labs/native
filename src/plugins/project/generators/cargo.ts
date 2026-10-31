@@ -1,6 +1,6 @@
 /**
- * @file project plugin generator — Cargo.toml with registry-pinned crate dependencies and
- * the path dependency of every generated local crate.
+ * @file project plugin generator — Cargo.toml with registry-pinned crate dependencies, the
+ * path dependency of every generated local crate, and the size profile of a release build.
  */
 import path from "node:path";
 import type { ResolvedCapability } from "../types";
@@ -19,6 +19,20 @@ const TAURI_VERSION_FLOOR = "2.12";
  * so no other target ever builds the crate and the table adds no per-target difference.
  */
 const IOS_ONLY_DEPENDENCIES = [`[target.'cfg(target_os = "ios")'.dependencies]`, 'objc2 = "0.6"'];
+
+/**
+ * The release profile, for every target and both build profiles: the debug build is a
+ * release build too, so what a phone measures is what the store ships. It trades compile
+ * time for a smaller library, and `panic = "abort"` drops the unwinding tables.
+ */
+const RELEASE_PROFILE = [
+  "[profile.release]",
+  "codegen-units = 1",
+  "lto = true",
+  'opt-level = "s"',
+  'panic = "abort"',
+  "strip = true"
+];
 
 /**
  * Derives a valid Cargo package name from the app's display name — lowercased,
@@ -90,7 +104,8 @@ function dependencyLine(capability: ResolvedCapability): string | undefined {
  * the tray API is not compiled in at all), plus one dependency line per resolved
  * capability that ships a crate: pinned for a published one, by path for the generated
  * shell crate. Feature-only and permission-only rows contribute no dependency line. The
- * iOS-only `objc2` table closes the file on every target.
+ * `[profile.release]` table follows, and the iOS-only `objc2` table closes the file on
+ * every target.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
@@ -125,6 +140,8 @@ export function generateCargo(input: GeneratorInput): Artifact[] {
     'serde = { version = "1", features = ["derive"] }',
     'serde_json = "1"',
     ...pinnedDeps,
+    "",
+    ...RELEASE_PROFILE,
     "",
     ...IOS_ONLY_DEPENDENCIES,
     ""

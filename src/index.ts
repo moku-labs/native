@@ -23,7 +23,7 @@
  *
  * | Field | Type | Default |
  * |---|---|---|
- * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor?; adaptiveIconInset? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour, `adaptiveIconInset` the Android adaptive icon inset (percent per side, `0 < n ≤ 30`) |
+ * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor?; adaptiveIconInset?; keepScreenOn? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `buildNumber` is also the Android `versionCode` (a whole number from 1 to 2100000000, checked at generate, android only); `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour, `adaptiveIconInset` the Android adaptive icon inset (percent per side, `0 < n ≤ 30`), `keepScreenOn` turns the iOS idle timer off |
  * | `web` | `{ build; devCommand; devUrl; dist; cwd? }` | `"bun run build"`, `"bun run dev"`, `"http://localhost:5173"`, `"dist"` |
  * | `system` | `ReadonlyArray<{ name: string }>` | `[]` — the composed `@moku-labs/system` plugins |
  * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` — keys: `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics`, `shell` |
@@ -31,6 +31,12 @@
  * | `projectDir` | `string` | `".moku/tauri"` — generated Tauri project (gitignored build output) |
  * | `outDir` | `string` | `"dist-native"` — installer delivery root |
  * | `signing` | `SigningConfig` | `{}` — identifiers and env-var NAMES only, never secrets; the generated iOS minimum falls back to `"15.0"` |
+ * | `ios` | `{ infoPlist?; privacyManifest? }` | unset — `infoPlist` merges into `Info.plist` (`app.orientation` wins a shared key); `privacyManifest` is the absolute path of the bundle's `PrivacyInfo.xcprivacy`, and unset removes one an earlier build left |
+ *
+ * Every generated `Cargo.toml` carries a size `[profile.release]`, and a store build sets
+ * `build.removeUnusedCommands` in `tauri.conf.json`. Each iOS patch pass keeps the deployment
+ * target and the privacy manifest in both `project.yml` and `project.pbxproj`, because a kept
+ * tree never runs xcodegen again.
  *
  * Per-plugin config (`pluginConfigs`) — each plugin's own defaults, all seams `undefined`
  * so the real implementation runs unless a test injects one:
@@ -130,6 +136,7 @@ export type {
   NativePhase,
   NativePhaseEvent,
   Orientation,
+  PlistValue,
   SigningConfig,
   Target,
   TauriRunner

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { generateRust } from "../../../generators/rust";
 import { resolve } from "../../../registry";
-import { generatorInputComposing, generatorInputFor } from "./fixtures";
+import { baseGlobalConfig, generatorInputComposing, generatorInputFor } from "./fixtures";
 
 /** The import the iOS arm of the setup hook needs — cfg-gated, so no other target warns. */
 const IOS_MANAGER_IMPORT = ['#[cfg(target_os = "ios")]', "use tauri::Manager;"].join("\n");
@@ -29,6 +29,13 @@ const SAFE_AREA_SETUP = [
 /** The generated lib.rs for an explicit capability composition. */
 const libFor = (...args: Parameters<typeof generatorInputComposing>) =>
   generateRust(generatorInputComposing(...args))[0]?.content ?? "";
+
+/** The generated lib.rs of a config whose `app.keepScreenOn` is `keepScreenOn`. */
+const libKeeping = (keepScreenOn: boolean) =>
+  generateRust({
+    ...generatorInputComposing("ios", [resolve("store")]),
+    global: { ...baseGlobalConfig, app: { ...baseGlobalConfig.app, keepScreenOn } }
+  })[0]?.content;
 
 describe("generateRust", () => {
   it("writes lib.rs and main.rs artifacts", () => {
@@ -115,5 +122,32 @@ describe("generateRust", () => {
 
   it("lib.rs carries no init line for back (core permissions only)", () => {
     expect(libFor("android", [resolve("back")])).not.toContain(".plugin(");
+  });
+
+  describe("app.keepScreenOn", () => {
+    /** The last line of the iOS closure, where the idle timer call follows it. */
+    const INSET_CALL =
+      "          let _: () = msg_send![&*scroll, setContentInsetAdjustmentBehavior: 2isize];\n";
+
+    /** The calls that turn the idle timer off, with their comment. */
+    const IDLE_TIMER_CALLS = [
+      "          // iOS refuses navigator.wakeLock until the first tap, so the app does it at launch.",
+      "          let application: *mut AnyObject = msg_send![objc2::class!(UIApplication), sharedApplication];",
+      "          let _: () = msg_send![&*application, setIdleTimerDisabled: true];",
+      ""
+    ].join("\n");
+
+    it("turns the idle timer off inside the iOS closure, after the inset call (bug: the screen dims on a call off the main thread, or outside the cfg on desktop)", () => {
+      expect(libKeeping(true)).toBe(
+        libFor("ios", [resolve("store")]).replace(
+          INSET_CALL,
+          () => `${INSET_CALL}${IDLE_TIMER_CALLS}`
+        )
+      );
+    });
+
+    it("leaves lib.rs byte-identical when the flag is false (bug: an app that never asked keeps the screen on)", () => {
+      expect(libKeeping(false)).toBe(libFor("ios", [resolve("store")]));
+    });
   });
 });

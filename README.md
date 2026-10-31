@@ -175,10 +175,11 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | `app.version` | `string?` | unset → `"0.1.0"` | Marketing version. |
 | `app.icon` | `string?` | unset | 1024×1024 PNG, relative to cwd. Unset → a placeholder PNG is generated. |
 | `app.category` | `string?` | unset | Store category → `bundle.category`. |
-| `app.buildNumber` | `string?` | unset | Store build number → `bundle.{iOS,macOS}.bundleVersion`. |
+| `app.buildNumber` | `string?` | unset | Store build number → `bundle.{iOS,macOS}.bundleVersion`, and on an android build `bundle.android.versionCode`, as a number. Android refuses anything but a whole number from 1 to 2100000000, at generate; `"1.0.3"` stays legal elsewhere. |
 | `app.orientation` | `"portrait" \| "landscape" \| "any"` | unset (= `"any"`) | Build-time mobile orientation lock → `UISupportedInterfaceOrientations` (+ `~ipad`, `UIRequiresFullScreen`) in `Info.ios.plist`, `android:screenOrientation` on the Android main activity. No runtime lock. |
 | `app.backgroundColor` | `string?` | unset | Hex window colour (`"#10161d"`, `"#10161dff"`) → `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page does not cover. On Android it also paints the activity window and the Android 12+ icon splash, so no dark frame shows between the icon splash and the page's first paint; the status bar icons follow it: light on a dark colour, dark on a light one. |
 | `app.adaptiveIconInset` | `number?` | unset | Android adaptive icon inset, percent per side of the 108 dp canvas (`0 < n ≤ 30`, validated at composition). Wraps the launcher foreground in an `<inset>` so full-bleed art survives the mask; `19.44` keeps it inside the 66 dp safe zone. Re-applied after `tauri icon` on every Android build; unset leaves the icon untouched. |
+| `app.keepScreenOn` | `boolean?` | unset | iOS: the app turns the idle timer off at launch, because iOS refuses `navigator.wakeLock` until the first tap. Android keeps the screen on from the page. |
 | `web.build` | `string` | `"bun run build"` | Runs before a build, in `web.cwd`. |
 | `web.devCommand` | `string` | `"bun run dev"` | Runs before `dev`, in `web.cwd`. |
 | `web.devUrl` | `string` | `"http://localhost:5173"` | Dev server URL — also the `DevHandle.url` and the readiness-poll target. |
@@ -189,9 +190,11 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | `targets` | `readonly Target[]` | `hostTargets(process.platform)` | The host's own desktop target (`darwin`→`macos`, `win32`→`windows`, `linux`→`linux`). **Mobile is opt-in**: name `ios`/`android` explicitly. |
 | `projectDir` | `string` | `".moku/tauri"` | Generated Tauri project root (contains `src-tauri/`). Gitignored build output. |
 | `outDir` | `string` | `"dist-native"` | Installer delivery root — `collect` copies finished artifacts to `outDir/<target>/`. |
-| `signing.apple` | `AppleSigning?` | unset | `teamId`, `signingIdentity`, `providerShortName`, `entitlements`, `appStore`, `exportMethod`, `macosMinimumSystemVersion`, `iosMinimumSystemVersion` (default `"15.0"`: Tauri's own 14.0 is refused by Xcode 27) — see [Signing and store builds](#signing-and-store-builds). |
+| `signing.apple` | `AppleSigning?` | unset | `teamId`, `signingIdentity`, `providerShortName`, `entitlements`, `appStore`, `exportMethod`, `macosMinimumSystemVersion`, `iosMinimumSystemVersion` (default `"15.0"`: Tauri's own 14.0 is refused by Xcode 27; a kept iOS tree follows it) — see [Signing and store builds](#signing-and-store-builds). |
 | `signing.android` | `{ keystorePath?, keystorePasswordEnv?, keyPasswordEnv?, keyAlias? }` | unset | Env-var **names**, never secrets. `keyPasswordEnv` falls back to `keystorePasswordEnv`. |
 | `signing.windows` | `{ certificateThumbprint? }` | unset | Windows signing certificate thumbprint. |
+| `ios.infoPlist` | `Readonly<Record<string, PlistValue>>?` | unset | Keys merged into `Info.plist` through `Info.ios.plist`, nested dictionaries and arrays included. They beat a capability; `app.orientation` beats them. |
+| `ios.privacyManifest` | `string?` | unset | Absolute path of the file the bundle carries as `PrivacyInfo.xcprivacy`. Unset, a manifest an earlier build left in the generated tree is removed. |
 
 Per-plugin knobs, overridable via `createApp({ pluginConfigs })`:
 
@@ -266,6 +269,13 @@ What each piece does:
 > [!NOTE]
 > **Unsigned dev builds and iOS simulator builds need none of this.** `doctor`'s signing check is warn-only for exactly that reason — a missing credential never fails a build, and never flips `report.ok`.
 
+What the generated project adds for a store:
+
+- **A smaller library.** Every `Cargo.toml` carries a `[profile.release]` table (`codegen-units = 1`, `lto = true`, `opt-level = "s"`, `panic = "abort"`, `strip = true`), on every target and in both build profiles. It costs compile time.
+- **No unused commands.** A store build sets `build.removeUnusedCommands: true` in `tauri.conf.json`. A debug build leaves it out.
+- **An Android `versionCode`.** An android build with `app.buildNumber` writes it to `bundle.android.versionCode`, as a number.
+- **`Info.plist` keys and a privacy manifest.** `ios.infoPlist` and `ios.privacyManifest`, see [Configuration](#configuration).
+
 ## Debug builds (Android)
 
 ```ts
@@ -330,6 +340,8 @@ The first iOS build also runs `tauri ios init` once, then rewrites the build pha
 
 Android needs neither: Gradle manages its own `build` tree.
 
+**A kept tree follows the config.** `tauri ios build` never runs xcodegen on a kept tree, so a change to `project.yml` alone reaches no build, and `MinimumOSVersion` would stay on the value of the first `tauri ios init`. Every `patchMobile` therefore writes `iosMinimumSystemVersion` into `deploymentTarget.iOS` in `project.yml` and every `IPHONEOS_DEPLOYMENT_TARGET` in `project.pbxproj`, and keeps `ios.privacyManifest` in both files, as `gen/apple/PrivacyInfo.xcprivacy` in the Resources phase. Unset, the manifest and its entries go again, down to the original bytes. A file without the line a patch needs is a `[native]` error, and a missing manifest source is refused before anything is written.
+
 ## When a build fails
 
 A non-zero `@tauri-apps/cli` exit throws a `TauriError` carrying `kind`, `exitCode` and a scrubbed `stderrTail` (the last cause lines first, then the raw tail — `cli` prints it above the error line). In a terminal it is a branded box and each tail line is cut to the terminal's width minus the box chrome; with no terminal — CI, or `native build > build.log` — there is no box and nothing is cut, so a piped log keeps the full toolchain diagnostic on plain, unpadded lines. Classification runs over the *cause* lines of both streams only, most specific first, so one incidental `CodeSign` line in a 50k-line xcodebuild log cannot decide the taxonomy:
@@ -378,7 +390,7 @@ One **per-plugin event** is declared by `doctor` (hookable via a `depends: [doct
 
 ## Breaking changes in this release
 
-The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them.
+The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them. So are `ios`, `app.keepScreenOn` and the store-build changes, with one earlier stop: a non-numeric `app.buildNumber` on an android build is now refused at generate, where Tauri would have failed on it anyway. `Project.PlistValue` widens to the recursive `PlistValue`, which the package root exports too.
 
 | What breaks | Migration |
 |---|---|

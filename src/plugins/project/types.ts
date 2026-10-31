@@ -8,10 +8,13 @@ import type {
   CapabilityConfigMap,
   Config,
   MobileTarget,
+  PlistValue,
   Target,
   TauriRunner
 } from "../../config";
 import type { BundleLayout } from "./layout";
+
+export type { PlistValue } from "../../config";
 
 /**
  * What one `generate` pass did to each artifact, as paths under `projectDir`: written
@@ -33,8 +36,9 @@ export type CompletenessResult =
 
 /**
  * Result of the idempotent mobile patch pass: Android release signing and the main
- * activity's manifest attributes, the iOS Xcode build settings, and the runner command
- * on both platforms. A file several patches touched is listed once.
+ * activity's manifest attributes, the iOS Xcode build settings, deployment target and
+ * privacy manifest, and the runner command on both platforms. A file several patches
+ * touched is listed once; a file a patch removed is listed as patched.
  */
 export type PatchResult = {
   readonly patched: readonly string[];
@@ -144,21 +148,9 @@ export type DeepLinkConf = {
 export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 
 /**
- * One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, or an `<array>` of strings.
- *
- * @example
- * ```ts
- * const fullScreen: PlistValue = true; // <true/>
- * const portrait: PlistValue = ["UIInterfaceOrientationPortrait"];
- * // <array><string>UIInterfaceOrientationPortrait</string></array>
- * ```
- */
-export type PlistValue = string | boolean | readonly string[];
-
-/**
  * An Info.ios.plist sidecar entry (src-tauri root, outside gen/), which Tauri merges into
  * the app's Info.plist on every iOS build. No registry row carries one today; the
- * orientation lock does.
+ * orientation lock and `ios.infoPlist` do.
  */
 export type PlistEntry = { key: string; value: PlistValue };
 
@@ -201,8 +193,8 @@ export type Api = {
    * write-if-changed writer. When the `shell` capability is composed for the target (named
    * in `config.system`, or implied by the debug profile on android), the
    * `tauri-plugin-moku-shell` crate is generated under `plugins/moku-shell/` too, with the
-   * profile baked into its page script. Without the shell, the output is the same for both
-   * profiles.
+   * profile baked into its page script. Without the shell, the profile changes one key: the
+   * store profile sets `build.removeUnusedCommands` in `tauri.conf.json`.
    *
    * @param opts - The generate options.
    * @param opts.target - The packaging target to generate for.
@@ -259,9 +251,13 @@ export type Api = {
    * signing (the debug keystore under `HOME` ?? `USERPROFILE` in the debug profile), the
    * main activity's manifest attributes (the orientation lock among them) and the status
    * bar style in MainActivity.kt (light icons on a dark `app.backgroundColor`, dark icons
-   * on a light one); iOS gets the Xcode entitlements-modification setting; both get the
+   * on a light one); iOS gets the Xcode entitlements-modification setting, the deployment
+   * target (`signing.apple.iosMinimumSystemVersion`, or its default) and the privacy manifest
+   * (`ios.privacyManifest`; unset removes one an earlier pass added), each in `project.yml`
+   * and `project.pbxproj`, because a kept tree never runs xcodegen again; both get the
    * Xcode/Android-Studio runner-command rewrite when a `runner` is supplied. The build
    * plugin calls it after the mobile init pass, with the runner from `tauri.getRunner()`.
+   * A `gen/apple` tree that was never initialised reports nothing.
    *
    * @param opts - The patch options.
    * @param opts.target - The mobile platform to patch.
@@ -269,7 +265,9 @@ export type Api = {
    * @param opts.profile - The build profile; `"store"` when omitted.
    * @returns The paths patched vs. left unchanged.
    * @throws {Error} `[native]` in the debug profile when the debug keystore is missing,
-   *   with the `keytool` command that creates it.
+   *   with the `keytool` command that creates it; when `ios.privacyManifest` names no file,
+   *   before anything is written; when `project.yml` or `project.pbxproj` lacks a line a
+   *   patch needs.
    * @example
    * ```ts
    * // app.orientation is "portrait", app.backgroundColor is "#10161d", app.identifier is

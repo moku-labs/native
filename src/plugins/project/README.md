@@ -15,7 +15,9 @@ target-set). The XML this plugin does write is presentation: the orientation loc
 `Info.ios.plist` keys and an `android:screenOrientation` attribute on the main activity.
 The one Kotlin source it styles is presentation too: the Android status bar icons follow
 `app.backgroundColor` through the generated `MainActivity.kt`, and the same colour paints
-the Android window and icon splash through the generated app theme.
+the Android window and icon splash through the generated app theme. An iOS app's own
+`Info.plist` keys and privacy manifest come from the `ios` config block, and the mobile patch
+pass keeps a kept iOS tree on them.
 
 Two additions reach past packaging. The `shell` capability generates a small Tauri plugin
 crate, `tauri-plugin-moku-shell`, that installs the page contract
@@ -25,7 +27,7 @@ on-device debug build that installs next to the store app.
 
 ## Tier
 
-The plugin is about 7,250 lines of source in 37 files, with `mobile/` and `generators/` as
+The plugin is about 8,450 lines of source in 39 files, with `mobile/` and `generators/` as
 coordinating sub-domains. It stays **Complex**, not Very Complex, by decision:
 
 - **The API is flat.** One `Api` type in `types.ts`, one `createProjectApi` factory; the
@@ -70,28 +72,43 @@ namespaced API slice does.
 | `mobile/window-background.ts` | the Android window and icon-splash background in `res/values*/themes.xml` and `res/values/moku_window_background.xml`, from `app.backgroundColor` |
 | `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
 | `mobile/xcode-settings.ts` | the iOS entitlements-modification setting (`project.pbxproj` + `project.yml`) |
+| `mobile/ios-project.ts` | the iOS deployment target and privacy manifest (`project.pbxproj` + `project.yml`) |
 | `mobile/patch.ts` | orchestration only — which patches a platform needs, and in which order |
 
 ## Generated artifacts
 
 | Path (under `projectDir`) | Generator | What it carries |
 |---|---|---|
-| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring, the main window (title, `app.backgroundColor`), bundle metadata, Apple signing, a `plugins.<name>` block per **configured** capability |
-| `src-tauri/Cargo.toml` | `generators/cargo.ts` | package manifest, `tauri` (floor `2.12`) with its cargo features, one pinned crate per plugin-backed capability, and the iOS-only `objc2` table |
+| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring (with `build.removeUnusedCommands` in the store profile), the main window (title, `app.backgroundColor`), bundle metadata, Apple signing, the Android `versionCode`, a `plugins.<name>` block per **configured** capability |
+| `src-tauri/Cargo.toml` | `generators/cargo.ts` | package manifest, `tauri` (floor `2.12`) with its cargo features, one pinned crate per plugin-backed capability, the `[profile.release]` size table, and the iOS-only `objc2` table |
 | `src-tauri/build.rs` | `generators/build-script.ts` | `tauri_build::build()` — without it capabilities are never compiled in and `tauri build` fails |
-| `src-tauri/src/lib.rs`, `src/main.rs` | `generators/rust.ts` | mobile entry point + one `.plugin(...)` line per capability + the iOS safe-area `.setup` hook |
+| `src-tauri/src/lib.rs`, `src/main.rs` | `generators/rust.ts` | mobile entry point + one `.plugin(...)` line per capability + the iOS `.setup` hook: the safe area, and the idle timer with `app.keepScreenOn` |
 | `src-tauri/capabilities/default.json` | `generators/capabilities.ts` | `core:default` + every capability permission, scoped to Tauri's platform id (`macOS`, `iOS`, `windows`, `linux`, `android`) |
 | `src-tauri/Entitlements.plist` | `generators/entitlements.ts` | App Store sandbox, only for `signing.apple.appStore` macOS builds with no consumer plist |
-| `src-tauri/Info.ios.plist` | `generators/sidecar.ts` | iOS only, always written: the orientation lock plus any capability `sidecarPlist`; an empty `<dict>` when nothing is locked |
+| `src-tauri/Info.ios.plist` | `generators/sidecar.ts` | iOS only, always written: any capability `sidecarPlist`, then `ios.infoPlist`, then the orientation lock, a later entry winning a shared key; an empty `<dict>` when nothing contributes |
 | `placeholder-icon.png` | `icon.ts` | embedded 1024x1024 PNG, written only when `app.icon` is unset |
 | `plugins/moku-shell/**` | `generators/shell/*.ts` | only when `shell` is composed for the target: the `tauri-plugin-moku-shell` crate (`Cargo.toml` with `links`, `build.rs`, `src/lib.rs`, `src/page.js`, `permissions/default.toml`) and its Android module (`android/build.gradle.kts`, manifest, R8 rules, `MokuShellPlugin.kt`, the per-profile `MokuShellProfile.kt`) |
 
-Without the shell, nothing is written under `plugins/`, and the output is byte for byte what
-it was before the shell existed, in both profiles. With it, `Cargo.toml` gains
+Without the shell, nothing is written under `plugins/`, and the two profiles differ by one
+key: the store profile sets `build.removeUnusedCommands: true` in `tauri.conf.json`, so Tauri
+strips the commands no capability grants, and the debug profile leaves it out. With it,
+`Cargo.toml` gains
 `tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }`, `lib.rs` gains
 `.plugin(tauri_plugin_moku_shell::init())`, and the capability file gains `moku-shell:default`.
 `build.rs` and `default.toml` are generated from one list of six commands (`set_frame_rate`,
 `thermal`, `insets`, `log`, `share`, `info`), so a granted command always exists.
+
+Every generated `Cargo.toml`, on every target and in both profiles, carries a release profile
+that trades compile time for a smaller library:
+
+```toml
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+```
 
 Path fields (`build.frontendDist`, `bundle.macOS.entitlements`) are rebased onto
 `src-tauri` in POSIX form, because that is where Tauri resolves them from.
@@ -184,7 +201,7 @@ app.project.getDebugKeystore();
 
 ## Mobile presentation
 
-Three config fields shape how the app sits on a phone screen. All three are build time
+Four config fields shape how the app sits on a phone screen. All four are build time
 only.
 
 **Orientation.** `app.orientation` locks the screen. Nothing locks it at runtime.
@@ -211,6 +228,11 @@ reports the notch. The hook and the `use tauri::Manager` it needs are `#[cfg(tar
 table: neither adds a per-target difference to `lib.rs` or `Cargo.toml`, and no other
 target compiles `objc2`. The window keeps tauri's default `main` label; the generator never sets one.
 
+**Idle timer (iOS).** iOS refuses `navigator.wakeLock` until the first tap, so a page cannot
+keep the screen on by itself. With `app.keepScreenOn`, the same `with_webview` closure, which
+runs on the main thread, also calls `UIApplication.sharedApplication.setIdleTimerDisabled(true)`.
+Unset, `lib.rs` is byte for byte what it was. Android keeps the screen on from the page.
+
 **Window colour.** `app.backgroundColor` (`#rrggbb` or `#rrggbbaa`) becomes
 `app.windows[0].backgroundColor`. It shows during launch and behind any gap the page does
 not cover; unset, the platform default stays (white in light mode). On Android it also
@@ -225,7 +247,7 @@ paints the window and the icon splash, see [The Android window background](#the-
 | Platform | Patches |
 |---|---|
 | android | build profile → release signing → main-activity manifest attributes → status bar style → window background → runner command |
-| ios | Xcode entitlements-modification setting → runner command |
+| ios | Xcode entitlements-modification setting → deployment target → privacy manifest → runner command |
 
 The profile patches run first, so the store profile cuts its Gradle block out byte for byte
 wherever the signing block sits; see [Build profiles](#build-profiles).
@@ -233,7 +255,55 @@ wherever the signing block sits; see [Build profiles](#build-profiles).
 The runner rewrite runs only when `runner` is passed. The api wrapper hands the Android
 pass its manifest entries: every capability's `activity-attribute` entries, then the
 orientation lock (last, so it wins a clash). It also hands it `app.backgroundColor`, for
-the status bar style and the window background.
+the status bar style and the window background. The iOS pass gets `ios.privacyManifest`, and
+reads the minimum from `signing`. A `gen/apple` tree that was never initialised reports nothing.
+
+### The iOS project files
+
+`tauri ios build` never runs xcodegen on a kept tree, and init runs before this pass, so a
+change to `project.yml` alone reaches no build. A real build measured it: after a change to
+`iosMinimumSystemVersion`, `MinimumOSVersion` kept the value of the first `tauri ios init`.
+Every change here lands in `project.yml`, so a later xcodegen keeps it, and in each
+`project.pbxproj`, the file Xcode reads today. All files are transformed before the first
+write, so a refusal leaves the tree as it was.
+
+**The deployment target.** `deploymentTarget.iOS` in `project.yml` and every
+`IPHONEOS_DEPLOYMENT_TARGET` in `project.pbxproj` become `signing.apple.iosMinimumSystemVersion`,
+or its default. Line endings (CRLF included) and every other byte survive, and a second pass
+reports both files unchanged. A file without such a line is an error, because a silent no-op
+is the bug this patch fixes:
+
+```
+[native] Could not find deploymentTarget.iOS in project.yml.
+  Run clean for ios and build again, or report the project.yml Tauri generated.
+```
+
+**The privacy manifest.** With `ios.privacyManifest`, the file's bytes are copied to
+`gen/apple/PrivacyInfo.xcprivacy` (a binary plist is legal) and the project names it:
+
+| File | Where | What |
+|---|---|---|
+| `project.yml` | the first `sources:` after the top-level `targets:` (a `targetTemplates` block has its own above it) | `- path: PrivacyInfo.xcprivacy` + `buildPhase: resources` |
+| `project.pbxproj` | `PBXBuildFile` section | the build file |
+| `project.pbxproj` | `PBXFileReference` section | the file reference, `lastKnownFileType = text.xml`, `sourceTree = "<group>"` |
+| `project.pbxproj` | `children` of the group the `PBXProject`'s `mainGroup` names | the reference |
+| `project.pbxproj` | `files` of the `PBXResourcesBuildPhase` | the build file |
+
+The four pbxproj lines carry two fixed ids. Each pass first drops every line with those ids
+and the two yml lines, then inserts them, so a second pass is a no-op. The same code removes
+them when the option is unset, and `PrivacyInfo.xcprivacy` goes with them: both files come
+back to their exact bytes. A store pass therefore cleans a manifest an earlier build left.
+
+A source that is not there is refused first, before any patch of the pass writes:
+
+```
+[native] ios.privacyManifest "<path>" was not found.
+  Point config.ios.privacyManifest at the manifest file, or unset it.
+```
+
+A file that lacks an anchor is a `[native] Could not find <anchor> in <file>.` error, and no
+manifest is written. With the option unset no anchor is needed, so an app that never set it
+cannot start failing on a file it never touches.
 
 ### The Android status bar
 
@@ -608,13 +678,26 @@ named file inside `gen/android`, never a recursive remove).
 | `providerShortName` | `bundle.macOS.providerShortName` |
 | `entitlements` | `bundle.macOS.entitlements`, rebased onto `src-tauri` |
 | `appStore: true` | generates `src-tauri/Entitlements.plist` (sandbox + network client) for macOS when `entitlements` is unset |
-| `macosMinimumSystemVersion` / `iosMinimumSystemVersion` | `bundle.{macOS,iOS}.minimumSystemVersion`; iOS defaults to `"15.0"` when unset, because Tauri's 14.0 default is below Xcode 27's floor and fails every iOS build |
+| `macosMinimumSystemVersion` / `iosMinimumSystemVersion` | `bundle.{macOS,iOS}.minimumSystemVersion`; iOS defaults to `"15.0"` when unset, because Tauri's 14.0 default is below Xcode 27's floor and fails every iOS build. A kept iOS tree follows it through [the patch pass](#the-ios-project-files) |
 | `exportMethod` | read by the `tauri` plugin, not by this one |
 
 `app.category` and `app.buildNumber` map to `bundle.category` and
 `bundle.{iOS,macOS}.bundleVersion`. Every one of these keys is ABSENT from the JSON when
 unset — `bundle.iOS` and `bundle.android` stay as empty objects, `bundle.macOS` is omitted
 entirely.
+
+On an android build `app.buildNumber` is also `bundle.android.versionCode`, a JSON number,
+because Tauri refuses a string there. It must be a whole number from 1 to 2100000000 with no
+leading zero:
+
+```
+[native] app.buildNumber "1.0.3" is not a valid Android versionCode.
+  Use a whole number from 1 to 2100000000, such as "42".
+```
+
+It is checked at `generate` and on android only: `"1.0.3"` stays a legal macOS and iOS bundle
+version, and `build.run({ targets })` may name a target outside `config.targets`, so
+composition time cannot decide. No other target gets a `versionCode`.
 
 ## Safety: the path rules
 
@@ -674,7 +757,7 @@ The writer has the mirror-image guard. `assertWritablePath` refuses:
 ## Configuration
 
 This plugin has no per-plugin config — it reads global config only (`ctx.global`):
-`app`, `web`, `system`, `capabilities`, `targets`, `projectDir`, `outDir`, `signing`
+`app`, `web`, `system`, `capabilities`, `targets`, `projectDir`, `outDir`, `signing`, `ios`
 (all declared in the framework's `src/config.ts`).
 
 `onInit` runs `validate.ts` over the global config at composition time and throws
@@ -691,6 +774,9 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 | `app.adaptiveIconInset` | not a finite number with `0 < n ≤ 30` |
 | `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
 | `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
+| `signing.apple.iosMinimumSystemVersion` | not `MAJOR.MINOR[.PATCH]` — it lands raw in `project.yml` and `project.pbxproj` |
+| `ios.privacyManifest` | not an absolute path |
+| `ios.infoPlist` | any value, nested too, that is not a string, boolean, array or plain object — it would render as an empty `<dict>`; the error names the dotted key |
 | `projectDir` | resolving outside the project (the same rule as the clean guard) |
 | `outDir` | a filesystem root, `$HOME`, or an ancestor of the cwd or `$HOME` |
 | `config.system` entries | not in the capability registry |
