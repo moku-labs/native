@@ -85,6 +85,9 @@ export const pbxprojLine = (runner: string) =>
 
 export const projectYmlFor = (runner: string) =>
   [
+    "options:",
+    "  deploymentTarget:",
+    "    iOS: 15.0",
     "targets:",
     "  MyApp_iOS:",
     "    scheme:",
@@ -99,6 +102,7 @@ export const pbxprojFor = (runner: string) =>
     "/* Begin PBXShellScriptBuildPhase section */",
     pbxprojLine(runner),
     "/* End PBXShellScriptBuildPhase section */",
+    "\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 15.0;",
     ""
   ].join("\n");
 
@@ -157,3 +161,18 @@ export const REAL_MAIN_ACTIVITY = readFileSync(
 /** Where {@link REAL_MAIN_ACTIVITY} sits inside a `gen/android` tree. */
 export const mainActivityPath = (genDirectory: string) =>
   path.join(genDirectory, "app", "src", "main", "java", "dev", "moku", "v6app", "MainActivity.kt");
+
+/**
+ * `gen/apple/<app>.xcodeproj/project.pbxproj` from a tauri-cli 2.11.4 tree of the app
+ * `store-probe`, already through one patch pass. Only machine paths are replaced.
+ */
+export const REAL_PBXPROJ = readFileSync(
+  fileURLToPath(new URL("fixtures/project.real.pbxproj", import.meta.url)),
+  "utf8"
+);
+
+/** `gen/apple/project.yml` of the same tree: its deployment target is `16.0`. */
+export const REAL_PROJECT_YML = readFileSync(
+  fileURLToPath(new URL("fixtures/project.real.yml", import.meta.url)),
+  "utf8"
+);

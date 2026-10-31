@@ -9,13 +9,23 @@ const IOS_TARGET_TABLE = [`[target.'cfg(target_os = "ios")'.dependencies]`, 'obj
   "\n"
 );
 
+/** The size profile every generated Cargo.toml carries, ahead of the iOS-only table. */
+const RELEASE_PROFILE = [
+  "[profile.release]",
+  "codegen-units = 1",
+  "lto = true",
+  'opt-level = "s"',
+  'panic = "abort"',
+  "strip = true"
+].join("\n");
+
 /** The generated Cargo.toml for an explicit capability composition. */
 const cargoFor = (...args: Parameters<typeof generatorInputComposing>) =>
   generateCargo(generatorInputComposing(...args))[0]?.content ?? "";
 
 /** The plain `[dependencies]` table of a Cargo.toml, up to the next table header. */
 const dependenciesTable = (toml: string) =>
-  toml.slice(toml.indexOf("[dependencies]"), toml.indexOf("[target."));
+  toml.slice(toml.indexOf("[dependencies]"), toml.indexOf("[profile.release]"));
 
 describe("sanitizePackageName", () => {
   it("lowercases and hyphenates a display name", () => {
@@ -134,9 +144,24 @@ describe("generateCargo", () => {
         'tauri-plugin-haptics = "^2"',
         'tauri-plugin-store = "^2"',
         "",
+        RELEASE_PROFILE,
+        "",
         IOS_TARGET_TABLE,
         ""
       ].join("\n")
     );
+  });
+
+  it.each([
+    ["macos", "store"],
+    ["windows", "store"],
+    ["linux", "store"],
+    ["ios", "store"],
+    ["android", "store"],
+    ["android", "debug"]
+  ] as const)("carries the size profile on %s in the %s profile (bug: a 40 MB library in the store)", (target, profile) => {
+    const [artifact] = generateCargo(generatorInputFor(target, profile));
+
+    expect(artifact?.content).toContain(`\n\n${RELEASE_PROFILE}\n\n`);
   });
 });

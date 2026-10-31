@@ -1,4 +1,4 @@
-import type { Config } from "../../../../../config";
+import type { BuildProfile, Config } from "../../../../../config";
 import type { GeneratorInput } from "../../../generators/types";
 import { resolve } from "../../../registry";
 
@@ -40,8 +40,16 @@ export function resolvedCapabilitiesFor(target: GeneratorInput["target"]) {
 }
 
 /** Builds a `GeneratorInput` fixture for a given target, with all 5 capabilities composed. */
-export function generatorInputFor(target: GeneratorInput["target"]): GeneratorInput {
-  return { global: baseGlobalConfig, target, capabilities: resolvedCapabilitiesFor(target) };
+export function generatorInputFor(
+  target: GeneratorInput["target"],
+  profile: BuildProfile = "store"
+): GeneratorInput {
+  return {
+    global: baseGlobalConfig,
+    target,
+    capabilities: resolvedCapabilitiesFor(target),
+    profile
+  };
 }
 
 /** Builds a `GeneratorInput` fixture composing exactly the given resolved capabilities. */
@@ -49,17 +57,19 @@ export function generatorInputComposing(
   target: GeneratorInput["target"],
   capabilities: GeneratorInput["capabilities"]
 ): GeneratorInput {
-  return { global: baseGlobalConfig, target, capabilities };
+  return { global: baseGlobalConfig, target, capabilities, profile: "store" };
 }
 
 /** Builds a `GeneratorInput` fixture whose global config carries the given overrides. */
 export function generatorInputWith(
   target: GeneratorInput["target"],
-  overrides: Partial<Config>
+  overrides: Partial<Config>,
+  profile: BuildProfile = "store"
 ): GeneratorInput {
   return {
     global: { ...baseGlobalConfig, ...overrides },
     target,
-    capabilities: resolvedCapabilitiesFor(target)
+    capabilities: resolvedCapabilitiesFor(target),
+    profile
   };
 }

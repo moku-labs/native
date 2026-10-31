@@ -14,6 +14,8 @@ import {
   pbxprojFor,
   projectYmlFor,
   REAL_MAIN_ACTIVITY,
+  REAL_PBXPROJ,
+  REAL_PROJECT_YML,
   RUNNER,
   SIGNING,
   SIGNING_BLOCK,
@@ -61,6 +63,98 @@ describe("patchMobile", () => {
     );
     return genDir;
   };
+
+  /** Seeds a gen/apple tree with the real generated files, and a manifest source beside it. */
+  const seedRealApple = async () => {
+    const genDir = path.join(dir, "src-tauri", "gen", "apple");
+    const projectYml = path.join(genDir, "project.yml");
+    const pbxproj = path.join(genDir, "store-probe.xcodeproj", "project.pbxproj");
+    const source = path.join(dir, "PrivacyInfo.source.xcprivacy");
+    await mkdir(path.dirname(pbxproj), { recursive: true });
+    await writeFile(projectYml, REAL_PROJECT_YML, "utf8");
+    await writeFile(pbxproj, REAL_PBXPROJ, "utf8");
+    await writeFile(source, "<plist/>\n", "utf8");
+    return { projectYml, pbxproj, source, manifest: path.join(genDir, "PrivacyInfo.xcprivacy") };
+  };
+
+  /** An iOS pass with the given minimum and privacy manifest. */
+  const patchIos = (iosMinimumSystemVersion?: string, privacyManifest?: string) =>
+    patchMobile(
+      dir,
+      { target: "ios" },
+      iosMinimumSystemVersion ? { apple: { iosMinimumSystemVersion } } : {},
+      [],
+      undefined,
+      undefined,
+      privacyManifest
+    );
+
+  it("ios moves a kept tree to the configured minimum and adds the manifest — one report (bug: MinimumOSVersion stays on the first init's value)", async () => {
+    const { projectYml, pbxproj, source, manifest } = await seedRealApple();
+
+    const result = await patchIos("26.0", source);
+
+    expect(result.patched.toSorted()).toEqual([manifest, pbxproj, projectYml].toSorted());
+    expect(result.unchanged).toEqual([]);
+    expect(await readFile(projectYml, "utf8")).toContain("    iOS: 26.0\n");
+    expect(await readFile(pbxproj, "utf8")).toContain("IPHONEOS_DEPLOYMENT_TARGET = 26.0;");
+    expect(await readFile(manifest, "utf8")).toBe("<plist/>\n");
+  });
+
+  it("ios falls back to the default minimum (bug: a kept tree keeps whatever init wrote)", async () => {
+    const { projectYml, pbxproj } = await seedRealApple();
+
+    await patchIos();
+
+    expect(await readFile(projectYml, "utf8")).toContain("    iOS: 15.0\n");
+    expect(await readFile(pbxproj, "utf8")).toContain("IPHONEOS_DEPLOYMENT_TARGET = 15.0;");
+  });
+
+  it("a store pass with the option unset removes a stale manifest (bug: the bundle keeps declaring what the app dropped)", async () => {
+    const { projectYml, pbxproj, source, manifest } = await seedRealApple();
+    await patchIos("16.0", source);
+
+    const result = await patchIos("16.0");
+
+    expect(result.patched).toContain(manifest);
+    expect(existsSync(manifest)).toBe(false);
+    expect(await readFile(projectYml, "utf8")).toBe(REAL_PROJECT_YML);
+    expect(await readFile(pbxproj, "utf8")).toBe(REAL_PBXPROJ);
+  });
+
+  it("a missing manifest source is refused before anything is written (bug: a half-patched tree)", async () => {
+    const { projectYml, pbxproj, manifest } = await seedRealApple();
+    const missing = path.join(dir, "gone.xcprivacy");
+    // Fresh from init: the first patch of the pass has something to write here.
+    const unpatched = REAL_PBXPROJ.replaceAll(
+      "\t\t\t\tCODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;\n",
+      ""
+    );
+    await writeFile(pbxproj, unpatched, "utf8");
+
+    await expect(patchIos("26.0", missing)).rejects.toThrow(
+      `[native] ios.privacyManifest "${missing}" was not found.`
+    );
+    expect(await readFile(projectYml, "utf8")).toBe(REAL_PROJECT_YML);
+    expect(await readFile(pbxproj, "utf8")).toBe(unpatched);
+    expect(existsSync(manifest)).toBe(false);
+  });
+
+  it("an iOS tree that was never initialised reports nothing, the option set or not (bug: the patch crashes the first build)", async () => {
+    await expect(patchIos("26.0", path.join(dir, "gone.xcprivacy"))).resolves.toEqual({
+      patched: [],
+      unchanged: []
+    });
+    expect(existsSync(path.join(dir, "src-tauri"))).toBe(false);
+  });
+
+  it("android ignores the privacy manifest", async () => {
+    const genDir = await seedAndroid();
+
+    await patchMobile(dir, { target: "android" }, {}, [], undefined, undefined, "/nowhere.plist");
+
+    expect(existsSync(path.join(genDir, "PrivacyInfo.xcprivacy"))).toBe(false);
+  });
 
   it("skips the runner rewrite for ios when no runner is supplied", async () => {
     const genDir = await seedApple();

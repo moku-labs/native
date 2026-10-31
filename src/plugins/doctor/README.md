@@ -4,7 +4,8 @@
 
 Diagnoses whether a target is actually buildable: toolchain presence (rustup/node/Xcode/Android
 SDK), mobile `gen/`-tree completeness, `@tauri-apps/*` npm-vs-crate version skew, signing env-var
-presence, and a couple of warn-only cross-repo pointers (worker CORS; deep-link `.well-known`).
+and keystore-file presence, and a couple of warn-only cross-repo pointers (worker CORS; deep-link
+`.well-known`).
 Checks run in parallel via `Promise.allSettled` — one broken check can never sink the report.
 
 ## API
@@ -60,7 +61,7 @@ raw subprocess/fs call of its own (`fs` is read-only: `readFile`, `exists`, `rea
 | `android.ts` | `ANDROID_HOME`/SDK, NDK, JDK presence (android) | fail |
 | `android-platform.ts` | the SDK platform the build compiles against is installed: `platforms/android-N` or the minor-version naming `android-N.0` (a real minor platform such as `android-36.1` is a separate package and does not count), under `ANDROID_HOME` → `ANDROID_SDK_ROOT` → the Android Studio default (`~/Library/Android/sdk` on macOS, `~/Android/Sdk` on linux, `%LOCALAPPDATA%\Android\Sdk` on windows). N is `compileSdk` from the generated `gen/android/app/build.gradle.kts`, else 37 (the tauri-cli 2.11 template). Fix-it: `sdkmanager "platforms;android-N"`. `ANDROID_HOME`/`ANDROID_SDK_ROOT` naming a missing directory **fails** (`android.ts` only sees that the var is set); no env var and no SDK at the default location is a **warn** — `android.ts` already fails for it (android) | fail |
 | `android-debug-signing.ts` | the debug keystore `<home>/.android/debug.keystore` (`HOME`, else `USERPROFILE`) a debug build is signed with. The pass names the install steps (`adb install -r <apk>` over a cable; `adb pair` then `adb connect` over Wi-Fi, Android 11+); the warn's fix-it is `mkdir -p <home>/.android && keytool -genkeypair … -alias androiddebugkey`, which doctor never runs (android) | **warn only** |
-| `signing.ts` | signing readiness, presence and counts only (never values): one complete Apple credential set (`APPLE_ID`+`APPLE_PASSWORD`+`APPLE_TEAM_ID`, **or** `APPLE_API_KEY`+`APPLE_API_ISSUER`+`APPLE_API_KEY_PATH`), `signing.apple.teamId` for ios, a count-only keychain probe, `signing.android.keystorePasswordEnv` for android, and `signing.windows.certificateThumbprint` for windows | **warn only** |
+| `signing.ts` | signing readiness, presence and counts only (never values): one complete Apple credential set (`APPLE_ID`+`APPLE_PASSWORD`+`APPLE_TEAM_ID`, **or** `APPLE_API_KEY`+`APPLE_API_ISSUER`+`APPLE_API_KEY_PATH`), `signing.apple.teamId` for ios, a count-only keychain probe, for android `signing.android.keystorePasswordEnv`, then `keyPasswordEnv` when set, then the `keystorePath` file when set (a relative path is looked up at `<projectDir>/src-tauri/gen/android/app/<path>`, where Gradle's `file()` resolves it), and `signing.windows.certificateThumbprint` for windows. The first gap is the result | **warn only** |
 | `completeness.ts` | mobile `gen/` required-file-set via `project.getCompleteness()`; fix-it is always `native clean --target <t>` | fail (not-initialized = pass) |
 | `versions.ts` | `@tauri-apps/*` npm major version vs. the registry-pinned crate range, read from the same root as `web-script.ts`; rows without an npm package (`tray`) are skipped | **warn only** |
 | `web-script.ts` | `web.build`/`web.devCommand` scripts exist in the SAME root Tauri will use (`web.cwd` when set, else the consumer root). Only `<pm> run <script>` and the `<pm> <script>` shorthand name a script; a direct command passes unchecked. Necessary-not-sufficient, never executes the script | fail |

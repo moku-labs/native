@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Orientation } from "../../../../../config";
+import type { Config, Orientation } from "../../../../../config";
 import { generateSidecar } from "../../../generators/sidecar";
 import type { PlistEntry, ResolvedCapability } from "../../../types";
 import { baseGlobalConfig, generatorInputFor, generatorInputWith } from "./fixtures";
@@ -41,8 +41,26 @@ const sidecarFor = (orientation: Orientation | undefined, capabilities: Resolved
       app: { ...baseGlobalConfig.app, ...(orientation ? { orientation } : {}) }
     },
     target: "ios",
-    capabilities
+    capabilities,
+    profile: "store"
   });
+
+/** The ios sidecar text of a config carrying `ios.infoPlist`. */
+const sidecarWith = (
+  infoPlist: NonNullable<NonNullable<Config["ios"]>["infoPlist"]>,
+  capabilities: ResolvedCapability[] = [],
+  orientation?: Orientation
+) =>
+  generateSidecar({
+    global: {
+      ...baseGlobalConfig,
+      app: { ...baseGlobalConfig.app, ...(orientation ? { orientation } : {}) },
+      ios: { infoPlist }
+    },
+    target: "ios",
+    capabilities,
+    profile: "store"
+  })[0]?.content;
 
 describe("generateSidecar", () => {
   it("writes an empty dict on ios when nothing contributes a key — a stale lock is cleared", () => {
@@ -144,5 +162,55 @@ describe("generateSidecar", () => {
     expect(artifact?.content.match(/<key>UIRequiresFullScreen<\/key>/g)).toHaveLength(1);
     expect(artifact?.content).toContain("  <key>UIRequiresFullScreen</key>\n  <true/>");
     expect(artifact?.content).not.toContain("<false/>");
+  });
+
+  describe("ios.infoPlist", () => {
+    it("renders a nested dict and array, every level indented and escaped (bug: a dictionary renders empty)", () => {
+      expect(
+        sidecarWith({
+          ITSAppUsesNonExemptEncryption: false,
+          "NSApp&Transport": {
+            "Allows<Local>": true,
+            Domains: ["a&b", { "lo&cal": ["<x>"] }]
+          }
+        })
+      ).toBe(
+        plistWith(
+          "  <key>ITSAppUsesNonExemptEncryption</key>",
+          "  <false/>",
+          "  <key>NSApp&amp;Transport</key>",
+          "  <dict>",
+          "    <key>Allows&lt;Local&gt;</key>",
+          "    <true/>",
+          "    <key>Domains</key>",
+          "    <array>",
+          "      <string>a&amp;b</string>",
+          "      <dict>",
+          "        <key>lo&amp;cal</key>",
+          "        <array>",
+          "          <string>&lt;x&gt;</string>",
+          "        </array>",
+          "      </dict>",
+          "    </array>",
+          "  </dict>"
+        )
+      );
+    });
+
+    it("beats a capability on a shared key (bug: the app cannot override a capability)", () => {
+      const content = sidecarWith({ UIFileSharingEnabled: true }, [
+        capabilityCarrying([{ key: "UIFileSharingEnabled", value: false }])
+      ]);
+
+      expect(content).toContain("  <key>UIFileSharingEnabled</key>\n  <true/>");
+      expect(content).not.toContain("<false/>");
+    });
+
+    it("loses to the orientation lock on a shared key (bug: App Store review refuses the app)", () => {
+      const content = sidecarWith({ UIRequiresFullScreen: false }, [], "portrait");
+
+      expect(content?.match(/<key>UIRequiresFullScreen<\/key>/g)).toHaveLength(1);
+      expect(content).toContain("  <key>UIRequiresFullScreen</key>\n  <true/>");
+    });
   });
 });

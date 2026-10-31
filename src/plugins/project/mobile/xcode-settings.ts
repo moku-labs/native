@@ -60,7 +60,7 @@ const PBXPROJ_NESTED_INDENT = "\t";
 const YML_NESTED_INDENT = "  ";
 
 /** One source line, split so a rewrite can never change the file's line endings. */
-type SourceLine = {
+export type SourceLine = {
   /** The line's text, without its terminator. */
   readonly body: string;
   /** The line's own terminator — `""` for a final line without one. */
@@ -78,7 +78,7 @@ type SourceLine = {
  * splitLines("a\r\nb"); // [{ body: "a", ending: "\r\n" }, { body: "b", ending: "" }]
  * ```
  */
-function splitLines(text: string): SourceLine[] {
+export function splitLines(text: string): SourceLine[] {
   return text.split(LINE_SPLIT_PATTERN).map(chunk => {
     const body = chunk.replace(LINE_ENDING_PATTERN, "");
     return { body, ending: chunk.slice(body.length) };
@@ -95,7 +95,7 @@ function splitLines(text: string): SourceLine[] {
  * joinLines([{ body: "a", ending: "\n" }]); // "a\n"
  * ```
  */
-function joinLines(lines: readonly SourceLine[]): string {
+export function joinLines(lines: readonly SourceLine[]): string {
   return lines.map(line => line.body + line.ending).join("");
 }
 
@@ -109,7 +109,7 @@ function joinLines(lines: readonly SourceLine[]): string {
  * indentOf("\t\t\tisa = XCBuildConfiguration;"); // "\t\t\t"
  * ```
  */
-function indentOf(body: string): string {
+export function indentOf(body: string): string {
   return INDENT_PATTERN.exec(body)?.[0] ?? "";
 }
 
@@ -166,7 +166,7 @@ function placeSetting(
  * const { block, next } = collectBlock(lines, index, line => line.body !== "\t\t\t};");
  * ```
  */
-function collectBlock(
+export function collectBlock(
   lines: readonly SourceLine[],
   start: number,
   isMember: (line: SourceLine) => boolean

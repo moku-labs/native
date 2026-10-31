@@ -1,11 +1,12 @@
 /**
  * @file project plugin — the ONE owner of "which generated files a mobile patch pass may
- * touch". Both iOS patches (the runner-command rewrite and the Xcode build-settings patch)
- * read the same list from here, so neither can drift into a file the other does not know
- * about — and neither ever descends into `gen/apple/build` or `gen/android/build`, which
- * belong to the toolchain. The Android status bar patch finds its MainActivity.kt here too,
- * the profile patches their `strings.xml` and network security config, and the icon inset
- * its adaptive icon directory.
+ * touch". Every iOS patch (the runner-command rewrite, the Xcode build-settings patch and
+ * the iOS project patches) reads the same list from here, so none can drift into a file the
+ * others do not know about — and none ever descends into `gen/apple/build` or
+ * `gen/android/build`, which belong to the toolchain. The privacy manifest's place in the
+ * tree is here too. The Android status bar patch finds its MainActivity.kt here, the profile
+ * patches their `strings.xml` and network security config, and the icon inset its adaptive
+ * icon directory.
  */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -25,6 +26,9 @@ const ANDROID_RESOURCE_SEGMENTS = ["app", "src", "main", "res"];
 
 /** Derived directories a patch scan never descends into — the toolchain owns them. */
 const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
+
+/** The file name Apple reads a privacy manifest from, at the top of the app bundle. */
+export const IOS_PRIVACY_MANIFEST_FILE = "PrivacyInfo.xcprivacy";
 
 /**
  * Lists the generated iOS files a patch pass may rewrite: `project.yml` plus the
@@ -51,6 +55,22 @@ export async function iosPatchFiles(genDirectory: string): Promise<string[]> {
   }
 
   return files;
+}
+
+/**
+ * Returns where the iOS patch pass keeps the privacy manifest: the top of `gen/apple`, the
+ * directory `project.yml` and the pbxproj's root group resolve a relative path from.
+ *
+ * @param genDirectory - The `src-tauri/gen/apple` directory.
+ * @returns The `PrivacyInfo.xcprivacy` path of that tree.
+ * @example
+ * ```ts
+ * iosPrivacyManifestPath("/repo/.moku/tauri/src-tauri/gen/apple");
+ * // "/repo/.moku/tauri/src-tauri/gen/apple/PrivacyInfo.xcprivacy"
+ * ```
+ */
+export function iosPrivacyManifestPath(genDirectory: string): string {
+  return path.join(genDirectory, IOS_PRIVACY_MANIFEST_FILE);
 }
 
 /**

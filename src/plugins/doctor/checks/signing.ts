@@ -1,8 +1,10 @@
 /**
  * @file doctor plugin check — signing readiness for ios/macos/android: env-var PRESENCE only
- * (never values) plus, for Apple, a count-only keychain identity probe. Warn-only
- * posture: unsigned and simulator builds are legal, so this check never fails.
+ * (never values) plus, for Apple, a count-only keychain identity probe and, for Android,
+ * whether the keystore file exists. Warn-only posture: unsigned and simulator builds are
+ * legal, so this check never fails.
  */
+import path from "node:path";
 import type { CheckResult } from "../types";
 import type { Check, CheckInput } from "./types";
 
@@ -20,6 +22,12 @@ const APPLE_CREDENTIAL_SETS: ReadonlyArray<{ label: string; vars: readonly strin
 
 /** Every signing message repeats this — doctor never fails a build over signing. */
 const LEGAL_NOTE = "unsigned and simulator builds are legal";
+
+/**
+ * The Gradle module that holds the signing config, relative to `projectDir`. Gradle's
+ * `file()` in `app/build.gradle.kts` resolves a relative `storeFile` from this directory.
+ */
+const GRADLE_APP_DIRECTORY = "src-tauri/gen/android/app";
 
 /**
  * Whether the local keychain is worth probing: only when a concrete `signingIdentity` is
@@ -112,12 +120,31 @@ async function checkAppleSigning(input: CheckInput): Promise<CheckResult> {
 }
 
 /**
- * Checks the android signing env var (`signing.android.keystorePasswordEnv`) for presence.
+ * Looks up the configured `signing.android.keystorePath` where Gradle will read it: an
+ * absolute path as it stands, a relative one under {@link GRADLE_APP_DIRECTORY}.
+ *
+ * @param input - The check input (looks through its fs facade).
+ * @returns The path that is missing, or `undefined` when none is configured or the file exists.
+ */
+async function missingKeystore(input: CheckInput): Promise<string | undefined> {
+  const configured = input.global.signing.android?.keystorePath;
+  if (!configured) return undefined;
+
+  const keystore = path.isAbsolute(configured)
+    ? configured
+    : path.join(input.global.projectDir, GRADLE_APP_DIRECTORY, configured);
+  return (await input.fs.exists(keystore)) ? undefined : keystore;
+}
+
+/**
+ * Checks android signing: the `signing.android.keystorePasswordEnv` var, then the
+ * `signing.android.keyPasswordEnv` var when one is configured (presence only), then the
+ * `signing.android.keystorePath` file when one is configured. The first gap is the result.
  *
  * @param input - The check input, scoped to "android".
  * @returns The check result — "pass" or "warn", never "fail".
  */
-function checkAndroidSigning(input: CheckInput): CheckResult {
+async function checkAndroidSigning(input: CheckInput): Promise<CheckResult> {
   const envName = input.global.signing.android?.keystorePasswordEnv;
 
   if (!envName) {
@@ -138,6 +165,29 @@ function checkAndroidSigning(input: CheckInput): CheckResult {
       fixIt: `export ${envName} before building a signed android release`
     };
   }
+
+  const keyPasswordVariable = input.global.signing.android?.keyPasswordEnv;
+  if (keyPasswordVariable && !input.env.has(keyPasswordVariable)) {
+    return {
+      id: "signing-android",
+      target: "android",
+      status: "warn",
+      message: `[native] android key password env var "${keyPasswordVariable}" is not set.`,
+      fixIt: `export ${keyPasswordVariable} before building a signed android release`
+    };
+  }
+
+  const keystore = await missingKeystore(input);
+  if (keystore !== undefined) {
+    return {
+      id: "signing-android",
+      target: "android",
+      status: "warn",
+      message: `[native] android keystore not found at ${keystore}.`,
+      fixIt: `put the keystore at ${keystore}, or correct signing.android.keystorePath (a relative path resolves from ${GRADLE_APP_DIRECTORY})`
+    };
+  }
+
   return {
     id: "signing-android",
     target: "android",

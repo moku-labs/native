@@ -136,6 +136,22 @@ export type CapabilityConfigMap = {
  */
 export type Orientation = "portrait" | "landscape" | "any";
 
+/**
+ * One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, an `<array>` or a `<dict>`,
+ * nested as deep as the key needs.
+ *
+ * @example
+ * ```ts
+ * const encryption: PlistValue = false; // ITSAppUsesNonExemptEncryption
+ * const transport: PlistValue = { NSAllowsLocalNetworking: true }; // NSAppTransportSecurity
+ * ```
+ */
+export type PlistValue =
+  | string
+  | boolean
+  | readonly PlistValue[]
+  | { readonly [key: string]: PlistValue };
+
 /** How `tauri ios build` exports the signed archive (`--export-method`). */
 export type AppleExportMethod = "app-store-connect" | "release-testing" | "debugging";
 
@@ -186,8 +202,8 @@ export type Config = {
    * App identity, store metadata and presentation — project.onInit validates
    * name/identifier are non-empty (reverse-DNS identifier). `icon` is a 1024x1024 PNG
    * relative to cwd (a placeholder is generated when unset); `category` maps to
-   * `bundle.category`; `buildNumber` maps to the iOS/macOS `bundleVersion`;
-   * `orientation` locks the mobile screen at build time; `backgroundColor` paints the
+   * `bundle.category`; `buildNumber` maps to the iOS/macOS `bundleVersion` and, a whole
+   * number from 1 to 2 100 000 000, to the Android `versionCode`; `orientation` locks the mobile screen at build time; `backgroundColor` paints the
    * native window behind the page.
    */
   app: {
@@ -223,6 +239,16 @@ export type Config = {
      * ```
      */
     adaptiveIconInset?: number;
+    /**
+     * iOS: the app turns the idle timer off at launch, so the screen does not dim while it
+     * runs. Android keeps it on from the page. Unset leaves the idle timer on.
+     *
+     * @example
+     * ```ts
+     * createApp({ config: { app: { name: "Demo", identifier: "com.acme.demo", keepScreenOn: true } } });
+     * ```
+     */
+    keepScreenOn?: boolean;
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };
@@ -238,6 +264,21 @@ export type Config = {
   outDir: string;
   /** Signing env-var references. */
   signing: SigningConfig;
+  /**
+   * What an iOS app adds to its bundle. `infoPlist` merges into `Info.plist`, where
+   * `app.orientation` wins a shared key; `privacyManifest` is the absolute path of the file
+   * the bundle carries as `PrivacyInfo.xcprivacy`. Unset, a manifest an earlier build left
+   * in the generated tree is removed.
+   *
+   * @example
+   * ```ts
+   * createApp({ config: { ios: { infoPlist: { ITSAppUsesNonExemptEncryption: false } } } });
+   * ```
+   */
+  ios?: {
+    infoPlist?: Readonly<Record<string, PlistValue>>;
+    privacyManifest?: string;
+  };
 };
 
 /** native:phase payload — one flat event, target as a field (context decision). */

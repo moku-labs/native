@@ -241,7 +241,7 @@ describe("build plugin integration", () => {
           await mkdir(path.join(genAppleDir, "Assets.xcassets"), { recursive: true });
           await writeFile(
             path.join(genAppleDir, "project.yml"),
-            "    script: node tauri ios xcode-script -v --platform iOS\n",
+            "options:\n  deploymentTarget:\n    iOS: 15.0\ntargets:\n  app:\n    script: node tauri ios xcode-script -v --platform iOS\n",
             "utf8"
           );
           await writeFile(path.join(genAppleDir, "ExportOptions.plist"), "<plist/>\n", "utf8");

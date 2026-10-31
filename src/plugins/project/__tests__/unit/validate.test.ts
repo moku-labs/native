@@ -274,3 +274,67 @@ describe("validateProjectConfig — adaptive icon inset", () => {
     ).not.toThrow();
   });
 });
+
+describe("validateProjectConfig — the iOS fields", () => {
+  it.each([
+    "16.0",
+    "26.0.1"
+  ])('accepts "%s" as signing.apple.iosMinimumSystemVersion', iosMinimumSystemVersion => {
+    expect(() =>
+      validateProjectConfig(config({ signing: { apple: { iosMinimumSystemVersion } } }))
+    ).not.toThrow();
+  });
+
+  it.each([
+    "16",
+    "16.0.1.2.3",
+    "v16.0",
+    '16.0"',
+    "16.0\n    evil: true"
+  ])("rejects %j as signing.apple.iosMinimumSystemVersion (bug: it lands raw in project.yml and project.pbxproj)", iosMinimumSystemVersion => {
+    expect(() =>
+      validateProjectConfig(config({ signing: { apple: { iosMinimumSystemVersion } } }))
+    ).toThrow(
+      `[native] signing.apple.iosMinimumSystemVersion "${iosMinimumSystemVersion}" is not a valid iOS version.\n  Use a version such as "16.0".`
+    );
+  });
+
+  it("accepts an absolute ios.privacyManifest", () => {
+    expect(() =>
+      validateProjectConfig(
+        config({ ios: { privacyManifest: path.join(tmpdir(), "PrivacyInfo.xcprivacy") } })
+      )
+    ).not.toThrow();
+  });
+
+  it("rejects a relative ios.privacyManifest (bug: it resolves against whichever cwd ran the build)", () => {
+    expect(() =>
+      validateProjectConfig(config({ ios: { privacyManifest: "PrivacyInfo.xcprivacy" } }))
+    ).toThrow(
+      '[native] ios.privacyManifest "PrivacyInfo.xcprivacy" must be an absolute path.\n  Resolve it first, such as with path.resolve("PrivacyInfo.xcprivacy").'
+    );
+  });
+
+  it("accepts every plist shape, nested", () => {
+    const infoPlist = {
+      ITSAppUsesNonExemptEncryption: false,
+      Name: "Demo",
+      NSAppTransportSecurity: { NSAllowsLocalNetworking: true, Domains: ["a", { b: "c" }] }
+    };
+
+    expect(() => validateProjectConfig(config({ ios: { infoPlist } }))).not.toThrow();
+  });
+
+  it.each([
+    ["a number", { Version: 1 }, "ios.infoPlist.Version"],
+    ["a nested null", JSON.parse('{ "A": { "B": null } }'), "ios.infoPlist.A.B"],
+    ["an undefined", { A: undefined }, "ios.infoPlist.A"],
+    ["a class instance", { A: new Date(0) }, "ios.infoPlist.A"],
+    ["a value inside an array", { A: ["ok", 2] }, "ios.infoPlist.A.1"]
+  ])("rejects %s in ios.infoPlist, naming the dotted key (bug: it renders as an empty <dict>)", (_label, infoPlist, key) => {
+    // Config arrives as plain JS too, so the type does not protect the generated plist.
+    expect(() => validateProjectConfig(config({ ios: { infoPlist } }))).toThrow(
+      `[native] ${key} is not a plist value.\n  Use a string, a boolean, an array or a plain object.`
+    );
+  });
+});
