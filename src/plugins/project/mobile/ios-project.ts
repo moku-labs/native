@@ -145,6 +145,21 @@ function sectionBounds(
 }
 
 /**
+ * Whether a line opens the object of one group id.
+ *
+ * @param body - The line's text.
+ * @param id - The group's object id.
+ * @returns True for the group's opening line.
+ * @example
+ * ```ts
+ * opensGroup("\t\tAA = {", "AA"); // true
+ * ```
+ */
+function opensGroup(body: string, id: string): boolean {
+  return body.trimStart().startsWith(`${id} `) && body.trimEnd().endsWith("= {");
+}
+
+/**
  * Finds the `children = (` line of the root group: the group the `PBXProject` object's
  * `mainGroup` names, which has no name of its own to look for.
  *
@@ -169,6 +184,7 @@ function sectionBounds(
  * ```
  */
 function rootGroupChildren(lines: readonly SourceLine[]): number {
+  // The root group's id, from the PBXProject object.
   const project = sectionBounds(lines, "PBXProject");
   const mainGroup = lines
     .slice(project.begin, project.end)
@@ -176,13 +192,9 @@ function rootGroupChildren(lines: readonly SourceLine[]): number {
     .find(id => id !== undefined);
   if (mainGroup === undefined) throw missingAnchorError("mainGroup", PBXPROJ_FILE);
 
+  // The line that opens that group.
   const groups = sectionBounds(lines, "PBXGroup");
-  const open = findLine(
-    lines,
-    body => body.trimStart().startsWith(`${mainGroup} `) && body.trimEnd().endsWith("= {"),
-    groups.begin,
-    groups.end
-  );
+  const open = findLine(lines, body => opensGroup(body, mainGroup), groups.begin, groups.end);
   const opening = lines[open];
   if (!opening) throw missingAnchorError(`the main group ${mainGroup}`, PBXPROJ_FILE);
 
@@ -469,12 +481,14 @@ async function rewriteProjectFiles(
   genDirectory: string,
   transform: (text: string, isProjectYml: boolean) => string
 ): Promise<PatchResult> {
+  // Transform every file first, so a refusal leaves the tree untouched.
   const rewrites: Array<{ file: string; content: string }> = [];
   for (const file of await iosPatchFiles(genDirectory)) {
     const existing = await readFile(file, "utf8");
     rewrites.push({ file, content: transform(existing, file.endsWith(".yml")) });
   }
 
+  // Write them, sorting each path into its bucket.
   const patched: string[] = [];
   const unchanged: string[] = [];
   for (const { file, content } of rewrites) {
