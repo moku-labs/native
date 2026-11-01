@@ -39,6 +39,12 @@ describe("generateShell", () => {
     expect(shellFile("store", debugProfile)).toContain("const val DEBUG = false");
   });
 
+  it("MokuShellProfile.DEBUG stays off in the dev profile (bug: WebView debugging in a tester's build)", () => {
+    const debugProfile = "android/src/main/java/app/moku/shell/MokuShellProfile.kt";
+
+    expect(shellFile("dev", debugProfile)).toContain("const val DEBUG = false");
+  });
+
   it("default.toml grants exactly the six commands build.rs declares (bug: share or info denied at runtime)", () => {
     const commands = quotedListAfter(shellFile("store", "build.rs"), "COMMANDS");
     const granted = quotedListAfter(shellFile("store", "permissions/default.toml"), "permissions");

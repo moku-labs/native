@@ -22,12 +22,13 @@ pass keeps a kept iOS tree on them.
 Two additions reach past packaging. The `shell` capability generates a small Tauri plugin
 crate, `tauri-plugin-moku-shell`, that installs the page contract
 [`globalThis.__MOKU_NATIVE__` v1](#page-contract-v1) (display rate, thermal state, safe-area
-insets, device info). And the [build profiles](#build-profiles) patch the Android tree for an
-on-device debug build that installs next to the store app.
+insets, device info). And the [build profiles](#build-profiles) shape the test builds: `debug`
+patches the Android tree for an on-device build that installs next to the store app, and opens
+an iOS build to the editor and Safari Web Inspector; `dev` is the store build a tester installs.
 
 ## Tier
 
-The plugin is about 8,450 lines of source in 39 files, with `mobile/` and `generators/` as
+The plugin is about 8,700 lines of source in 40 files, with `mobile/` and `generators/` as
 coordinating sub-domains. It stays **Complex**, not Very Complex, by decision:
 
 - **The API is flat.** One `Api` type in `types.ts`, one `createProjectApi` factory; the
@@ -73,32 +74,33 @@ namespaced API slice does.
 | `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
 | `mobile/xcode-settings.ts` | the iOS entitlements-modification setting (`project.pbxproj` + `project.yml`) |
 | `mobile/ios-project.ts` | the iOS deployment target and privacy manifest (`project.pbxproj` + `project.yml`) |
+| `mobile/ios-plist.ts` | takes the debug keys out of `<slug>_iOS/Info.plist` outside the debug profile |
 | `mobile/patch.ts` | orchestration only — which patches a platform needs, and in which order |
 
 ## Generated artifacts
 
 | Path (under `projectDir`) | Generator | What it carries |
 |---|---|---|
-| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring (with `build.removeUnusedCommands` in the store profile), the main window (title, `app.backgroundColor`), bundle metadata, Apple signing, the Android `versionCode`, a `plugins.<name>` block per **configured** capability |
-| `src-tauri/Cargo.toml` | `generators/cargo.ts` | package manifest, `tauri` (floor `2.12`) with its cargo features, one pinned crate per plugin-backed capability, the `[profile.release]` size table, and the iOS-only `objc2` table |
+| `src-tauri/tauri.conf.json` | `generators/tauri-conf.ts` | identity, web build/dev wiring (with `build.removeUnusedCommands` in the store profile), the main window (title, `app.backgroundColor`, `devtools` in an iOS debug build), bundle metadata, Apple signing, the Android `versionCode`, a `plugins.<name>` block per **configured** capability |
+| `src-tauri/Cargo.toml` | `generators/cargo.ts` | package manifest, `tauri` (floor `2.12`) with its cargo features (`devtools` in an iOS debug build), one pinned crate per plugin-backed capability, the `[profile.release]` size table, and the iOS-only `objc2` table |
 | `src-tauri/build.rs` | `generators/build-script.ts` | `tauri_build::build()` — without it capabilities are never compiled in and `tauri build` fails |
 | `src-tauri/src/lib.rs`, `src/main.rs` | `generators/rust.ts` | mobile entry point + one `.plugin(...)` line per capability + the iOS `.setup` hook: the safe area, and the idle timer with `app.keepScreenOn` |
 | `src-tauri/capabilities/default.json` | `generators/capabilities.ts` | `core:default` + every capability permission, scoped to Tauri's platform id (`macOS`, `iOS`, `windows`, `linux`, `android`) |
 | `src-tauri/Entitlements.plist` | `generators/entitlements.ts` | App Store sandbox, only for `signing.apple.appStore` macOS builds with no consumer plist |
-| `src-tauri/Info.ios.plist` | `generators/sidecar.ts` | iOS only, always written: any capability `sidecarPlist`, then `ios.infoPlist`, then the orientation lock, a later entry winning a shared key; an empty `<dict>` when nothing contributes |
+| `src-tauri/Info.ios.plist` | `generators/sidecar.ts` | iOS only, always written: any capability `sidecarPlist`, then `ios.infoPlist`, then the debug profile's two keys, then the orientation lock, a later entry winning a shared key; an empty `<dict>` when nothing contributes |
 | `placeholder-icon.png` | `icon.ts` | embedded 1024x1024 PNG, written only when `app.icon` is unset |
 | `plugins/moku-shell/**` | `generators/shell/*.ts` | only when `shell` is composed for the target: the `tauri-plugin-moku-shell` crate (`Cargo.toml` with `links`, `build.rs`, `src/lib.rs`, `src/page.js`, `permissions/default.toml`) and its Android module (`android/build.gradle.kts`, manifest, R8 rules, `MokuShellPlugin.kt`, the per-profile `MokuShellProfile.kt`) |
 
-Without the shell, nothing is written under `plugins/`, and the two profiles differ by one
-key: the store profile sets `build.removeUnusedCommands: true` in `tauri.conf.json`, so Tauri
-strips the commands no capability grants, and the debug profile leaves it out. With it,
-`Cargo.toml` gains
+Without the shell, nothing is written under `plugins/`, and the profiles differ by one key:
+the store profile sets `build.removeUnusedCommands: true` in `tauri.conf.json`, so Tauri strips
+the commands no capability grants, and the debug and dev profiles leave it out. An iOS debug
+build adds what [Build profiles](#build-profiles) lists. With the shell, `Cargo.toml` gains
 `tauri-plugin-moku-shell = { path = "../plugins/moku-shell" }`, `lib.rs` gains
 `.plugin(tauri_plugin_moku_shell::init())`, and the capability file gains `moku-shell:default`.
 `build.rs` and `default.toml` are generated from one list of six commands (`set_frame_rate`,
 `thermal`, `insets`, `log`, `share`, `info`), so a granted command always exists.
 
-Every generated `Cargo.toml`, on every target and in both profiles, carries a release profile
+Every generated `Cargo.toml`, on every target and in every profile, carries a release profile
 that trades compile time for a smaller library:
 
 ```toml
@@ -247,7 +249,7 @@ paints the window and the icon splash, see [The Android window background](#the-
 | Platform | Patches |
 |---|---|
 | android | build profile → release signing → main-activity manifest attributes → status bar style → window background → runner command |
-| ios | Xcode entitlements-modification setting → deployment target → privacy manifest → runner command |
+| ios | Xcode entitlements-modification setting → deployment target → privacy manifest → debug keys out of `Info.plist` (outside the debug profile) → runner command |
 
 The profile patches run first, so the store profile cuts its Gradle block out byte for byte
 wherever the signing block sits; see [Build profiles](#build-profiles).
@@ -255,8 +257,9 @@ wherever the signing block sits; see [Build profiles](#build-profiles).
 The runner rewrite runs only when `runner` is passed. The api wrapper hands the Android
 pass its manifest entries: every capability's `activity-attribute` entries, then the
 orientation lock (last, so it wins a clash). It also hands it `app.backgroundColor`, for
-the status bar style and the window background. The iOS pass gets `ios.privacyManifest`, and
-reads the minimum from `signing`. A `gen/apple` tree that was never initialised reports nothing.
+the status bar style and the window background. The iOS pass gets `ios.privacyManifest`, reads
+the minimum from `signing` and its profile from the `profile` option. A `gen/apple` tree that
+was never initialised reports nothing.
 
 ### The iOS project files
 
@@ -304,6 +307,27 @@ A source that is not there is refused first, before any patch of the pass writes
 A file that lacks an anchor is a `[native] Could not find <anchor> in <file>.` error, and no
 manifest is written. With the option unset no anchor is needed, so an app that never set it
 cannot start failing on a file it never touches.
+
+### The iOS Info.plist
+
+`tauri ios build` merges `Info.ios.plist` INTO `gen/apple/<slug>_iOS/Info.plist` for good
+(measured with tauri-cli 2.11.4), so a key dropped from the sidecar stays in that file. A store
+build of a tree that once built in debug would ship the debug build's App Transport Security.
+
+Outside the debug profile, in the store and dev profiles, the pass therefore removes
+`NSLocalNetworkUsageDescription` and `NSAppTransportSecurity` from that file, each with its
+whole value, however deep it nests. The sidecar merge after it restores whatever the game
+itself set in `ios.infoPlist`. The debug profile leaves the file alone.
+
+The file is the `Info.plist` in the `gen/apple` directory that ends in `_iOS`; a tree where
+tauri has not written it yet reports nothing. Line endings and every other byte survive, and a
+file without the keys is reported unchanged. A key with no value after it is a broken file, and
+an error instead of a store build that may still carry the key:
+
+```
+[native] Could not find the value of NSAppTransportSecurity in Info.plist.
+  Run clean for ios and build again, or report the Info.plist Tauri generated.
+```
 
 ### The Android status bar
 
@@ -448,11 +472,25 @@ an app that never set an orientation must not start failing on a manifest it nev
 
 ## Build profiles
 
-`generate`, `patchMobile` and `checkShellLinked` take a `profile`: `"store"` (the default, the
-shippable build) or `"debug"` (an on-device test build, Android only — `build` refuses debug
-for other targets). The debug build stays a **release** build type, Rust and Gradle optimized,
-so measurements on the phone match the store app (Decision D1). Every patch is idempotent, and
-the store profile restores the bytes the tree had before the debug profile touched it.
+`generate`, `patchMobile` and `checkShellLinked` take a `profile`:
+
+| Profile | What it is |
+|---|---|
+| `"store"` | the default, the shippable build |
+| `"debug"` | an on-device test build, on Android and iOS; `build` refuses debug for other targets |
+| `"dev"` | the store build a tester installs: same signing and bundle as store, and its page may carry the editor agent. The app config names the separate app (id, name, icon, `projectDir`, `outDir`); this plugin renames nothing |
+
+The debug build stays a **release** build type, Rust and Gradle optimized, so measurements on
+the phone match the store app (Decision D1). Every patch is idempotent, and the store and dev
+profiles restore the bytes the tree had before the debug profile touched it.
+
+**The dev profile** takes the store column of the table below on every line: the game's signing
+key, no `.debug` suffix, no `(debug)` label, cleartext closed, no implied shell, and a page that
+reads `build.profile === "release"` with no `-debug` in its id, no `share` and an untouched
+console. It differs from store in one key: `build.removeUnusedCommands` is absent, so a dev
+page keeps the commands the agent calls.
+
+**Android.**
 
 | What | Debug profile | Store profile |
 |---|---|---|
@@ -466,6 +504,19 @@ the store profile restores the bytes the tree had before the debug profile touch
 
 Line endings follow the patched file (CRLF included). The debug label and the restore both
 work on whole lines, so a name with `'`, `&` or `--` round-trips.
+
+**iOS.** A debug build reaches the editor on the local network and takes Safari Web Inspector.
+All three lines apply to `ios` in the `debug` profile only; the Android output does not change,
+and the shell stays out of iOS (Decision D6). As on Android, this plugin renames nothing.
+
+| What | Debug profile |
+|---|---|
+| `tauri.conf.json` | `devtools: true` on the main window |
+| `Cargo.toml` | `devtools` in the `tauri` features: a release build compiles the inspector only with it, so the window flag alone does nothing |
+| `Info.ios.plist` | `NSLocalNetworkUsageDescription` (the sentence iOS shows when it asks) and `NSAppTransportSecurity` = `{ NSAllowsLocalNetworking: true }`, after `ios.infoPlist`, so they replace a game's own values in this profile only |
+
+Back in store or dev, the sidecar has neither key, but `tauri ios build` has merged them into
+the kept tree, so the patch pass takes them out: see [The iOS Info.plist](#the-ios-infoplist).
 
 **The link check.** The Tauri CLI writes `gen/android/tauri.settings.gradle` from every
 plugin's Android library. A tree initialised before the shell was added may not name it, and

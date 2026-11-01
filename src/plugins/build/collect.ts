@@ -49,7 +49,7 @@ export function bundleRoot(projectDirectory: string, layout: BundleLayout): stri
 }
 
 /**
- * Names a build's delivery directory under `outDir`: the target for a store build,
+ * Names a build's delivery directory under `outDir`: the target for a store or dev build,
  * `<target>-debug` for a debug one — so a debug installer never overwrites the store one.
  *
  * @param target - The packaging target being collected.

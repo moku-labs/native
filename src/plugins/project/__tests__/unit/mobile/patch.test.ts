@@ -9,6 +9,8 @@ import { applySigningBlock } from "../../../mobile/signing";
 import { orientationManifest } from "../../../orientation";
 import {
   androidManifest,
+  CLEAN_INFO_PLIST,
+  DEBUG_INFO_PLIST,
   LITERAL_RUNNER,
   mainActivityPath,
   pbxprojFor,
@@ -62,6 +64,15 @@ describe("patchMobile", () => {
       "utf8"
     );
     return genDir;
+  };
+
+  /** Seeds a gen/apple tree whose `<slug>_iOS/Info.plist` holds `content`. */
+  const seedInfoPlist = async (content: string) => {
+    const genDir = await seedApple();
+    const infoPlist = path.join(genDir, "MyApp_iOS", "Info.plist");
+    await mkdir(path.dirname(infoPlist), { recursive: true });
+    await writeFile(infoPlist, content, "utf8");
+    return { genDir, infoPlist };
   };
 
   /** Seeds a gen/apple tree with the real generated files, and a manifest source beside it. */
@@ -453,5 +464,60 @@ describe("patchMobile", () => {
     const result = await patchMobile(dir, { target: "ios" }, {}, [], "#10161d");
 
     expect(result.patched).toEqual([]);
+  });
+
+  describe("the debug keys a kept Info.plist carries", () => {
+    it.each([
+      "store",
+      "dev"
+    ] as const)("a %s pass removes them and reports the file (bug: a tester's or store build ships the loosened ATS after a debug build)", async profile => {
+      const { infoPlist } = await seedInfoPlist(DEBUG_INFO_PLIST);
+
+      const result = await patchMobile(dir, { target: "ios", profile }, {});
+
+      expect(await readFile(infoPlist, "utf8")).toBe(CLEAN_INFO_PLIST);
+      expect(result.patched).toEqual([infoPlist]);
+    });
+
+    it("a second pass reports the file unchanged (bug: every store build rewrites it)", async () => {
+      const { infoPlist } = await seedInfoPlist(DEBUG_INFO_PLIST);
+      await patchMobile(dir, { target: "ios", profile: "store" }, {});
+
+      const second = await patchMobile(dir, { target: "ios", profile: "store" }, {});
+
+      expect(second.patched).toEqual([]);
+      expect(second.unchanged).toContain(infoPlist);
+    });
+
+    it("a debug pass leaves them (bug: the Android profile stands in for the real one, and an iOS debug build loses its local network)", async () => {
+      const { infoPlist } = await seedInfoPlist(DEBUG_INFO_PLIST);
+
+      const result = await patchMobile(dir, { target: "ios", profile: "debug" }, {});
+
+      expect(await readFile(infoPlist, "utf8")).toBe(DEBUG_INFO_PLIST);
+      expect(result.patched).toEqual([]);
+      expect(result.unchanged).not.toContain(infoPlist);
+    });
+
+    it("a <slug>_iOS directory without the file is nothing to do (bug: the first build, before tauri wrote it, crashes)", async () => {
+      const genDir = await seedApple();
+      await mkdir(path.join(genDir, "MyApp_iOS"));
+
+      const result = await patchMobile(dir, { target: "ios", profile: "store" }, {});
+
+      expect(result.unchanged).not.toContain(path.join(genDir, "MyApp_iOS", "Info.plist"));
+      expect(existsSync(path.join(genDir, "MyApp_iOS", "Info.plist"))).toBe(false);
+    });
+
+    it("touches no Info.plist outside the <slug>_iOS directory (bug: another target's plist edited)", async () => {
+      const { genDir } = await seedInfoPlist(CLEAN_INFO_PLIST);
+      const other = path.join(genDir, "Widgets", "Info.plist");
+      await mkdir(path.dirname(other));
+      await writeFile(other, DEBUG_INFO_PLIST, "utf8");
+
+      await patchMobile(dir, { target: "ios", profile: "store" }, {});
+
+      expect(await readFile(other, "utf8")).toBe(DEBUG_INFO_PLIST);
+    });
   });
 });

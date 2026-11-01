@@ -258,5 +258,25 @@ describe("generateTauriConf", () => {
     it("stays out of a debug build (bug: the debug page loses a command it calls)", () => {
       expect(confFor("android", "debug").build).not.toHaveProperty("removeUnusedCommands");
     });
+
+    it("stays out of a dev build (bug: a dev page loses the agent's commands)", () => {
+      expect(confFor("android", "dev").build).not.toHaveProperty("removeUnusedCommands");
+    });
+  });
+
+  describe("the main window's devtools", () => {
+    it("is on for ios in the debug profile (bug: Safari Web Inspector cannot attach)", () => {
+      expect(confFor("ios", "debug").app.windows).toEqual([
+        { title: "My Cool App", devtools: true }
+      ]);
+    });
+
+    it.each([
+      ["android", "debug"],
+      ["ios", "store"],
+      ["ios", "dev"]
+    ] as const)("is absent on %s in the %s profile (bug: the inspector open in a tester's or player's build, or Android debug output changed)", (target, profile) => {
+      expect(confFor(target, profile).app.windows).toEqual([{ title: "My Cool App" }]);
+    });
   });
 });

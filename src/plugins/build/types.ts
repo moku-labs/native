@@ -21,7 +21,7 @@ export type PhaseTiming = { phase: NativePhase; durationMs: number };
 /** Result of one target's full pipeline pass — `phases` always carries all six entries. */
 export type BuildResult = {
   target: Target;
-  /** `<outDir>/<target>` for a store build, `<outDir>/<target>-debug` for a debug one. */
+  /** `<outDir>/<target>` for a store or dev build, `<outDir>/<target>-debug` for a debug one. */
   outPath: string;
   artifacts: readonly string[];
   durationMs: number;
@@ -30,7 +30,7 @@ export type BuildResult = {
   profile: BuildProfile;
 };
 
-/** Options for a prepare pass: the target, and `debug` for the debug profile (Android only). */
+/** Options for a prepare pass: the target, and `debug` for the debug profile (Android, iOS). */
 export type PrepareOptions = { target: Target; debug?: boolean | undefined };
 
 /** Options for one target's pipeline pass. Platform-specific flags are ignored elsewhere. */
@@ -77,8 +77,8 @@ export type Api = {
    *
    * @param opts - The target to prepare, and `debug` for the debug profile.
    * @returns Nothing; the tree under `projectDir` is ready for the build verb.
-   * @throws {Error} `[native] --debug builds Android only for now (asked for <target>).` when
-   *   `debug` is set for any target but android — before any phase runs.
+   * @throws {Error} `[native] --debug builds Android and iOS only for now (asked for <target>).`
+   *   when `debug` is set for any target but android and ios — before any phase runs.
    * @example
    * ```ts
    * // A consumer prepares the debug tree of the phone build to open it in Android Studio: the
@@ -92,32 +92,43 @@ export type Api = {
    * target, emitting `native:phase` per phase and `native:complete` on success. A store build
    * whose page carries the editor agent is refused after the compile, before anything is
    * collected; a debug build is delivered into `<outDir>/<target>-debug`, beside the store one.
+   * A dev build is the store build with the agent allowed: same signing, same delivery.
    *
-   * @param opts - The target plus the platform flags (`simulator`, `aab`, `debug`).
+   * @param opts - The target plus the platform flags (`simulator`, `aab`, `debug`, `dev`).
    * @returns The completed pipeline's result.
-   * @throws {Error} The first failing phase's error; `[native] --debug builds Android only …`
-   *   for `debug` on another target, before any phase.
+   * @throws {Error} The first failing phase's error; before any phase,
+   *   `[native] --debug builds Android and iOS only …` for `debug` on another target and
+   *   `[native] debug and dev cannot be combined.` for both flags together.
    * @example
    * ```ts
    * // A debug build for the phone, installed beside the store app.
    * const result = await app.build.run({ target: "android", debug: true });
    * // result.outPath === "dist-native/android-debug", result.profile === "debug"
+   *
+   * // The bundle a tester gets from the Play track, its page carrying the editor agent.
+   * const test = await app.build.run({ target: "android", aab: true, dev: true });
+   * // test.outPath === "dist-native/android", test.profile === "dev"
    * ```
    */
   run(opts: RunOptions): Promise<BuildResult>;
   /**
    * Runs the pipeline sequentially for every target in `opts.targets` (default: the configured
    * `targets`), stopping at the first failing target. With `debug`, every target is checked up
-   * front and the whole run is refused when one is not android — nothing is half-built.
+   * front and the whole run is refused when one is neither android nor ios; `debug` and `dev`
+   * together are refused up front too — nothing is half-built.
    *
    * @param opts - The targets plus the platform flags threaded into every run.
    * @returns Every completed target's result, in target order.
-   * @throws {Error} Whatever the first failing target's pipeline throws.
+   * @throws {Error} The up-front refusals, or whatever the first failing target's pipeline throws.
    * @example
    * ```ts
    * // targets: ["android"] in the app config
    * const [phone] = await app.build.runAll({ debug: true });
    * // phone.profile === "debug", phone.outPath === "dist-native/android-debug"
+   *
+   * // The test app of both phones in one pass, each in the dev profile.
+   * const results = await app.build.runAll({ targets: ["android", "ios"], dev: true });
+   * // results.map(result => result.profile) is ["dev", "dev"]
    * ```
    */
   runAll(opts?: RunAllOptions): Promise<readonly BuildResult[]>;

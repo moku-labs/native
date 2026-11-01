@@ -6,15 +6,17 @@
  * the orientation lock), `system-bars.ts` (the Android status bar icon style from
  * `app.backgroundColor`), `window-background.ts` (the Android window and icon-splash
  * background from the same colour), `runner.ts` (the Xcode / Android-Studio runner command),
- * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work)
- * and `ios-project.ts` (the iOS deployment target and privacy manifest).
+ * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work),
+ * `ios-project.ts` (the iOS deployment target and privacy manifest) and `ios-plist.ts` (the
+ * debug keys a debug build left in the iOS `Info.plist`).
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { SigningConfig, TauriRunner } from "../../../config";
+import type { BuildProfile, SigningConfig, TauriRunner } from "../../../config";
 import { DEFAULT_IOS_MINIMUM_SYSTEM_VERSION } from "../generators/tauri-conf";
 import { genDirectoryPath } from "../layout";
 import type { AndroidProfile, ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
+import { patchIosInfoPlist } from "./ios-plist";
 import { patchDeploymentTarget, patchPrivacyManifest, readPrivacyManifest } from "./ios-project";
 import { patchAndroidManifest } from "./manifest";
 import { patchAndroidProfile } from "./profile";
@@ -48,8 +50,9 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
 
 /**
  * The iOS half of {@link patchMobile}: the Xcode entitlements-modification setting, the
- * deployment target, the privacy manifest, then the runner command when the caller supplies
- * a runner. A tree that was never initialised is left alone and reports nothing.
+ * deployment target, the privacy manifest, outside the debug profile the removal of the debug
+ * `Info.plist` keys, then the runner command when the caller supplies a runner. A tree that
+ * was never initialised is left alone and reports nothing.
  *
  * @param options - What to patch.
  * @param options.projectDirectory - The Tauri project root.
@@ -58,9 +61,10 @@ function mergePatchResults(...results: readonly PatchResult[]): PatchResult {
  * @param options.minimumVersion - The iOS deployment target to write.
  * @param options.privacyManifest - `ios.privacyManifest`; unset removes one a previous pass
  *   added.
+ * @param options.profile - The build profile of this pass.
  * @returns The paths patched vs. left unchanged, merged over every patch.
  * @throws {Error} When the privacy manifest source is missing (before anything is written),
- *   or a project file lacks a line a patch needs.
+ *   a project file lacks a line a patch needs, or a debug key in `Info.plist` has no value.
  */
 async function patchIos(options: {
   projectDirectory: string;
@@ -68,6 +72,7 @@ async function patchIos(options: {
   runner: TauriRunner | undefined;
   minimumVersion: string;
   privacyManifest: string | undefined;
+  profile: BuildProfile;
 }): Promise<PatchResult> {
   const { projectDirectory, genDirectory, runner } = options;
 
@@ -86,6 +91,11 @@ async function patchIos(options: {
   );
   const privacyResult = await patchPrivacyManifest(projectDirectory, genDirectory, manifest);
   const iosResults = [settingsResult, deploymentResult, privacyResult];
+
+  // A debug build merged its keys into Info.plist for good: only that profile keeps them.
+  if (options.profile !== "debug") {
+    iosResults.push(await patchIosInfoPlist(projectDirectory, genDirectory));
+  }
   if (!runner) return mergePatchResults(...iosResults);
 
   // The runner command last, only when the caller names one.
@@ -186,20 +196,23 @@ async function patchAndroid(options: {
  * byte, wherever the signing block sits. iOS gets the Xcode
  * entitlements-modification setting (without it the SECOND build of the same tree fails),
  * the deployment target and the privacy manifest (a kept tree never runs xcodegen again, so
- * both land in `project.yml` AND `project.pbxproj`), then the runner command. The runner
- * rewrite runs only when the caller supplies a `runner`. iOS takes no manifest entries, no
- * background colour and no profile: its orientation lock and signing travel through the
- * generated `Info.ios.plist` sidecar and tauri.conf.json, and its status bar adapts to the
- * page on its own.
+ * both land in `project.yml` AND `project.pbxproj`), outside the debug profile the removal of
+ * the debug keys a debug build merged into `Info.plist`, then the runner command. The runner
+ * rewrite runs only when the caller supplies a `runner`. iOS takes no manifest entries and no
+ * background colour: its orientation lock and signing travel through the generated
+ * `Info.ios.plist` sidecar and tauri.conf.json, and its status bar adapts to the page on its
+ * own. Its profile is `opts.profile`, because `profile` below reads store for iOS.
  *
  * @param projectDirectory - The Tauri project root.
- * @param opts - The mobile platform, and optionally the absolute Node/tauri.js runner pair.
+ * @param opts - The mobile platform, optionally the absolute Node/tauri.js runner pair, and
+ *   the build profile, which iOS reads here; the store profile when omitted.
  * @param signing - The full signing config (`.android` on Android, the iOS minimum in
  *   `.apple` on iOS).
  * @param manifest - Android manifest entries for the main activity (ignored on iOS).
  * @param backgroundColor - `app.backgroundColor`; the Android status bar icons, window
  *   background and icon-splash background follow it (ignored on iOS).
- * @param profile - The Android build profile; the store profile when omitted.
+ * @param profile - The Android build profile, `dev` included as store; the store profile
+ *   when omitted (ignored on iOS).
  * @param privacyManifest - `ios.privacyManifest`, an absolute path; unset removes one a
  *   previous pass added (ignored on Android).
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
@@ -208,8 +221,8 @@ async function patchAndroid(options: {
  *   written), manifest entries meet a missing manifest or an unclear main activity, a
  *   background colour meets a tree without exactly one MainActivity.kt to style or without
  *   the app theme to set the window background in; or when the iOS privacy manifest source
- *   is missing (before anything is written), or `project.yml` or `project.pbxproj` lacks a
- *   line a patch needs.
+ *   is missing (before anything is written), `project.yml` or `project.pbxproj` lacks a line
+ *   a patch needs, or a debug key in `Info.plist` has no value.
  */
 export async function patchMobile(
   projectDirectory: string,
@@ -229,7 +242,8 @@ export async function patchMobile(
       genDirectory,
       runner: opts.runner,
       minimumVersion: signing.apple?.iosMinimumSystemVersion ?? DEFAULT_IOS_MINIMUM_SYSTEM_VERSION,
-      privacyManifest
+      privacyManifest,
+      profile: opts.profile ?? "store"
     });
   }
 

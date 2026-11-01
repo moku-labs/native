@@ -164,4 +164,34 @@ describe("generateCargo", () => {
 
     expect(artifact?.content).toContain(`\n\n${RELEASE_PROFILE}\n\n`);
   });
+
+  describe("the devtools feature", () => {
+    it("is on for ios in the debug profile (bug: the window flag alone does nothing in a release build)", () => {
+      const [artifact] = generateCargo(generatorInputFor("ios", "debug"));
+
+      expect(artifact?.content).toContain('tauri = { version = "2.12", features = ["devtools"] }');
+    });
+
+    it.each([
+      ["android", "debug"],
+      ["ios", "store"],
+      ["ios", "dev"]
+    ] as const)("is absent on %s in the %s profile (bug: the inspector compiled into a tester's or player's build)", (target, profile) => {
+      const [artifact] = generateCargo(generatorInputFor(target, profile));
+
+      expect(artifact?.content).toContain('tauri = { version = "2.12", features = [] }');
+    });
+
+    it("stays in the sorted, deduped list (bug: the feature named twice, or Cargo.toml churning its order)", () => {
+      const capabilities = [resolve("tray"), { ...resolve("store"), cargoFeatures: ["devtools"] }];
+      const [artifact] = generateCargo({
+        ...generatorInputComposing("ios", capabilities),
+        profile: "debug"
+      });
+
+      expect(artifact?.content).toContain(
+        'tauri = { version = "2.12", features = ["devtools", "tray-icon"] }'
+      );
+    });
+  });
 });

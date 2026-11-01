@@ -14,7 +14,7 @@
 
 <br/>
 
-[Quick start](#quick-start) · [Two apps, one contract](#two-apps-one-contract) · [Plugins](#plugins) · [Configuration](#configuration) · [Signing and store builds](#signing-and-store-builds) · [Debug builds](#debug-builds-android) · [iOS simulator](#ios-simulator) · [Events](#events) · [Docs](#docs)
+[Quick start](#quick-start) · [Two apps, one contract](#two-apps-one-contract) · [Plugins](#plugins) · [Configuration](#configuration) · [Signing and store builds](#signing-and-store-builds) · [Debug builds](#debug-builds) · [Dev profile](#dev-profile) · [iOS simulator](#ios-simulator) · [Events](#events) · [Docs](#docs)
 
 ---
 
@@ -271,21 +271,21 @@ What each piece does:
 
 What the generated project adds for a store:
 
-- **A smaller library.** Every `Cargo.toml` carries a `[profile.release]` table (`codegen-units = 1`, `lto = true`, `opt-level = "s"`, `panic = "abort"`, `strip = true`), on every target and in both build profiles. It costs compile time.
-- **No unused commands.** A store build sets `build.removeUnusedCommands: true` in `tauri.conf.json`. A debug build leaves it out.
+- **A smaller library.** Every `Cargo.toml` carries a `[profile.release]` table (`codegen-units = 1`, `lto = true`, `opt-level = "s"`, `panic = "abort"`, `strip = true`), on every target and in every build profile. It costs compile time.
+- **No unused commands.** A store build sets `build.removeUnusedCommands: true` in `tauri.conf.json`. A debug or dev build leaves it out.
 - **An Android `versionCode`.** An android build with `app.buildNumber` writes it to `bundle.android.versionCode`, as a number.
 - **`Info.plist` keys and a privacy manifest.** `ios.infoPlist` and `ios.privacyManifest`, see [Configuration](#configuration).
 
-## Debug builds (Android)
+## Debug builds
 
 ```ts
 await native.cli.build({ target: "android", debug: true });
 // debug build → dist-native/android-debug/
 ```
 
-`debug: true` (on `cli.build`, `build.run`, `build.runAll` and `build.prepare`) builds the **debug profile**: an on-device test build that is still a *release* build type — Rust and Gradle optimized, so what you measure on the phone is what the store app does — but marked so it can never be mistaken for one, and installed **beside** the store app rather than over it:
+`debug: true` (on `cli.build`, `build.run`, `build.runAll` and `build.prepare`) builds the **debug profile**: an on-device test build that is still a *release* build type — Rust and Gradle optimized, so what you measure on the phone is what the store app does. On Android it is marked so it can never be mistaken for the store app, and installed **beside** it rather than over it:
 
-| | Debug profile | Store profile (default) |
+| Android | Debug profile | Store profile (default) |
 |---|---|---|
 | Application id | `<app.identifier>.debug` (`applicationIdSuffix`) | `app.identifier` |
 | Launcher name | `<app.name> (debug)` | `app.name` |
@@ -295,16 +295,26 @@ await native.cli.build({ target: "android", debug: true });
 | Page | `__MOKU_NATIVE__.build.profile === "debug"`, `console.*` also forwarded to logcat under the tag `moku-page`, WebView debugging on, `share` present | `build.profile === "release"`, none of these |
 | Delivered to | `<outDir>/android-debug/` | `<outDir>/android/` |
 
-Every debug patch is idempotent, and the next store build reverts each one to the bytes the tree had before. The run's profile also reaches your web build: the tauri CLI is spawned with `MOKU_NATIVE_PROFILE` (`"store"` or `"debug"`) in its environment, and tauri runs `web.build` inside `tauri build`. `BuildResult.profile` and `native:complete`'s `profile` carry the same value, and `cli` marks the delivery as `debug build → <outPath>`.
+Every debug patch is idempotent, and the next store or dev build reverts each one to the bytes the tree had before. The run's profile also reaches your web build: the tauri CLI is spawned with `MOKU_NATIVE_PROFILE` (`"store"`, `"debug"` or `"dev"`) in its environment, and tauri runs `web.build` inside `tauri build`. `BuildResult.profile` and `native:complete`'s `profile` carry the same value, and `cli` marks the delivery as `debug build → <outPath>`.
 
-**Android only for now.** `debug` on any other target throws before the first phase; `runAll` (and `cli.build({ all: true, debug: true })`) checks every target up front and refuses the whole run if one is not Android:
+**iOS works too**, and there native renames nothing. The debug profile opens the page to the local network and to Safari, and that is all it adds:
+
+| iOS | What the debug profile adds |
+|---|---|
+| `NSLocalNetworkUsageDescription` | The local-network prompt, in `Info.ios.plist`, after your `ios.infoPlist` keys. |
+| `NSAppTransportSecurity` | `{ NSAllowsLocalNetworking: true }`, so `ws://` reaches a machine on the LAN. It replaces your own `NSAppTransportSecurity`, in this profile only. |
+| Web Inspector | `devtools: true` on the main window and the `devtools` feature on the `tauri` crate. iOS stays a release build, so it takes both. |
+
+The separate app comes from the config: the engine passes the id, the name and its own `projectDir`, so `gen/apple` is never regenerated for a new id. The next store or dev build of a kept tree takes both keys out of the generated `Info.plist` again, and whatever your `ios.infoPlist` asks for merges back in. `teamId`, `iosMinimumSystemVersion`, `exportMethod` and `simulator` work as in the store profile, and the build lands in `<outDir>/ios-debug/`. So far this is **verified on a simulator only**.
+
+**Android and iOS only for now.** `debug` on any other target throws before the first phase; `runAll` (and `cli.build({ all: true, debug: true })`) checks every target up front and refuses the whole run if one is neither:
 
 ```
-[native] --debug builds Android only for now (asked for ios).
-  Build the debug profile for android, or drop debug to build ios.
+[native] --debug builds Android and iOS only for now (asked for macos).
+  Build the debug profile for android or ios, or drop debug to build macos.
 ```
 
-**A store build refuses a page that carries the editor agent.** After the compile, `project.detectPageAgent()` scans every `.js` file under `web.dist` for the editor agent's markers; a store build whose page still carries it fails before `collect`, so no store artifact with the agent reaches `outDir`. A debug build with the agent passes:
+**A store build refuses a page that carries the editor agent.** After the compile, `project.detectPageAgent()` scans every `.js` file under `web.dist` for the editor agent's markers; a store build whose page still carries it fails before `collect`, so no store artifact with the agent reaches `outDir`. A debug or dev build with the agent passes:
 
 ```
 [native] store build refused: the page carries the editor agent (<dist>/<file>).
@@ -312,6 +322,33 @@ Every debug patch is idempotent, and the next store build reverts each one to th
 ```
 
 `native doctor` covers the Android side with two checks: `android-platform` (fail) — the SDK platform the build compiles against (`compileSdk`) is installed, fix-it `sdkmanager "platforms;android-N"` — and `android-debug-signing` (warn) — the debug keystore exists, with the `keytool` command that creates it as the fix-it. A debug build with no debug keystore fails in `codegen` with that same command.
+
+## Dev profile
+
+```ts
+await native.cli.build({ target: "android", aab: true, dev: true });
+// installers land in dist-native/android/
+```
+
+`dev: true` (on `cli.build`, `build.run` and `build.runAll`) builds the **dev profile**: the store build a tester installs from TestFlight or a Play track, whose page may carry the editor agent. Native renames nothing. The app config names the test app — `app.identifier`, `app.name`, `app.icon`, `projectDir`, `outDir` — and everything else is the store build:
+
+| | Dev profile | Store profile (default) |
+|---|---|---|
+| Page with the editor agent | allowed | refused after the compile |
+| `MOKU_NATIVE_PROFILE` | `"dev"` | `"store"` |
+| `build.removeUnusedCommands` | left out: a dev page may call what a store page does not | `true` |
+| Signing | `signing.android`, `signing.apple` | the same |
+| Application id, name | as configured: no `.debug`, no `(debug)` | the same |
+| Network | cleartext closed | the same |
+| Page | `__MOKU_NATIVE__.build.profile === "release"`, no WebView debugging, no `share` | the same |
+| Delivered to | `<outDir>/<target>/` | the same |
+
+`BuildResult.profile` and `native:complete`'s `profile` say `"dev"`, and `cli` shows the delivery like a store one. A run picks one profile, and the pair is refused before the first phase, whatever the target:
+
+```
+[native] debug and dev cannot be combined.
+  Build one profile: debug for the local app, dev for the store-signed test app.
+```
 
 ## iOS simulator
 
@@ -375,7 +412,7 @@ Two **global framework events** are declared in `src/config.ts` — emitted by `
   outPath: string; // dist-native/<target>/ — dist-native/<target>-debug/ for a debug build
   artifacts: readonly string[];
   durationMs: number;
-  profile: BuildProfile; // "store" | "debug" — cli marks a debug delivery
+  profile: BuildProfile; // "store" | "debug" | "dev" — cli marks a debug delivery
 };
 ```
 
@@ -390,7 +427,7 @@ One **per-plugin event** is declared by `doctor` (hookable via a `depends: [doct
 
 ## Breaking changes in this release
 
-The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them. So are `ios`, `app.keepScreenOn` and the store-build changes, with one earlier stop: a non-numeric `app.buildNumber` on an android build is now refused at generate, where Tauri would have failed on it anyway. `Project.PlistValue` widens to the recursive `PlistValue`, which the package root exports too.
+The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them. So are the `dev` profile, `debug` on iOS, `ios`, `app.keepScreenOn` and the store-build changes, with one earlier stop: a non-numeric `app.buildNumber` on an android build is now refused at generate, where Tauri would have failed on it anyway. `Project.PlistValue` widens to the recursive `PlistValue`, which the package root exports too.
 
 | What breaks | Migration |
 |---|---|

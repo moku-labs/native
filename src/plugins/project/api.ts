@@ -179,7 +179,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
   /**
    * Builds the Android profile one patch pass applies. The debug profile resolves the debug
    * keystore from `ctx.env` here (`HOME` ?? `USERPROFILE`), so the patch itself never reads
-   * the environment.
+   * the environment. Every other case applies as store: the `dev` profile, and iOS, which reads
+   * `opts.profile` itself.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns The Android profile with its app name, keystore and log.
@@ -199,7 +200,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
   /**
    * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
    * entries and `app.backgroundColor` (the status bar icons and the window background
-   * follow it), hands iOS `ios.privacyManifest`, then logs.
+   * follow it), hands iOS `ios.privacyManifest` and its profile through `opts`, then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
@@ -218,7 +219,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
     );
     ctx.log.info("project:patchMobile", {
       target: opts.target,
-      profile: profile.profile,
+      profile: opts.profile ?? "store",
       patched: result.patched.length
     });
     return result;

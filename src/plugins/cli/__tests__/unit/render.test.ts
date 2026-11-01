@@ -169,6 +169,21 @@ describe("renderCompleteEvent", () => {
     expect(text).toContain("dist-native/android");
     expect(text).not.toContain("debug build");
   });
+
+  it("never marks a dev delivery as a debug build (bug: a test app read as the local debug one)", () => {
+    const { lines, ui } = createSink();
+    const payload: NativeCompleteEvent = {
+      target: "android",
+      outPath: "dist-native/android",
+      artifacts: [],
+      durationMs: 9000,
+      profile: "dev"
+    };
+
+    renderCompleteEvent(ui, payload, "Demo App");
+
+    expect(lines.join("\n")).not.toContain("debug build");
+  });
 });
 
 describe("renderCheckEvent", () => {

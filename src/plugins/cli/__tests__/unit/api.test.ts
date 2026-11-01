@@ -185,6 +185,26 @@ describe("createCliApi — build", () => {
     expect(mocks.build.runAll).toHaveBeenCalledWith(expect.objectContaining({ debug: true }));
   });
 
+  it("forwards dev to build.run (bug: dropped at the CLI boundary, the profile is store and every dev build fails)", async () => {
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
+
+    await api.build({ target: "android", aab: true, dev: true });
+
+    expect(mocks.build.run).toHaveBeenCalledWith(
+      expect.objectContaining({ target: "android", aab: true, dev: true })
+    );
+  });
+
+  it("forwards dev to build.runAll with { all: true } (bug: the same flag dropped on the other path)", async () => {
+    const { ctx, deps, mocks } = createMockCtx();
+    const api = createCliApi(ctx, deps);
+
+    await api.build({ all: true, dev: true });
+
+    expect(mocks.build.runAll).toHaveBeenCalledWith(expect.objectContaining({ dev: true }));
+  });
+
   it("boxes the TauriError stderr tail before rethrowing", async () => {
     const lines: string[] = [];
     const mocks = createMocks();

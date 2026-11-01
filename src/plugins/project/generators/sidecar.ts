@@ -1,13 +1,24 @@
 /**
- * @file project plugin generator — Info.ios.plist sidecar (src-tauri root, outside gen/).
+ * @file project plugin generator — Info.ios.plist sidecar (src-tauri root, outside gen/):
+ * the capabilities' keys, the game's, the debug profile's and the orientation lock.
  */
+import type { BuildProfile } from "../../../config";
 import { orientationPlist } from "../orientation";
-import type { PlistValue } from "../types";
+import type { PlistEntry, PlistValue } from "../types";
 import { escapeXml } from "../xml";
 import type { Artifact, GeneratorInput } from "./types";
 
 /** One indentation step of the generated plist. */
 const PLIST_INDENT = "  ";
+
+/** The key of the sentence iOS shows when it asks to reach the local network. */
+export const LOCAL_NETWORK_USAGE_KEY = "NSLocalNetworkUsageDescription";
+
+/** The key of App Transport Security, which refuses `ws://` to the editor by default. */
+export const APP_TRANSPORT_SECURITY_KEY = "NSAppTransportSecurity";
+
+/** The sentence iOS shows when an iOS debug build first reaches for the editor. */
+const LOCAL_NETWORK_USAGE = "This debug build talks to the editor on your local network.";
 
 /**
  * Tells a plist `<array>` from a `<dict>`: `Array.isArray` alone does not narrow a readonly
@@ -80,11 +91,33 @@ function renderPlistValue(value: PlistValue, indent: string): string[] {
 }
 
 /**
+ * Lists what the debug profile needs to reach the editor from an iPhone: the local-network
+ * sentence, and App Transport Security opened for the local network alone. Every other
+ * profile adds nothing, and the iOS patch pass takes both keys out of a kept tree again
+ * (`mobile/ios-plist.ts`).
+ *
+ * @param profile - The build profile being generated for.
+ * @returns The two entries in the debug profile, otherwise none.
+ * @example
+ * ```ts
+ * debugPlist("store"); // []
+ * ```
+ */
+function debugPlist(profile: BuildProfile): PlistEntry[] {
+  if (profile !== "debug") return [];
+  return [
+    { key: LOCAL_NETWORK_USAGE_KEY, value: LOCAL_NETWORK_USAGE },
+    { key: APP_TRANSPORT_SECURITY_KEY, value: { NSAllowsLocalNetworking: true } }
+  ];
+}
+
+/**
  * Generates the `Info.ios.plist` SIDECAR at the src-tauri root, which Tauri merges into the
  * app's Info.plist on every iOS build. Its entries are every resolved capability's
- * `sidecarPlist`, then `ios.infoPlist`, then the orientation lock (`app.orientation`); on a
- * duplicate key the later entry wins, so the app's keys beat a capability and orientation
- * beats both.
+ * `sidecarPlist`, then `ios.infoPlist`, then the debug profile's two keys, then the orientation
+ * lock (`app.orientation`); on a duplicate key the later entry wins, so the app's keys beat a
+ * capability, the debug keys beat a game's own in that profile only, and orientation beats
+ * them all.
  *
  * On iOS the file is ALWAYS written, as an empty `<dict>` when nothing contributes a key:
  * the writer never deletes a file, and a portrait lock left in a stale sidecar would keep
@@ -109,6 +142,7 @@ export function generateSidecar(input: GeneratorInput): Artifact[] {
   const contributed = [
     ...input.capabilities.flatMap(capability => capability.sidecarPlist),
     ...Object.entries(input.global.ios?.infoPlist ?? {}).map(([key, value]) => ({ key, value })),
+    ...debugPlist(input.profile),
     ...orientationPlist(input.global.app.orientation)
   ];
   for (const entry of contributed) entries.set(entry.key, entry.value);

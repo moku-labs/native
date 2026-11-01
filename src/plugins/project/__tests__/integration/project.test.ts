@@ -8,10 +8,13 @@ import type { BuildProfile, Target } from "../../../../config";
 import { coreConfig, createCore } from "../../../../config";
 import { projectPlugin } from "../../index";
 import {
+  CLEAN_INFO_PLIST,
+  DEBUG_INFO_PLIST,
   mainActivityPath,
   REAL_MAIN_ACTIVITY,
   REAL_PBXPROJ,
-  REAL_PROJECT_YML
+  REAL_PROJECT_YML,
+  SIGNING
 } from "../unit/mobile/fixtures";
 
 // ---------------------------------------------------------------------------
@@ -565,6 +568,67 @@ describe("complex tier: project plugin (integration)", () => {
           config: { ...validAppConfig, projectDir, ios: { privacyManifest: "app.xcprivacy" } }
         })
       ).toThrow('[native] ios.privacyManifest "app.xcprivacy" must be an absolute path.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: the dev profile, and debug on iOS
+  // -------------------------------------------------------------------------
+
+  describe("runtime: the dev profile and iOS debug", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("patchMobile in dev is the store pass: the game's key, no .debug block, no debug keystore needed (bug: a dev build signed with the debug key)", async () => {
+      // A home with no keystore: a pass on the debug branch refuses here. USERPROFILE and not
+      // HOME, as above, or the projectDir guard stops trusting the temp root.
+      const home = await mkdtemp(path.join(tmpdir(), "moku-native-home-"));
+      vi.stubEnv("HOME", undefined);
+      vi.stubEnv("USERPROFILE", home);
+      await seedAndroid(manifestWithMainActivity(""));
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: {
+          ...validAppConfig,
+          projectDir,
+          signing: { android: SIGNING }
+        }
+      });
+
+      await app.project.patchMobile({ target: "android", profile: "dev" });
+      const store = await app.project.patchMobile({ target: "android" });
+      await rm(home, { recursive: true, force: true });
+
+      const gradle = await readFile(
+        path.join(projectDir, "src-tauri", "gen", "android", "app", "build.gradle.kts"),
+        "utf8"
+      );
+      expect(gradle).toContain('storeFile = file("release.jks")');
+      expect(gradle).not.toContain(".debug");
+      // Nothing left for the store pass to change: dev wrote exactly its bytes.
+      expect(store.patched).toEqual([]);
+    });
+
+    it("patchMobile keeps the iOS debug keys in debug, the next pass with no profile drops them (bug: a store build ships the loosened ATS after a debug build of the same projectDir)", async () => {
+      await seedApple();
+      const infoPlist = path.join(
+        projectDir,
+        "src-tauri",
+        "gen",
+        "apple",
+        "store-probe_iOS",
+        "Info.plist"
+      );
+      await mkdir(path.dirname(infoPlist), { recursive: true });
+      await writeFile(infoPlist, DEBUG_INFO_PLIST, "utf8");
+      const app = createTestApp();
+
+      await app.project.patchMobile({ target: "ios", profile: "debug" });
+      expect(await readFile(infoPlist, "utf8")).toBe(DEBUG_INFO_PLIST);
+
+      await app.project.patchMobile({ target: "ios" });
+      expect(await readFile(infoPlist, "utf8")).toBe(CLEAN_INFO_PLIST);
     });
   });
 

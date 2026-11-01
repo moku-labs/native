@@ -170,7 +170,7 @@ export type Api = {
    * @param opts.onOutput - Called with each scrubbed output line.
    * @param opts.env - Extra environment for the tauri CLI, merged over the inherited one, so
    *   the web build tauri runs (`beforeBuildCommand`) can read it. Never changes the argv: the
-   *   debug profile is still a release build (no `--debug`).
+   *   debug and dev profiles are still release builds (no `--debug`).
    * @returns The completed run's result.
    * @throws {Error} A classified `TauriError` on a non-zero exit.
    * @example

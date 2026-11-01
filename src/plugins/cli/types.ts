@@ -40,25 +40,29 @@ export type Api = {
    * `{ all: true }` (which ignores any given `target`). The flavor flags pass straight
    * through to `build.run`/`build.runAll`. Progress renders live through the plugin's
    * `native:phase`/`native:complete` hooks — a debug delivery is marked
-   * `debug build → <outPath>` in the completion panel. A failure (the store refusal of an
-   * editor-agent page included) renders the scrubbed stderr tail before the `[native]`
-   * error line, then rethrows unchanged.
+   * `debug build → <outPath>` in the completion panel, a dev delivery reads like a store one.
+   * A failure (the store refusal of an editor-agent page included) renders the scrubbed stderr
+   * tail before the `[native]` error line, then rethrows unchanged.
    *
    * @param opts - Build options.
    * @param opts.target - The packaging target (default: the resolved host target).
    * @param opts.all - Build every configured target instead of one (ignores `target`).
    * @param opts.simulator - iOS: build for the host's simulator arch instead of a device archive.
    * @param opts.aab - Android: emit a store bundle (`.aab`) instead of an `.apk`.
-   * @param opts.debug - Build the debug profile (Android only), delivered to `<outDir>/<target>-debug`.
+   * @param opts.debug - Build the debug profile (Android, iOS), delivered to `<outDir>/<target>-debug`.
+   * @param opts.dev - Build the dev profile: the store build a tester installs, agent allowed.
    * @returns Resolves once the build (or all builds) complete.
    * @throws {Error} Whatever the pipeline throws — after rendering the failure.
-   *   `[native] --debug builds Android only …` when `debug` is set with a non-android target,
-   *   (or `all: true` with a non-android target).
+   *   `[native] --debug builds Android and iOS only …` when `debug` is set with another target
+   *   (or `all: true` with another target); `[native] debug and dev cannot be combined.` for
+   *   both flags together.
    * @example
    * ```ts
    * // A debug build for the phone, installed beside the store app; the completion panel
    * // reads "debug build → dist-native/android-debug".
    * await app.cli.build({ target: "android", debug: true });
+   * // The bundle a tester gets from the Play track, in dist-native/android.
+   * await app.cli.build({ target: "android", aab: true, dev: true });
    * // Every configured target, store profile.
    * await app.cli.build({ all: true });
    * ```

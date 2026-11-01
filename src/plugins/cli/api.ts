@@ -63,14 +63,14 @@ export function createCliApi(ctx: CliContext, deps: CliDeps): Api {
      * @returns See {@link Api.build}.
      */
     async build(opts = {}) {
-      const { simulator, aab, debug } = opts;
+      const { simulator, aab, debug, dev } = opts;
 
       try {
         if (opts.all) {
-          await build.runAll({ simulator, aab, debug });
+          await build.runAll({ simulator, aab, debug, dev });
           return;
         }
-        await build.run({ target: opts.target ?? hostTarget(), simulator, aab, debug });
+        await build.run({ target: opts.target ?? hostTarget(), simulator, aab, debug, dev });
       } catch (error) {
         renderBuildFailure(ui, error);
         throw error;

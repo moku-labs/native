@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Config, Orientation } from "../../../../../config";
+import type { BuildProfile, Config, Orientation } from "../../../../../config";
 import { generateSidecar } from "../../../generators/sidecar";
 import type { PlistEntry, ResolvedCapability } from "../../../types";
 import { baseGlobalConfig, generatorInputFor, generatorInputWith } from "./fixtures";
@@ -61,6 +61,25 @@ const sidecarWith = (
     capabilities,
     profile: "store"
   })[0]?.content;
+
+/** App Transport Security as the debug profile writes it. */
+const LOCAL_NETWORKING = [
+  "  <key>NSAppTransportSecurity</key>",
+  "  <dict>",
+  "    <key>NSAllowsLocalNetworking</key>",
+  "    <true/>",
+  "  </dict>"
+].join("\n");
+
+/** A game that sets its own App Transport Security. */
+const OWN_TRANSPORT = { NSAppTransportSecurity: { NSAllowsArbitraryLoads: false } };
+
+/** The sidecar text of one target and profile, for a game with `infoPlist`. */
+const contentIn = (
+  target: "ios" | "android",
+  profile: BuildProfile,
+  infoPlist: NonNullable<NonNullable<Config["ios"]>["infoPlist"]> = {}
+) => generateSidecar(generatorInputWith(target, { ios: { infoPlist } }, profile))[0]?.content;
 
 describe("generateSidecar", () => {
   it("writes an empty dict on ios when nothing contributes a key — a stale lock is cleared", () => {
@@ -211,6 +230,38 @@ describe("generateSidecar", () => {
 
       expect(content?.match(/<key>UIRequiresFullScreen<\/key>/g)).toHaveLength(1);
       expect(content).toContain("  <key>UIRequiresFullScreen</key>\n  <true/>");
+    });
+  });
+
+  describe("the iOS debug keys", () => {
+    it("reach the editor on the local network from ios in the debug profile (bug: iOS blocks the connection and never asks)", () => {
+      const content = contentIn("ios", "debug");
+
+      expect(content).toMatch(
+        /<key>NSLocalNetworkUsageDescription<\/key>\n {2}<string>[^<]*editor[^<]*local network[^<]*<\/string>/
+      );
+      expect(content).toContain(LOCAL_NETWORKING);
+    });
+
+    it("beat a game's own NSAppTransportSecurity, in debug only (bug: the debug build stays locked out, or a store build loses the game's setting)", () => {
+      const debug = contentIn("ios", "debug", OWN_TRANSPORT);
+
+      expect(debug?.match(/<key>NSAppTransportSecurity<\/key>/g)).toHaveLength(1);
+      expect(debug).toContain(LOCAL_NETWORKING);
+      expect(debug).not.toContain("NSAllowsArbitraryLoads");
+      expect(contentIn("ios", "store", OWN_TRANSPORT)).toContain("NSAllowsArbitraryLoads");
+      expect(contentIn("ios", "dev", OWN_TRANSPORT)).toContain("NSAllowsArbitraryLoads");
+    });
+
+    it.each([
+      ["android", "debug"],
+      ["ios", "store"],
+      ["ios", "dev"]
+    ] as const)("stay out on %s in the %s profile (bug: a loosened ATS in a tester's or store build)", (target, profile) => {
+      const content = contentIn(target, profile) ?? "";
+
+      expect(content).not.toContain("NSLocalNetworkUsageDescription");
+      expect(content).not.toContain("NSAppTransportSecurity");
     });
   });
 });
