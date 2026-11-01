@@ -30,10 +30,25 @@ export type BuildResult = {
   profile: BuildProfile;
 };
 
-/** Options for a prepare pass: the target, and `debug` for the debug profile (Android, iOS). */
+/**
+ * Options for a prepare pass: the target, and `debug` for the debug profile (Android, iOS).
+ * It takes no `dev` on purpose: a dev build is only ever a full `run`.
+ *
+ * @example
+ * ```ts
+ * const opts: PrepareOptions = { target: "ios", debug: true };
+ * ```
+ */
 export type PrepareOptions = { target: Target; debug?: boolean | undefined };
 
-/** Options for one target's pipeline pass. Platform-specific flags are ignored elsewhere. */
+/**
+ * Options for one target's pipeline pass. Platform-specific flags are ignored elsewhere.
+ *
+ * @example
+ * ```ts
+ * const opts: RunOptions = { target: "android", aab: true, dev: true };
+ * ```
+ */
 export type RunOptions = BuildFlavor & { target: Target };
 
 /** Options for a sequential multi-target pass (default targets: `ctx.global.targets`). */
@@ -83,7 +98,7 @@ export type Api = {
    * ```ts
    * // A consumer prepares the debug tree of the phone build to open it in Android Studio: the
    * // shell crate is generated and the debug patches are applied, nothing is compiled.
-   * await ctx.require(buildPlugin).prepare({ target: "android", debug: true });
+   * await app.build.prepare({ target: "android", debug: true });
    * ```
    */
   prepare(opts: PrepareOptions): Promise<void>;

@@ -81,7 +81,11 @@ describe("removePlistKeys", () => {
 
   it.each([
     ["the end of the file", "<dict>\n\t<key>NSAppTransportSecurity</key>\n"],
-    ["the closing tag of the dict around it", plist(["\t<key>NSAppTransportSecurity</key>"])]
+    ["the closing tag of the dict around it", plist(["\t<key>NSAppTransportSecurity</key>"])],
+    [
+      "another key",
+      plist(["\t<key>NSAppTransportSecurity</key>", "\t<key>Neighbour</key>", "\t<true/>"])
+    ]
   ])("refuses a key followed by %s (bug: the root </dict> taken for the value, or the key left in a store build)", (_case, broken) => {
     expect(() => removePlistKeys(broken, DEBUG_KEYS)).toThrow(
       "[native] Could not find the value of NSAppTransportSecurity in Info.plist."

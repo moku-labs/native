@@ -119,12 +119,14 @@ function dependencyLine(capability: ResolvedCapability): string | undefined {
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
  */
 export function generateCargo(input: GeneratorInput): Artifact[] {
+  // One dependency line per capability that ships a crate.
   const packageName = sanitizePackageName(input.global.app.name);
   const pinnedDeps = input.capabilities
     .map(capability => dependencyLine(capability))
     .filter(line => line !== undefined)
     .toSorted();
 
+  // The `tauri` features: the capabilities', plus the Web Inspector of an iOS debug build.
   const iosDebug = input.target === "ios" && input.profile === "debug";
   const requested = input.capabilities.flatMap(capability => capability.cargoFeatures);
   const features = [...new Set([...requested, ...(iosDebug ? [IOS_DEBUG_FEATURE] : [])])]
@@ -132,6 +134,7 @@ export function generateCargo(input: GeneratorInput): Artifact[] {
     .map(feature => `"${feature}"`)
     .join(", ");
 
+  // The manifest, table by table.
   const lines = [
     "[package]",
     `name = "${packageName}"`,

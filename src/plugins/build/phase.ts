@@ -12,7 +12,7 @@ import type { BuildContext } from "./types";
  *
  * @param flavor - The build flavour of the run.
  * @returns `"debug"`, `"dev"` or `"store"`.
- * @throws {Error} `[native] debug and dev cannot be combined.` when both are set.
+ * @throws {TypeError} `[native] debug and dev cannot be combined.` when both are set.
  * @example
  * ```ts
  * profileOf({ dev: true }); // "dev"
@@ -20,7 +20,7 @@ import type { BuildContext } from "./types";
  */
 export function profileOf(flavor: BuildFlavor): BuildProfile {
   if (flavor.debug === true && flavor.dev === true) {
-    throw new Error(
+    throw new TypeError(
       "[native] debug and dev cannot be combined.\n  Build one profile: debug for the local app, dev for the store-signed test app."
     );
   }

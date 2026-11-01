@@ -37,9 +37,13 @@ const TAG_PATTERN = /<(\/?)[a-z][^<>]*?(\/?)>/gi;
  * ```
  */
 function valueEnd(text: string, from: number): number | undefined {
+  // Walk the tags, tracking the nesting, until the value's own element closes.
   let depth = 0;
   for (const match of text.slice(from).matchAll(TAG_PATTERN)) {
     const [tag, closing, selfClosed] = match;
+    const nextKeyFirst = depth === 0 && tag === "<key>";
+    if (nextKeyFirst) return undefined;
+
     if (closing) depth -= 1;
     else if (!selfClosed) depth += 1;
 
@@ -91,6 +95,7 @@ function cutRange(text: string, start: number, end: number): string {
  * ```
  */
 export function removePlistKeys(existing: string, keys: readonly string[]): string {
+  // Cut every occurrence of each key, a nested one included, until none is left.
   let text = existing;
   for (const key of keys) {
     const element = `<key>${key}</key>`;
@@ -123,6 +128,8 @@ export async function patchIosInfoPlist(
 ): Promise<PatchResult> {
   const patched: string[] = [];
   const unchanged: string[] = [];
+
+  // Strip the debug keys from each Info.plist, recording whether the file changed.
   for (const file of await iosInfoPlistFiles(genDirectory)) {
     const content = removePlistKeys(await readFile(file, "utf8"), DEBUG_KEYS);
     const action = await writeIfChanged(file, content, projectDirectory);

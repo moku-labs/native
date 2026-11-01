@@ -36,8 +36,10 @@ export type BuildFlavor = {
   aab?: boolean | undefined;
   /**
    * Build the debug profile instead of the store one: a still-optimized build that installs
-   * next to the store app (`.debug` id, "(debug)" name), is signed with the debug keystore,
-   * forwards the page console and allows cleartext. Unset means the store profile.
+   * next to the store app. On Android native gives it the `.debug` id and "(debug)" name, signs
+   * it with the debug keystore, forwards the page console and allows cleartext. On iOS the
+   * config names the app, and native adds the local-network keys and the Web Inspector. Unset
+   * means the store profile.
    *
    * @example
    * ```ts
