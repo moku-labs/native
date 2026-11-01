@@ -127,6 +127,17 @@ describe("shellPageScript — the page contract v1", () => {
     expect(installPage("store", { input: noBuildNumber }).shell.build.id).toBe("2.0.0+0");
   });
 
+  it("the dev profile reads as release: no -debug id, no share, console untouched (bug: share or a console over IPC in a tester's build)", () => {
+    const { page, shell, ipc, original } = installPage("dev");
+
+    page.console.log("hello");
+
+    expect(shell.build).toEqual({ profile: "release", id: "1.2.3+7" });
+    expect("share" in shell).toBe(false);
+    expect(page.console.log).toBe(original.log);
+    expect(callsOf(ipc, "log")).toEqual([]);
+  });
+
   it("a pushed insets sets the four CSS variables and dispatches moku-native:insets (bug: the page never sees the safe area)", async () => {
     const { page, shell, events, style } = installPage("store");
     await settle();

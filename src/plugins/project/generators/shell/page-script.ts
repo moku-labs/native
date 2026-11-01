@@ -194,8 +194,8 @@ const CONTRACT_BODY = String.raw`  var MAX_SHARE_BYTES = 32 * 1024 * 1024;
 
 /**
  * Builds the page contract script for one app and profile. The build profile and id are
- * baked in at generate time: the store profile reads `"release"` on the page, and the id is
- * `"<app.version>+<app.buildNumber ?? 0>"`, with `"-debug"` in the debug profile. A second
+ * baked in at generate time: the store and dev profiles read `"release"` on the page, and the
+ * id is `"<app.version>+<app.buildNumber ?? 0>"`, with `"-debug"` in the debug profile. A second
  * run of the script in the same frame is a no-op.
  *
  * @param input - The generator input (target, app version and build number).

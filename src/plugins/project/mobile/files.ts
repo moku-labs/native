@@ -4,9 +4,9 @@
  * the iOS project patches) reads the same list from here, so none can drift into a file the
  * others do not know about — and none ever descends into `gen/apple/build` or
  * `gen/android/build`, which belong to the toolchain. The privacy manifest's place in the
- * tree is here too. The Android status bar patch finds its MainActivity.kt here, the profile
- * patches their `strings.xml` and network security config, and the icon inset its adaptive
- * icon directory.
+ * tree is here too, and so is the app's `Info.plist`. The Android status bar patch finds its
+ * MainActivity.kt here, the profile patches their `strings.xml` and network security config,
+ * and the icon inset its adaptive icon directory.
  */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -29,6 +29,12 @@ const SKIPPED_DIRECTORIES = new Set(["build", ".gradle", ".idea"]);
 
 /** The file name Apple reads a privacy manifest from, at the top of the app bundle. */
 export const IOS_PRIVACY_MANIFEST_FILE = "PrivacyInfo.xcprivacy";
+
+/** How the directory of the app's own files ends in `gen/apple`: `<slug>_iOS`. */
+const IOS_APP_DIRECTORY_SUFFIX = "_iOS";
+
+/** The file name of the app's property list, in that directory. */
+export const IOS_INFO_PLIST_FILE = "Info.plist";
 
 /**
  * Lists the generated iOS files a patch pass may rewrite: `project.yml` plus the
@@ -55,6 +61,27 @@ export async function iosPatchFiles(genDirectory: string): Promise<string[]> {
   }
 
   return files;
+}
+
+/**
+ * Lists the `Info.plist` of the generated iOS app, the file `tauri ios build` merges the
+ * sidecar into: in the `gen/apple` directory that ends in `_iOS`. A tree where tauri has not
+ * written it yet lists nothing.
+ *
+ * @param genDirectory - The `src-tauri/gen/apple` directory.
+ * @returns The existing files, possibly none.
+ * @example
+ * ```ts
+ * await iosInfoPlistFiles("/repo/.moku/tauri/src-tauri/gen/apple");
+ * // ["/repo/.moku/tauri/src-tauri/gen/apple/my-game_iOS/Info.plist"]
+ * ```
+ */
+export async function iosInfoPlistFiles(genDirectory: string): Promise<string[]> {
+  const entries = await readdir(genDirectory, { withFileTypes: true });
+  return entries
+    .filter(entry => entry.isDirectory() && entry.name.endsWith(IOS_APP_DIRECTORY_SUFFIX))
+    .map(entry => path.join(genDirectory, entry.name, IOS_INFO_PLIST_FILE))
+    .filter(file => existsSync(file));
 }
 
 /**

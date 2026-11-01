@@ -267,7 +267,7 @@ export type BuildFlavor = {
  * Which profile a build is made in. `"store"` is the shippable build; `"debug"` is the
  * on-device test build of BuildFlavor.debug. The page sees `"store"` as `"release"`.
  */
-export type BuildProfile = "store" | "debug";
+export type BuildProfile = "store" | "debug" | "dev";
 
 Framework default config literal (src/config.ts):
 
@@ -388,7 +388,7 @@ hooked by cli; hookable by ANY plugin without a depends edge:
 
 "native:complete" — payload NativeCompleteEvent:
   { target: Target; outPath: string; artifacts: readonly string[]; durationMs: number;
-    profile: BuildProfile }  // "store" | "debug"
+    profile: BuildProfile }  // "store" | "debug" | "dev"
   Emitted once per successful build.run(), after collect. outPath = outDir/<target>/, or
   outDir/<target>-debug/ when profile is "debug" (the same value BuildResult.profile carries).
 
@@ -659,7 +659,7 @@ Behavior:
   with their artifact globs, and its mobile gen/<platform> directory — straight from layout.ts.
   build's collect phase globs against this instead of keeping its own table.
 - patchMobile({ target, runner?, profile? }): idempotent post-init patch (profile defaults
-  to "store"; the build-profile patches are Android only — see "Build profiles" below).
+  to "store"; the build-profile patches are Android only, plus the iOS Info.plist step — see "Build profiles" below).
     * iOS: rewrites the runner command in gen/apple/project.yml (YAML scalar quoting) and in
       every gen/apple/*.xcodeproj/project.pbxproj (escaped \" quoting, because the value sits
       inside a pbxproj string). The match is runner-AGNOSTIC but NARROW: on any line carrying
@@ -908,7 +908,7 @@ android:screenOrientation attribute (orientationManifest):
 UIRequiresFullScreen: App Store review refuses an iPad app that restricts orientations
 without it.
 
-Build profiles (project side; Android only — build refuses debug elsewhere, Decision D2).
+Build profiles (project side; debug on Android and iOS — build refuses it elsewhere, Decision D2; dev takes the store branch).
 generate, patchMobile and checkShellLinked take `profile`: "store" (default, the shippable
 build) or "debug" (an on-device test build). The debug build stays a RELEASE build type, Rust
 and Gradle optimized, so measurements on the phone match the store app (Decision D1). Every
@@ -1193,7 +1193,7 @@ export type BuildResult = {
   profile: BuildProfile;
 };
 
-/** Options for a prepare pass: the target, and `debug` for the debug profile (Android only). */
+/** Options for a prepare pass: the target, and `debug` for the debug profile (Android and iOS). */
 export type PrepareOptions = { target: Target; debug?: boolean | undefined };
 
 /** Options for one target's pipeline pass. Platform-specific flags are ignored elsewhere. */
@@ -1250,7 +1250,7 @@ the generated project buildable, without invoking the build verb, in the store p
 with debug, the debug one. cli.dev calls it first.
 
 debug is ANDROID ONLY for now (Decision D2): run/prepare with debug on any other target throw
-"[native] --debug builds Android only for now (asked for <target>).\n  Build the debug profile
+"[native] --debug builds Android and iOS only for now (asked for <target>).\n  Build the debug profile
 for android, or drop debug to build <target>." before scaffold, so no phase event is emitted.
 runAll with debug checks every target up front and refuses the whole run if one is not
 android — nothing is half-built.
@@ -1448,7 +1448,7 @@ Behavior (api.ts):
   linux->linux via the framework's own hostTargets; mobile is NEVER inferred; an unknown host
   platform throws a [native] error) or every configured target with { all: true } (ignores
   target). simulator/aab/debug pass straight through to build.run/build.runAll (debug: the
-  debug profile, Android only, delivered to <outDir>/<target>-debug; the completion panel then
+  debug profile, Android and iOS, delivered to <outDir>/<target>-debug; the completion panel then
   reads `debug build → <outPath>`). The store refusal of an editor-agent page is an ordinary
   [native] error and renders like any other failure. On failure the
   classified TauriError's scrubbed stderrTail is framed in a branded box ABOVE the [native]
@@ -1740,7 +1740,7 @@ indented actionable second line ("  <fix-it / next command>").
     to diagnose, or `native clean --target <t>` to reset before rebuilding."
   - collect: zero glob matches throws (never a silent empty success).
   - debug on a non-android target (run/prepare; runAll checks every target up front):
-    "[native] --debug builds Android only for now (asked for <target>).\n  Build the debug
+    "[native] --debug builds Android and iOS only for now (asked for <target>).\n  Build the debug
     profile for android, or drop debug to build <target>." — before scaffold, no phase event.
   - a store build whose page carries the editor agent (after the compile, before collect):
     "[native] store build refused: the page carries the editor agent (<dist>/<file>).\n  Build
@@ -2013,7 +2013,7 @@ config.signing.android.keyPasswordEnv, build.prepare(), project.ensureIconSource
 project.patchMobile({ runner }), tauri.getRunner(), tauri.build({ simulator, exportMethod, aab }),
 doctor's probeTimeoutMs + ios-tools/ios-platform checks, and the hostTargets() helper.
 And from the A26 native shell change (additive): the `shell` capability (Android page bridge
-__MOKU_NATIVE__ v1), BuildFlavor.debug / the BuildProfile type (debug builds, Android only,
+__MOKU_NATIVE__ v1), BuildFlavor.debug / the BuildProfile type (debug builds, Android and iOS,
 delivered to <outDir>/<target>-debug), BuildResult.profile + native:complete.profile,
 build.prepare({ debug }), config.app.adaptiveIconInset, project.patchMobileIcons(),
 project.detectPageAgent() (a store build refuses an editor-agent page),

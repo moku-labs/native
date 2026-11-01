@@ -13,21 +13,23 @@ renders through this plugin's hooks on the global `native:phase`/`native:complet
 
 | Verb | Signature | What it does |
 |---|---|---|
-| `build` | `build(opts?: { target?: Target; all?: boolean; simulator?: boolean; aab?: boolean; debug?: boolean }): Promise<void>` | One target (default: the host target) or every configured target with `{ all: true }`. |
+| `build` | `build(opts?: { target?: Target; all?: boolean; simulator?: boolean; aab?: boolean; debug?: boolean; dev?: boolean }): Promise<void>` | One target (default: the host target) or every configured target with `{ all: true }`. |
 | `dev` | `dev(opts?: { target?: Target }): Promise<void>` | Prepares the project, then runs the dev loop until it exits. |
 | `doctor` | `doctor(opts?: { target?: Target }): Promise<boolean>` | Diagnoses and returns `report.ok`. |
 | `clean` | `clean(opts?: { target?: Target }): Promise<void>` | Deletes derived state (confirm-gated without a `target`). |
 
 - **`build`** — the host-target default comes from the framework's own `hostTargets`
   (darwin→macos, win32→windows, linux→linux; mobile targets are never inferred; cli
-  keeps no second table). `simulator` (iOS: build for the host's simulator arch) and `aab`
-  (Android: emit a store bundle instead of an apk) and `debug` (the debug profile, Android
-  only, delivered to `<outDir>/<target>-debug`) pass straight through to
+  keeps no second table). `simulator` (iOS: build for the host's simulator arch), `aab`
+  (Android: emit a store bundle instead of an apk), `debug` (the debug profile, Android and
+  iOS, delivered to `<outDir>/<target>-debug`) and `dev` (the dev profile, the store build a
+  tester installs, delivered to `<outDir>/<target>`) pass straight through to
   `build.run`/`build.runAll`. Progress renders live via the `native:phase`/`native:complete`
-  hooks; a debug delivery's completion panel reads `debug build → <outPath>`. The store
-  refusal of an editor-agent page is an ordinary `[native]` error and renders like any other
-  failure. On failure the classified `TauriError`'s scrubbed `stderrTail` prints above the
-  `[native]` error line, then the error rethrows unchanged. One pure decision,
+  hooks; a debug delivery's completion panel reads `debug build → <outPath>`, a dev delivery
+  reads like a store one. The store refusal of an editor-agent page is an ordinary `[native]`
+  error and renders like any other failure. On failure the classified `TauriError`'s scrubbed
+  `stderrTail` prints above the `[native]` error line, then the error rethrows unchanged. One
+  pure decision,
   `tailLineBound(process.stdout.columns)`, settles both how wide a tail line may be and
   whether it is framed at all:
 

@@ -91,7 +91,7 @@ const YML_ENTRY_INDENT = "  ";
  * // "[native] Could not find mainGroup in project.pbxproj.\n  Run clean for ios and build again, or report the project.pbxproj Tauri generated."
  * ```
  */
-function missingAnchorError(anchor: string, file: string): Error {
+export function missingAnchorError(anchor: string, file: string): Error {
   return new Error(
     `[native] Could not find ${anchor} in ${file}.\n  Run clean for ios and build again, or report the ${file} Tauri generated.`
   );

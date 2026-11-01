@@ -1,6 +1,7 @@
 /**
  * @file project plugin generator — Cargo.toml with registry-pinned crate dependencies, the
- * path dependency of every generated local crate, and the size profile of a release build.
+ * path dependency of every generated local crate, the iOS debug `devtools` feature, and the
+ * size profile of a release build.
  */
 import path from "node:path";
 import type { ResolvedCapability } from "../types";
@@ -21,7 +22,7 @@ const TAURI_VERSION_FLOOR = "2.12";
 const IOS_ONLY_DEPENDENCIES = [`[target.'cfg(target_os = "ios")'.dependencies]`, 'objc2 = "0.6"'];
 
 /**
- * The release profile, for every target and both build profiles: the debug build is a
+ * The release profile, for every target and every build profile: the debug build is a
  * release build too, so what a phone measures is what the store ships. It trades compile
  * time for a smaller library, and `panic = "abort"` drops the unwinding tables.
  */
@@ -33,6 +34,13 @@ const RELEASE_PROFILE = [
   'panic = "abort"',
   "strip = true"
 ];
+
+/**
+ * The `tauri` feature an iOS debug build adds. The debug build is a release build, and a
+ * release build compiles the inspector only with it: the window's `devtools` flag alone does
+ * nothing there.
+ */
+const IOS_DEBUG_FEATURE = "devtools";
 
 /**
  * Derives a valid Cargo package name from the app's display name — lowercased,
@@ -103,25 +111,30 @@ function dependencyLine(capability: ResolvedCapability): string | undefined {
  * every cargo feature the composed capabilities ask for (tray's `tray-icon`; without it
  * the tray API is not compiled in at all), plus one dependency line per resolved
  * capability that ships a crate: pinned for a published one, by path for the generated
- * shell crate. Feature-only and permission-only rows contribute no dependency line. The
- * `[profile.release]` table follows, and the iOS-only `objc2` table closes the file on
- * every target.
+ * shell crate. Feature-only and permission-only rows contribute no dependency line. An iOS
+ * debug build adds `devtools` to those features. The `[profile.release]` table follows, and
+ * the iOS-only `objc2` table closes the file on every target.
  *
  * @param input - Frozen global config + capabilities resolved for the target.
  * @returns A single-artifact array for `src-tauri/Cargo.toml`.
  */
 export function generateCargo(input: GeneratorInput): Artifact[] {
+  // One dependency line per capability that ships a crate.
   const packageName = sanitizePackageName(input.global.app.name);
   const pinnedDeps = input.capabilities
     .map(capability => dependencyLine(capability))
     .filter(line => line !== undefined)
     .toSorted();
 
-  const features = [...new Set(input.capabilities.flatMap(capability => capability.cargoFeatures))]
+  // The `tauri` features: the capabilities', plus the Web Inspector of an iOS debug build.
+  const iosDebug = input.target === "ios" && input.profile === "debug";
+  const requested = input.capabilities.flatMap(capability => capability.cargoFeatures);
+  const features = [...new Set([...requested, ...(iosDebug ? [IOS_DEBUG_FEATURE] : [])])]
     .toSorted()
     .map(feature => `"${feature}"`)
     .join(", ");
 
+  // The manifest, table by table.
   const lines = [
     "[package]",
     `name = "${packageName}"`,

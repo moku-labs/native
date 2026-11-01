@@ -36,8 +36,10 @@ export type BuildFlavor = {
   aab?: boolean | undefined;
   /**
    * Build the debug profile instead of the store one: a still-optimized build that installs
-   * next to the store app (`.debug` id, "(debug)" name), is signed with the debug keystore,
-   * forwards the page console and allows cleartext. Unset means the store profile.
+   * next to the store app. On Android native gives it the `.debug` id and "(debug)" name, signs
+   * it with the debug keystore, forwards the page console and allows cleartext. On iOS the
+   * config names the app, and native adds the local-network keys and the Web Inspector. Unset
+   * means the store profile.
    *
    * @example
    * ```ts
@@ -45,18 +47,31 @@ export type BuildFlavor = {
    * ```
    */
   debug?: boolean | undefined;
+  /**
+   * Build the dev profile instead of the store one: the store build a tester installs, with
+   * the same signing, `.aab`, `exportMethod` and delivery, whose page may carry the editor
+   * agent. The app config names the separate app (id, name, icon, `projectDir`, `outDir`);
+   * native renames nothing. Combining it with `debug` is an error.
+   *
+   * @example
+   * ```ts
+   * await app.build.run({ target: "android", aab: true, dev: true });
+   * ```
+   */
+  dev?: boolean | undefined;
 };
 
 /**
  * Which profile a build is made in. `"store"` is the shippable build; `"debug"` is the
- * on-device test build of {@link BuildFlavor.debug}. The page sees `"store"` as `"release"`.
+ * on-device test build of {@link BuildFlavor.debug}; `"dev"` is the store-signed test build
+ * of {@link BuildFlavor.dev}. The page sees `"store"` and `"dev"` as `"release"`.
  *
  * @example
  * ```ts
- * const profile: BuildProfile = flavor.debug ? "debug" : "store";
+ * const profile: BuildProfile = flavor.dev ? "dev" : "store";
  * ```
  */
-export type BuildProfile = "store" | "debug";
+export type BuildProfile = "store" | "debug" | "dev";
 
 /** Host platform → the one desktop target that host can package locally. */
 const HOST_TARGET: Partial<Record<NodeJS.Platform, Target>> = {

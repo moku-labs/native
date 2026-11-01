@@ -1,6 +1,7 @@
 /**
- * @file project plugin generator — tauri.conf.json (identity, build wiring, bundle
- * metadata, Apple signing, the Android versionCode, plugin blocks).
+ * @file project plugin generator — tauri.conf.json (identity, build wiring, the main
+ * window with its iOS debug inspector, bundle metadata, Apple signing, the Android
+ * versionCode, plugin blocks).
  */
 import path from "node:path";
 import type { ResolvedCapability, TauriConfFragment } from "../types";
@@ -173,9 +174,11 @@ function buildPlugins(
 
 /**
  * Generates `src-tauri/tauri.conf.json` — app identity, the web build/dev wiring, with
- * `removeUnusedCommands` in the store profile only (a debug page may call what a store
- * page does not), the main window (its title, plus `app.backgroundColor` when set), the
- * bundle/signing metadata, and a `plugins.<name>` block per CONFIGURED capability (see
+ * `removeUnusedCommands` in the store profile only (a debug or dev page may call what a
+ * store page does not), the main window (its title, plus `app.backgroundColor` when set, and
+ * `devtools` in an iOS debug build, so Safari Web Inspector can attach: the debug build is a
+ * release build, where Tauri closes the inspector), the bundle/signing metadata, and a
+ * `plugins.<name>` block per CONFIGURED capability (see
  * {@link buildPlugins}; this is where deep-link's scheme rides — per D-011/D-012 the whole
  * v1 mobile-permission story is conf-only). Both path-shaped fields are rebased onto
  * `src-tauri`, which is where Tauri resolves them from, and the before-commands carry an
@@ -193,6 +196,7 @@ function buildPlugins(
 export function generateTauriConf(input: GeneratorInput): Artifact[] {
   const { global, capabilities } = input;
   const webRoot = path.resolve(global.web.cwd ?? ".");
+  const inspectable = input.target === "ios" && input.profile === "debug";
   const conf = {
     productName: global.app.name,
     identifier: global.app.identifier,
@@ -208,7 +212,11 @@ export function generateTauriConf(input: GeneratorInput): Artifact[] {
       // The first entry carries no `label`, so tauri names it `main` — the window the
       // capability file and the generated lib.rs safe-area hook both address.
       windows: [
-        { title: global.app.name, ...compact([["backgroundColor", global.app.backgroundColor]]) }
+        {
+          title: global.app.name,
+          ...compact([["backgroundColor", global.app.backgroundColor]]),
+          ...(inspectable ? { devtools: true } : {})
+        }
       ]
     },
     bundle: buildBundle(input),

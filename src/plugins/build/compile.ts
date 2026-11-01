@@ -29,8 +29,9 @@ function storeAgentRefusal(dist: string, file: string | undefined): Error {
 /**
  * The checks at the end of compile/bundle, before anything is collected: on android the
  * shell link (the project plugin decides whether the profile composes the shell), then the
- * page — a store build whose page carries the editor agent is refused. They run after the
- * full compile because tauri runs the web build inside `tauri build`.
+ * page — a store build whose page carries the editor agent is refused; a debug or dev build
+ * may carry it. They run after the full compile because tauri runs the web build inside
+ * `tauri build`.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.

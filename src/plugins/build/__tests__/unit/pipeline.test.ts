@@ -20,11 +20,17 @@ import type { CompletenessResult, PageAgentResult } from "../../../project/types
 import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { createBuildApi } from "../../api";
-import { bundleRoot } from "../../collect";
+import { bundleRoot, collectArtifacts } from "../../collect";
 import { runCompileAndBundle } from "../../compile";
 import { ICON_SOURCE_STAMP_FILE, runIcons } from "../../icons";
 import { runCodegen, runPipeline, runPrepare, runScaffold } from "../../pipeline";
 import type { BuildContext, BuildDeps } from "../../types";
+
+// A spy that calls through: the fixtures stay real, and a test can read what collect was handed.
+vi.mock(import("../../collect"), async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, collectArtifacts: vi.fn(actual.collectArtifacts) };
+});
 
 /** The resolved runner pair the tauri mock hands to `project.patchMobile`. */
 const RUNNER: TauriRunner = { nodePath: "/usr/bin/node", tauriJsPath: "/cli/tauri.js" };
@@ -798,7 +804,7 @@ describe("projectPlugin/tauriPlugin identity", () => {
   });
 });
 
-describe("debug profile (A26)", () => {
+describe("debug and dev profiles (A26, F133)", () => {
   let projectDir: string;
   let outDir: string;
 
@@ -822,6 +828,27 @@ describe("debug profile (A26)", () => {
     await writeFile(path.join(apkDirectory, APK), "apk-bytes", "utf8");
   }
 
+  /** Drops the simulator `.app` directory where the collect phase globs for it. */
+  async function seedIosSimulatorApp(): Promise<void> {
+    const layout = bundleLayout("ios");
+    const app = path.join(
+      bundleRoot(projectDir, layout),
+      layout.genDirectory ?? "",
+      "build",
+      "arm64-sim",
+      "Test App.app"
+    );
+    await mkdir(app, { recursive: true });
+    await writeFile(path.join(app, "Info.plist"), "plist", "utf8");
+  }
+
+  /** Drops a dmg where the collect phase globs for a macos installer. */
+  async function seedMacosDmg(): Promise<void> {
+    const dmgDirectory = path.join(bundleRoot(projectDir, bundleLayout("macos")), "bundle", "dmg");
+    await mkdir(dmgDirectory, { recursive: true });
+    await writeFile(path.join(dmgDirectory, "App.dmg"), "bytes", "utf8");
+  }
+
   beforeEach(async () => {
     projectDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-debug-"));
     outDir = await mkdtemp(path.join(tmpdir(), "moku-native-pipeline-debug-out-"));
@@ -832,35 +859,143 @@ describe("debug profile (A26)", () => {
     await rm(outDir, { recursive: true, force: true });
   });
 
-  it.each([
-    "ios",
-    "macos"
-  ] as const)("debug on %s throws before any phase event (bug: half a build, then a confusing failure)", async target => {
+  it("debug on macos throws before any phase event (bug: half a build, then a confusing failure)", async () => {
     const { ctx, deps, emit, project } = createMocks({ projectDir, outDir });
 
-    await expect(runPipeline(ctx, deps, { target, debug: true })).rejects.toThrow(
-      `[native] --debug builds Android only for now (asked for ${target}).`
+    await expect(runPipeline(ctx, deps, { target: "macos", debug: true })).rejects.toThrow(
+      "[native] --debug builds Android and iOS only for now (asked for macos).\n  Build the debug profile for android or ios, or drop debug to build macos."
     );
     expect(emit).not.toHaveBeenCalled();
     expect(project.generate).not.toHaveBeenCalled();
   });
 
-  it("runAll with debug refuses the whole run before the first phase when one target is not Android (bug: android half-built, then ios refused)", async () => {
+  it("debug on ios runs the pipeline in the debug profile, delivered beside the store app (bug: N4 refused, or iOS debug laid over the store build)", async () => {
+    await seedIosSimulatorApp();
+    const { ctx, deps, project, tauri } = createMocks({ projectDir, outDir });
+
+    const result = await runPipeline(ctx, deps, { target: "ios", simulator: true, debug: true });
+
+    expect(result.profile).toBe("debug");
+    expect(result.artifacts).toEqual([path.join(outDir, "ios-debug", "Test App.app")]);
+    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "ios", profile: "debug" });
+    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
+      target: "ios",
+      runner: RUNNER,
+      profile: "debug"
+    });
+    expect(tauri.build).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { MOKU_NATIVE_PROFILE: "debug" } })
+    );
+  });
+
+  it("runAll with debug refuses the whole run before the first phase when one target is neither Android nor iOS (bug: android half-built, then macos refused)", async () => {
     const { ctx, deps, emit } = createMocks({ projectDir, outDir });
 
     await expect(
-      createBuildApi(ctx, deps).runAll({ targets: ["android", "ios"], debug: true })
-    ).rejects.toThrow("(asked for ios)");
+      createBuildApi(ctx, deps).runAll({ targets: ["android", "macos"], debug: true })
+    ).rejects.toThrow("(asked for macos)");
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it("prepare with debug refuses a non-Android target before scaffold (bug: a debug tree generated for ios)", async () => {
+  it("prepare with debug refuses a target that is neither Android nor iOS before scaffold (bug: a debug tree generated for macos)", async () => {
     const { ctx, deps, emit } = createMocks({ projectDir, outDir });
 
-    await expect(createBuildApi(ctx, deps).prepare({ target: "ios", debug: true })).rejects.toThrow(
-      "(asked for ios)"
+    await expect(
+      createBuildApi(ctx, deps).prepare({ target: "macos", debug: true })
+    ).rejects.toThrow("(asked for macos)");
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("debug + dev: run refuses before any phase event, whatever the target (bug: a half-built tree in an undefined profile, or a fix-it that names the wrong problem)", async () => {
+    const { ctx, deps, emit, project } = createMocks({ projectDir, outDir });
+
+    await expect(
+      runPipeline(ctx, deps, { target: "macos", debug: true, dev: true })
+    ).rejects.toThrow(
+      "[native] debug and dev cannot be combined.\n  Build one profile: debug for the local app, dev for the store-signed test app."
     );
     expect(emit).not.toHaveBeenCalled();
+    expect(project.generate).not.toHaveBeenCalled();
+  });
+
+  it("debug + dev: runAll refuses up front, whatever the targets (bug: a half-built tree in an undefined profile, or the pair passing unseen)", async () => {
+    const { ctx, deps, emit } = createMocks({ projectDir, outDir });
+    const api = createBuildApi(ctx, deps);
+
+    await expect(
+      api.runAll({ targets: ["android", "macos"], debug: true, dev: true })
+    ).rejects.toThrow("[native] debug and dev cannot be combined.");
+    // No target means no per-run check: only the up-front one can answer here.
+    await expect(api.runAll({ targets: [], debug: true, dev: true })).rejects.toThrow(
+      "[native] debug and dev cannot be combined."
+    );
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("dev reaches generate, patchMobile, the shell check and MOKU_NATIVE_PROFILE (bug: a dev page built as release, the agent stripped)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project, tauri } = createMocks({ projectDir, outDir });
+
+    await runPipeline(ctx, deps, { target: "android", dev: true });
+
+    expect(project.generate).toHaveBeenCalledExactlyOnceWith({ target: "android", profile: "dev" });
+    expect(project.patchMobile).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      runner: RUNNER,
+      profile: "dev"
+    });
+    expect(project.checkShellLinked).toHaveBeenCalledExactlyOnceWith({
+      target: "android",
+      profile: "dev"
+    });
+    expect(tauri.build).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { MOKU_NATIVE_PROFILE: "dev" } })
+    );
+  });
+
+  it("dev + agent page: collected into android, native:complete says dev (bugs: every dev build refused; a dev build dropped in the debug folder)", async () => {
+    await seedAndroidApk();
+    const { ctx, deps, project, emit } = createMocks({ projectDir, outDir });
+    project.detectPageAgent.mockResolvedValue({ agent: true, file: "page/main.js" });
+
+    const result = await runPipeline(ctx, deps, { target: "android", dev: true });
+
+    expect(result.outPath).toBe(path.join(outDir, "android"));
+    expect(result.artifacts).toEqual([path.join(outDir, "android", APK)]);
+    expect(result.profile).toBe("dev");
+    expect(emit).toHaveBeenCalledWith(
+      "native:complete",
+      expect.objectContaining({ outPath: result.outPath, profile: "dev" })
+    );
+  });
+
+  it("run hands dev to collect (bug: collect looks for another build than the one made; the delivery alone cannot show it, deliveryName reads debug only)", async () => {
+    await seedAndroidApk();
+    vi.mocked(collectArtifacts).mockClear();
+    const { ctx, deps } = createMocks({ projectDir, outDir });
+
+    await runPipeline(ctx, deps, { target: "android", dev: true });
+
+    expect(collectArtifacts).toHaveBeenCalledExactlyOnceWith(
+      projectDir,
+      "android",
+      outDir,
+      bundleLayout("android"),
+      expect.objectContaining({ dev: true })
+    );
+  });
+
+  it("runAll({ dev: true }) carries the profile on every run (bug: the flag is lost in runAll, or the second target falls back to store)", async () => {
+    await seedAndroidApk();
+    await seedMacosDmg();
+    const { ctx, deps } = createMocks({ projectDir, outDir });
+
+    const results = await createBuildApi(ctx, deps).runAll({
+      targets: ["android", "macos"],
+      dev: true
+    });
+
+    expect(results.map(result => result.profile)).toEqual(["dev", "dev"]);
   });
 
   it("runAll({ debug: true }) passes debug to every pipeline run (bug: the flag is lost in runAll)", async () => {

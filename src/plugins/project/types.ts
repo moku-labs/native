@@ -36,9 +36,9 @@ export type CompletenessResult =
 
 /**
  * Result of the idempotent mobile patch pass: Android release signing and the main
- * activity's manifest attributes, the iOS Xcode build settings, deployment target and
- * privacy manifest, and the runner command on both platforms. A file several patches
- * touched is listed once; a file a patch removed is listed as patched.
+ * activity's manifest attributes, the iOS Xcode build settings, deployment target, privacy
+ * manifest and `Info.plist`, and the runner command on both platforms. A file several
+ * patches touched is listed once; a file a patch removed is listed as patched.
  */
 export type PatchResult = {
   readonly patched: readonly string[];
@@ -58,8 +58,9 @@ export type PatchMobileOptions = {
 /**
  * The build profile one Android patch pass applies, with what that profile needs: the
  * debug profile names the app `"<name> (debug)"` and signs with the debug keystore the
- * caller resolved from `ctx.env`. `log` receives the warning about a network security
- * config this plugin did not write.
+ * caller resolved from `ctx.env`. The `dev` build profile applies as `store`: it is the
+ * store build a tester installs, signed with the game's key. `log` receives the warning about
+ * a network security config this plugin did not write.
  *
  * @example
  * ```ts
@@ -150,7 +151,7 @@ export type TauriConfFragment = Record<string, never> | DeepLinkConf;
 /**
  * An Info.ios.plist sidecar entry (src-tauri root, outside gen/), which Tauri merges into
  * the app's Info.plist on every iOS build. No registry row carries one today; the
- * orientation lock and `ios.infoPlist` do.
+ * orientation lock, `ios.infoPlist` and the iOS debug profile do.
  */
 export type PlistEntry = { key: string; value: PlistValue };
 
@@ -194,7 +195,10 @@ export type Api = {
    * in `config.system`, or implied by the debug profile on android), the
    * `tauri-plugin-moku-shell` crate is generated under `plugins/moku-shell/` too, with the
    * profile baked into its page script. Without the shell, the profile changes one key: the
-   * store profile sets `build.removeUnusedCommands` in `tauri.conf.json`.
+   * store profile sets `build.removeUnusedCommands` in `tauri.conf.json`, and the debug and
+   * dev profiles do not. An iOS build in the debug profile also opens to Safari Web Inspector
+   * (`devtools` on the main window and in the `tauri` features) and to the editor on the local
+   * network (`NSLocalNetworkUsageDescription` and `NSAppTransportSecurity` in `Info.ios.plist`).
    *
    * @param opts - The generate options.
    * @param opts.target - The packaging target to generate for.
@@ -247,15 +251,17 @@ export type Api = {
   /**
    * Runs the idempotent mobile post-init patch pass. Android gets its build-profile
    * patches (debug: the `.debug` id suffix, the `"<name> (debug)"` label, a cleartext
-   * network security config; store: all three reverted to the bytes before), its release
-   * signing (the debug keystore under `HOME` ?? `USERPROFILE` in the debug profile), the
+   * network security config; store and dev: all three reverted to the bytes before), its
+   * release signing (the debug keystore under `HOME` ?? `USERPROFILE` in the debug profile), the
    * main activity's manifest attributes (the orientation lock among them) and the status
    * bar style in MainActivity.kt (light icons on a dark `app.backgroundColor`, dark icons
    * on a light one); iOS gets the Xcode entitlements-modification setting, the deployment
    * target (`signing.apple.iosMinimumSystemVersion`, or its default) and the privacy manifest
    * (`ios.privacyManifest`; unset removes one an earlier pass added), each in `project.yml`
-   * and `project.pbxproj`, because a kept tree never runs xcodegen again; both get the
-   * Xcode/Android-Studio runner-command rewrite when a `runner` is supplied. The build
+   * and `project.pbxproj`, because a kept tree never runs xcodegen again, and outside the
+   * debug profile it loses the debug keys an earlier debug build merged into
+   * `<slug>_iOS/Info.plist`; both get the Xcode/Android-Studio runner-command rewrite when a
+   * `runner` is supplied. The build
    * plugin calls it after the mobile init pass, with the runner from `tauri.getRunner()`.
    * A `gen/apple` tree that was never initialised reports nothing.
    *
@@ -267,7 +273,7 @@ export type Api = {
    * @throws {Error} `[native]` in the debug profile when the debug keystore is missing,
    *   with the `keytool` command that creates it; when `ios.privacyManifest` names no file,
    *   before anything is written; when `project.yml` or `project.pbxproj` lacks a line a
-   *   patch needs.
+   *   patch needs; when a debug key in `Info.plist` has no value.
    * @example
    * ```ts
    * // app.orientation is "portrait", app.backgroundColor is "#10161d", app.identifier is

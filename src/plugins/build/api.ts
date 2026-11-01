@@ -50,7 +50,8 @@ export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
      */
     async runAll(opts = {}) {
       const targets = opts.targets ?? ctx.global.targets;
-      // Every target is checked before the first one starts: nothing is half-built (D2).
+      // Flavour and targets are checked before the first target starts: nothing is half-built (D2).
+      profileOf(opts);
       assertDebugTargets(targets, opts);
       const results: BuildResult[] = [];
       for (const target of targets) {
@@ -61,7 +62,8 @@ export function createBuildApi(ctx: BuildContext, deps: BuildDeps): Api {
             target,
             simulator: opts.simulator,
             aab: opts.aab,
-            debug: opts.debug
+            debug: opts.debug,
+            dev: opts.dev
           })
         );
       }

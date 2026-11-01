@@ -49,24 +49,25 @@ function incompleteMobileTreeError(target: Target, missing: readonly string[]): 
 }
 
 /**
- * Refuses the debug profile for every target but android (Decision D2) — before any phase
- * runs, and for ALL the targets of a run at once, so nothing is half-built.
+ * Refuses the debug profile for every target but android and ios (Decision D2, widened to
+ * iOS by F133) — before any phase runs, and for ALL the targets of a run at once, so nothing
+ * is half-built.
  *
  * @param targets - Every target the run will build.
  * @param flavor - The build flavour of the run.
- * @throws {Error} `[native] --debug builds Android only for now (asked for <target>).` for
- *   the first target that is not android, when `debug` is set.
+ * @throws {Error} `[native] --debug builds Android and iOS only for now (asked for <target>).`
+ *   for the first target that is neither, when `debug` is set.
  * @example
  * ```ts
- * assertDebugTargets(["android", "ios"], { debug: true }); // throws: asked for ios
+ * assertDebugTargets(["android", "macos"], { debug: true }); // throws: asked for macos
  * ```
  */
 export function assertDebugTargets(targets: readonly Target[], flavor: BuildFlavor): void {
   if (flavor.debug !== true) return;
-  const refused = targets.find(target => target !== "android");
+  const refused = targets.find(target => !isMobileTarget(target));
   if (refused === undefined) return;
   throw new Error(
-    `[native] --debug builds Android only for now (asked for ${refused}).\n  Build the debug profile for android, or drop debug to build ${refused}.`
+    `[native] --debug builds Android and iOS only for now (asked for ${refused}).\n  Build the debug profile for android or ios, or drop debug to build ${refused}.`
   );
 }
 
@@ -214,24 +215,25 @@ export async function runPrepare(
  * Runs the full `scaffold → codegen → icons → compile → bundle → collect` pipeline for
  * ONE target — sequential phases, each timed and reported via `native:phase`, stopping at
  * the first failing phase. Emits `native:complete` on success, with the run's profile. A
- * debug run on any target but android is refused before the first phase.
+ * debug run on any target but android and ios, and a run asking for `debug` and `dev`
+ * together, are refused before the first phase.
  *
  * @param ctx - The build pipeline's domain context.
  * @param deps - The resolved project/tauri APIs.
- * @param opts - The target plus the platform build flags (`simulator`, `aab`, `debug`).
+ * @param opts - The target plus the platform build flags (`simulator`, `aab`, `debug`, `dev`).
  * @returns The completed pipeline's result, with all six phase timings and the profile.
  * @throws {Error} Whatever the failing phase throws (already reported via native:phase), or
- *   the debug-target refusal (before any phase event).
+ *   the debug-target or `debug` + `dev` refusal (before any phase event).
  */
 export async function runPipeline(
   ctx: BuildContext,
   deps: BuildDeps,
   opts: RunOptions
 ): Promise<BuildResult> {
-  // Refuse a debug run on a target it cannot build before any phase starts, then start the clock.
+  // Refuse a run no profile can build before any phase starts, then start the clock.
   const { target } = opts;
-  assertDebugTargets([target], opts);
   const profile = profileOf(opts);
+  assertDebugTargets([target], opts);
   const startedAt = performance.now();
 
   // Bring the generated project to a buildable state.
@@ -255,6 +257,7 @@ export async function runPipeline(
         simulator: opts.simulator,
         aab: opts.aab,
         debug: opts.debug,
+        dev: opts.dev,
         resolvePath: deps.project.resolveDerivedPath
       }
     )

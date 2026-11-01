@@ -6,18 +6,26 @@ import type { BuildFlavor, BuildProfile, NativePhase, Target } from "../../confi
 import type { BuildContext } from "./types";
 
 /**
- * Picks the profile a build flavour asks for: `debug` set means the debug profile,
- * anything else the store one.
+ * Picks the profile a build flavour asks for: `debug` set means the debug profile, `dev` set
+ * the dev one, anything else the store one. Both set name no profile and are refused here,
+ * so every caller reads the refusal before its first phase.
  *
  * @param flavor - The build flavour of the run.
- * @returns `"debug"` or `"store"`.
+ * @returns `"debug"`, `"dev"` or `"store"`.
+ * @throws {TypeError} `[native] debug and dev cannot be combined.` when both are set.
  * @example
  * ```ts
- * profileOf({ debug: true }); // "debug"
+ * profileOf({ dev: true }); // "dev"
  * ```
  */
 export function profileOf(flavor: BuildFlavor): BuildProfile {
-  return flavor.debug === true ? "debug" : "store";
+  if (flavor.debug === true && flavor.dev === true) {
+    throw new TypeError(
+      "[native] debug and dev cannot be combined.\n  Build one profile: debug for the local app, dev for the store-signed test app."
+    );
+  }
+  if (flavor.debug === true) return "debug";
+  return flavor.dev === true ? "dev" : "store";
 }
 
 /**

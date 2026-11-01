@@ -176,3 +176,36 @@ export const REAL_PROJECT_YML = readFileSync(
   fileURLToPath(new URL("fixtures/project.real.yml", import.meta.url)),
   "utf8"
 );
+
+/**
+ * `gen/apple/<slug>_iOS/Info.plist` after one `tauri ios build` (cli 2.11.4) merged a sidecar
+ * holding `NSLocalNetworkUsageDescription` into it: tabs, and no line break after the last
+ * tag, as the plist crate writes it.
+ */
+export const REAL_INFO_PLIST = readFileSync(
+  fileURLToPath(new URL("fixtures/Info.real.plist", import.meta.url)),
+  "utf8"
+);
+
+/** The sidecar's one key in {@link REAL_INFO_PLIST}. */
+const LOCAL_NETWORK_ENTRY =
+  "\t<key>NSLocalNetworkUsageDescription</key>\n\t<string>spike</string>\n";
+
+/** The App Transport Security entry of a debug build, in the plist crate's shape. */
+const LOCAL_NETWORKING_ENTRY = [
+  "\t<key>NSAppTransportSecurity</key>",
+  "\t<dict>",
+  "\t\t<key>NSAllowsLocalNetworking</key>",
+  "\t\t<true/>",
+  "\t</dict>",
+  ""
+].join("\n");
+
+/** The `Info.plist` of a tree that never saw a debug build. */
+export const CLEAN_INFO_PLIST = REAL_INFO_PLIST.replace(LOCAL_NETWORK_ENTRY, "");
+
+/** The `Info.plist` a debug build leaves: both debug keys merged in for good. */
+export const DEBUG_INFO_PLIST = REAL_INFO_PLIST.replace(
+  LOCAL_NETWORK_ENTRY,
+  `${LOCAL_NETWORK_ENTRY}${LOCAL_NETWORKING_ENTRY}`
+);

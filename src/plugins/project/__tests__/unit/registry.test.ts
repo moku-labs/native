@@ -284,4 +284,8 @@ describe("resolveConfiguredCapabilities", () => {
   it("the debug profile composes no shell for a desktop target", () => {
     expect(names(composing([{ name: "store" }]), "macos", "debug")).toEqual(["store"]);
   });
+
+  it("the dev profile composes no shell by itself (bug: the debug console bridge in a tester's build)", () => {
+    expect(names(composing([{ name: "store" }]), "android", "dev")).toEqual(["store"]);
+  });
 });

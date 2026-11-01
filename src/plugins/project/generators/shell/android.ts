@@ -347,7 +347,7 @@ class MokuShellPlugin(private val activity: Activity) : Plugin(activity) {
 
 /**
  * Renders `MokuShellProfile.kt`: the one per-profile file of the module. The debug profile
- * turns on WebView debugging and `share`; the store profile turns both off.
+ * turns on WebView debugging and `share`; the store and dev profiles turn both off.
  *
  * @param profile - The build profile the crate is generated for.
  * @returns The Kotlin source.
