@@ -220,6 +220,20 @@ describe("apple tree identity", () => {
     expect(existsSync(path.join(genDir, "project.yml"))).toBe(true);
   });
 
+  it("leaves a tree whose project.yml names no bundle id to the completeness gate (bug: an unreadable tree is moved aside on every build)", async () => {
+    await mkdir(genDir, { recursive: true });
+    await writeFile(path.join(genDir, "project.yml"), "name: store-probe\n", "utf8");
+
+    const result = await setAsideStaleMobileTree({
+      target: "ios",
+      genDirectory: genDir,
+      identifier: "studio.kitto.memorymissing"
+    });
+
+    expect(result).toBeUndefined();
+    expect(existsSync(path.join(genDir, "project.yml"))).toBe(true);
+  });
+
   it("matches an id with underscores against the dashes Tauri writes for Apple", async () => {
     await initTreeFor("com.acme.my-app");
 
