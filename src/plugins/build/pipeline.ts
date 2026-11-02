@@ -88,7 +88,8 @@ export type CodegenResult = { mobileInitRan: boolean };
 
 /**
  * Runs the `codegen` phase — `project.generate()` first (mobile init needs the generated
- * `tauri.conf.json`), then for a mobile target: `tauri.mobileInit()` when the `gen/` tree
+ * `tauri.conf.json`), then for a mobile target: a tree initialised for another app id is
+ * set aside (`project.setAsideStaleTree()`), `tauri.mobileInit()` when the `gen/` tree
  * is absent, the completeness gate (a partial tree fails fast, never silently
  * re-initialized), and the idempotent `project.patchMobile()` pass carrying
  * `tauri.getRunner()` — Tauri's own generated build phase calls a `node tauri` command
@@ -110,6 +111,9 @@ export async function runCodegen(
   // Write the generated project first: mobile init refuses to run without its config on disk.
   await deps.project.generate({ target, profile });
   if (!isMobileTarget(target)) return { mobileInitRan: false };
+
+  // A tree initialised for another app id is moved aside, so init writes a fresh one.
+  await deps.project.setAsideStaleTree({ target });
 
   // Initialize the mobile tree when it is absent, then read its completeness again.
   let status = deps.project.getCompleteness({ target });

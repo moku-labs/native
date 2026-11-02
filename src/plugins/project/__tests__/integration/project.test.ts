@@ -56,6 +56,17 @@ const themesPath = (genDir: string) =>
 const baseline = (name: string) =>
   readFile(new URL(`fixtures/${name}.baseline`, import.meta.url), "utf8");
 
+/** Seeds gen/android as `tauri android init` left it for `identifier`. */
+const seedAndroidTreeFor = async (projectDir: string, identifier: string) => {
+  const appDir = path.join(projectDir, "src-tauri", "gen", "android", "app");
+  await mkdir(appDir, { recursive: true });
+  await writeFile(
+    path.join(appDir, "build.gradle.kts"),
+    `android {\n    defaultConfig {\n        applicationId = "${identifier}"\n    }\n}\n`,
+    "utf8"
+  );
+};
+
 describe("complex tier: project plugin (integration)", () => {
   let projectDir: string;
 
@@ -218,6 +229,40 @@ describe("complex tier: project plugin (integration)", () => {
   // -------------------------------------------------------------------------
   // Runtime: mobile presentation — orientation, window colour, back + haptics
   // -------------------------------------------------------------------------
+
+  describe("runtime: a gen/android tree made for another app id", () => {
+    it("moves it aside and says so in one warn line (bug: the old tree is reused silently and the build fails)", async () => {
+      await seedAndroidTreeFor(projectDir, "com.mokulabs.memorymissing");
+      const app = createTestApp();
+
+      const aside = await app.project.setAsideStaleTree({ target: "android" });
+
+      const genRoot = path.join(projectDir, "src-tauri", "gen");
+      expect(aside?.movedTo).toBe(path.join(genRoot, "android.old-com.mokulabs.memorymissing"));
+      expect(existsSync(path.join(genRoot, "android"))).toBe(false);
+      const warns = app.log.trace().filter(entry => entry.level === "warn");
+      expect(warns.map(entry => entry.event)).toEqual([
+        "gen/android was made for com.mokulabs.memorymissing, not com.example.testapp: moved it to android.old-com.mokulabs.memorymissing and generating it again"
+      ]);
+    });
+
+    it("leaves gen/android alone on an iOS build (bug: building iOS moves the Android tree aside)", async () => {
+      await seedAndroidTreeFor(projectDir, "com.mokulabs.memorymissing");
+      const app = createTestApp();
+
+      await expect(app.project.setAsideStaleTree({ target: "ios" })).resolves.toBeUndefined();
+      expect(existsSync(path.join(projectDir, "src-tauri", "gen", "android"))).toBe(true);
+    });
+
+    it("keeps a tree made for the configured id, with no warn line", async () => {
+      await seedAndroidTreeFor(projectDir, "com.example.testapp");
+      const app = createTestApp();
+
+      await expect(app.project.setAsideStaleTree({ target: "android" })).resolves.toBeUndefined();
+      expect(existsSync(path.join(projectDir, "src-tauri", "gen", "android"))).toBe(true);
+      expect(app.log.trace().filter(entry => entry.level === "warn")).toEqual([]);
+    });
+  });
 
   describe("runtime: mobile presentation", () => {
     it("generates the iOS lock, the window colour, and haptics (not back) for ios", async () => {

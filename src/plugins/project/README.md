@@ -63,6 +63,7 @@ namespaced API slice does.
 | `generators/*.ts` | one generated artifact each (see the table below) |
 | `generators/shell/*.ts` | the shell plugin crate: `rust.ts` (Cargo.toml, build.rs, lib.rs, permissions), `page-script.ts` (the page contract), `android.ts` (the Kotlin library module), `index.ts` (orchestration) |
 | `mobile/completeness.ts` | the `gen/<platform>` required-file set and the completeness gate |
+| `mobile/identity.ts` | the app id a `gen/android` tree was initialised for, and setting a tree made for another id aside |
 | `mobile/files.ts` | **the one owner of which generated files a patch may touch** — never anything under `gen/*/build` |
 | `mobile/profile.ts` | the build-profile patches: the Gradle profile block, the debug app name in `strings.xml`, the debug network security config |
 | `mobile/signing.ts` | the Android release-signing block in `app/build.gradle.kts` (the debug keystore in the debug profile) |
@@ -165,6 +166,12 @@ app.project.getDebugKeystore();
   profile baked into its page script. `profile` defaults to `"store"`.
 - `getCompleteness({ target })` — mobile `gen/<platform>` required-file-set gate. Desktop
   targets are `"not-applicable"`.
+- `setAsideStaleTree({ target })` — when `gen/android` was initialised for another
+  `applicationId` than `app.identifier` (the app id changed), renames it to
+  `gen/android.old-<old id>` (`-2`, `-3`, … when taken; never deleted, it may hold a keystore
+  or hand edits) and logs one warn line, so the next `tauri android init` writes a fresh tree.
+  `build` calls it before the completeness read. iOS, a missing tree and a tree with no
+  readable id get `undefined`.
 - `getBundleLayout({ target })` — where that target's build output lands: the output root,
   the desktop bundle-format directories with their artifact globs, and the mobile
   `gen/<platform>` directory. `build`'s collect phase globs against this instead of keeping

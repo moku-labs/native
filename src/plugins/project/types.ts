@@ -94,6 +94,27 @@ export type PageAgentResult = { agent: boolean; file?: string };
 export type CleanResult = { removed: readonly string[] };
 
 /**
+ * A mobile `gen/` tree set aside because it was initialised for another app id.
+ *
+ * @example
+ * ```ts
+ * const aside: StaleTree = {
+ *   found: "com.mokulabs.memorymissing",
+ *   expected: "studio.kitto.memorymissing",
+ *   movedTo: "/repo/.moku/tauri/src-tauri/gen/android.old-com.mokulabs.memorymissing"
+ * };
+ * ```
+ */
+export type StaleTree = {
+  /** The id the tree was initialised for. */
+  readonly found: string;
+  /** The configured `app.identifier`. */
+  readonly expected: string;
+  /** The absolute path the tree was renamed to. */
+  readonly movedTo: string;
+};
+
+/**
  * The Android SDK debug keystore the debug profile signs with, and the shell command that
  * creates it. `path` is undefined when the environment names no home directory.
  *
@@ -248,6 +269,25 @@ export type Api = {
    * ```
    */
   getCompleteness(opts: { target: Target }): CompletenessResult;
+  /**
+   * Sets a `gen/android` tree aside when it was initialised for another app id than
+   * `app.identifier`: renames it to `gen/android.old-<old id>` (never deletes it, it may hold
+   * a keystore or hand edits) and logs one line, so the build's mobile init writes a fresh
+   * tree. The build plugin calls it before the completeness read. iOS, a missing tree and a
+   * tree whose id cannot be read get undefined.
+   *
+   * @param opts - The check options.
+   * @param opts.target - The mobile platform whose tree to check.
+   * @returns What was set aside, or undefined when the tree was kept.
+   * @example
+   * ```ts
+   * // app.identifier changed from com.mokulabs.memorymissing to studio.kitto.memorymissing.
+   * await app.project.setAsideStaleTree({ target: "android" });
+   * // { found: "com.mokulabs.memorymissing", expected: "studio.kitto.memorymissing",
+   * //   movedTo: "/repo/.moku/tauri/src-tauri/gen/android.old-com.mokulabs.memorymissing" }
+   * ```
+   */
+  setAsideStaleTree(opts: { target: MobileTarget }): Promise<StaleTree | undefined>;
   /**
    * Runs the idempotent mobile post-init patch pass. Android gets its build-profile
    * patches (debug: the `.debug` id suffix, the `"<name> (debug)"` label, a cleartext

@@ -72,6 +72,7 @@ export type BuildDeps = {
     | "generate"
     | "getBundleLayout"
     | "getCompleteness"
+    | "setAsideStaleTree"
     | "patchMobile"
     | "clearMobileBuildOutput"
     | "ensureIconSource"

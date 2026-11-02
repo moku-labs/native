@@ -16,7 +16,7 @@ import { PHASE_ORDER } from "../../../../config";
 import { projectPlugin } from "../../../project";
 import { bundleLayout } from "../../../project/layout";
 import { comparableRealPath } from "../../../project/paths";
-import type { CompletenessResult, PageAgentResult } from "../../../project/types";
+import type { CompletenessResult, PageAgentResult, StaleTree } from "../../../project/types";
 import { tauriPlugin } from "../../../tauri";
 import type { BuildOptions, RunResult } from "../../../tauri/types";
 import { createBuildApi } from "../../api";
@@ -44,6 +44,7 @@ function createProjectMock(iconSource: string) {
     generate: vi.fn(async () => ({ written: [], unchanged: [], skipped: [] })),
     getBundleLayout: vi.fn((opts: { target: Target }) => bundleLayout(opts.target)),
     getCompleteness: vi.fn((): CompletenessResult => ({ status: "complete" })),
+    setAsideStaleTree: vi.fn(async (): Promise<StaleTree | undefined> => undefined),
     patchMobile: vi.fn(async () => ({ patched: [], unchanged: [] })),
     clearMobileBuildOutput: vi.fn(async () => ({ removed: [] as readonly string[] })),
     ensureIconSource: vi.fn(async () => iconSource),
@@ -213,6 +214,27 @@ describe("runCodegen", () => {
       runner: RUNNER,
       profile: "store"
     });
+  });
+
+  it("android tree made for another id: set aside BEFORE the completeness read, then init runs (bug: a changed app id reuses the old gen/android and the build fails)", async () => {
+    const { ctx, deps, project, tauri } = createMocks();
+    project.setAsideStaleTree.mockResolvedValueOnce({
+      found: "com.mokulabs.memorymissing",
+      expected: "studio.kitto.memorymissing",
+      movedTo: "/p/src-tauri/gen/android.old-com.mokulabs.memorymissing"
+    });
+    project.getCompleteness
+      .mockReturnValueOnce({ status: "not-initialized" })
+      .mockReturnValueOnce({ status: "complete" });
+
+    const result = await runCodegen(ctx, deps, "android", "debug");
+
+    expect(result).toEqual({ mobileInitRan: true });
+    expect(project.setAsideStaleTree).toHaveBeenCalledExactlyOnceWith({ target: "android" });
+    const asideOrder = project.setAsideStaleTree.mock.invocationCallOrder[0] ?? 0;
+    const completenessOrder = project.getCompleteness.mock.invocationCallOrder[0] ?? 0;
+    expect(asideOrder).toBeLessThan(completenessOrder);
+    expect(tauri.mobileInit).toHaveBeenCalledExactlyOnceWith({ target: "android" });
   });
 
   it("mobile incomplete: fails with a [native] fix-it, never patching", async () => {
