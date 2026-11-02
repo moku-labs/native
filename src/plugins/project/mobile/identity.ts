@@ -13,10 +13,11 @@ import type { StaleTree } from "../types";
 const APPLICATION_ID_KEY = "applicationId";
 
 /**
- * Reads the `applicationId` a `gen/android` tree was initialised for.
+ * Reads the `applicationId` a `gen/android` tree was initialised for. Only a quoted literal
+ * is recognised, the form `tauri android init` writes; an expression reads as no id.
  *
  * @param genDirectory - The absolute `src-tauri/gen/android` directory.
- * @returns The id, or undefined when `app/build.gradle.kts` is absent or names none.
+ * @returns The id, or undefined when `app/build.gradle.kts` is absent or names no literal id.
  * @example
  * ```ts
  * readAndroidApplicationId("/repo/.moku/tauri/src-tauri/gen/android"); // "com.acme.demo"
@@ -25,6 +26,8 @@ const APPLICATION_ID_KEY = "applicationId";
 export function readAndroidApplicationId(genDirectory: string): string | undefined {
   const gradlePath = path.join(genDirectory, "app", "build.gradle.kts");
   if (!existsSync(gradlePath)) return undefined;
+
+  // Find the `applicationId = "<id>"` line of the generated Gradle file.
   for (const line of readFileSync(gradlePath, "utf8").split("\n")) {
     const [key, value] = line.split("=", 2).map(part => part.trim());
     if (key === APPLICATION_ID_KEY && value?.startsWith('"')) return value.split('"')[1];

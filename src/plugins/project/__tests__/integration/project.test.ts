@@ -246,6 +246,14 @@ describe("complex tier: project plugin (integration)", () => {
       ]);
     });
 
+    it("leaves gen/android alone on an iOS build (bug: building iOS moves the Android tree aside)", async () => {
+      await seedAndroidTreeFor(projectDir, "com.mokulabs.memorymissing");
+      const app = createTestApp();
+
+      await expect(app.project.setAsideStaleTree({ target: "ios" })).resolves.toBeUndefined();
+      expect(existsSync(path.join(projectDir, "src-tauri", "gen", "android"))).toBe(true);
+    });
+
     it("keeps a tree made for the configured id, with no warn line", async () => {
       await seedAndroidTreeFor(projectDir, "com.example.testapp");
       const app = createTestApp();

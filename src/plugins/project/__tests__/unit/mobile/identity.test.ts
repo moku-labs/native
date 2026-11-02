@@ -113,6 +113,7 @@ describe("android tree identity", () => {
   it("never overwrites an earlier set-aside tree", async () => {
     const earlier = path.join(dir, "src-tauri", "gen", "android.old-com.mokulabs.memorymissing");
     await mkdir(earlier, { recursive: true });
+    await mkdir(`${earlier}-2`, { recursive: true });
     await initTreeFor("com.mokulabs.memorymissing");
 
     const result = await setAsideStaleAndroidTree({
@@ -120,7 +121,8 @@ describe("android tree identity", () => {
       identifier: "studio.kitto.memorymissing"
     });
 
-    expect(result?.movedTo).toBe(`${earlier}-2`);
+    expect(result?.movedTo).toBe(`${earlier}-3`);
     expect(existsSync(earlier)).toBe(true);
+    expect(existsSync(`${earlier}-2`)).toBe(true);
   });
 });
