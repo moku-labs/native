@@ -67,6 +67,16 @@ const seedAndroidTreeFor = async (projectDir: string, identifier: string) => {
   );
 };
 
+const seedAppleTreeFor = async (projectDir: string, identifier: string) => {
+  const genDir = path.join(projectDir, "src-tauri", "gen", "apple");
+  await mkdir(genDir, { recursive: true });
+  await writeFile(
+    path.join(genDir, "project.yml"),
+    `settingGroups:\n  app:\n    base:\n      PRODUCT_BUNDLE_IDENTIFIER: ${identifier}\n`,
+    "utf8"
+  );
+};
+
 describe("complex tier: project plugin (integration)", () => {
   let projectDir: string;
 
@@ -260,6 +270,32 @@ describe("complex tier: project plugin (integration)", () => {
 
       await expect(app.project.setAsideStaleTree({ target: "android" })).resolves.toBeUndefined();
       expect(existsSync(path.join(projectDir, "src-tauri", "gen", "android"))).toBe(true);
+      expect(app.log.trace().filter(entry => entry.level === "warn")).toEqual([]);
+    });
+  });
+
+  describe("runtime: a gen/apple tree made for another app id", () => {
+    it("moves it aside and says so in one warn line (bug: the Xcode project keeps the old bundle id)", async () => {
+      await seedAppleTreeFor(projectDir, "com.mokulabs.memorymissing");
+      const app = createTestApp();
+
+      const aside = await app.project.setAsideStaleTree({ target: "ios" });
+
+      const genRoot = path.join(projectDir, "src-tauri", "gen");
+      expect(aside?.movedTo).toBe(path.join(genRoot, "apple.old-com.mokulabs.memorymissing"));
+      expect(existsSync(path.join(genRoot, "apple"))).toBe(false);
+      const warns = app.log.trace().filter(entry => entry.level === "warn");
+      expect(warns.map(entry => entry.event)).toEqual([
+        "gen/apple was made for com.mokulabs.memorymissing, not com.example.testapp: moved it to apple.old-com.mokulabs.memorymissing and generating it again"
+      ]);
+    });
+
+    it("keeps a tree made for the configured id, with no warn line", async () => {
+      await seedAppleTreeFor(projectDir, "com.example.testapp");
+      const app = createTestApp();
+
+      await expect(app.project.setAsideStaleTree({ target: "ios" })).resolves.toBeUndefined();
+      expect(existsSync(path.join(projectDir, "src-tauri", "gen", "apple"))).toBe(true);
       expect(app.log.trace().filter(entry => entry.level === "warn")).toEqual([]);
     });
   });

@@ -270,11 +270,12 @@ export type Api = {
    */
   getCompleteness(opts: { target: Target }): CompletenessResult;
   /**
-   * Sets a `gen/android` tree aside when it was initialised for another app id than
-   * `app.identifier`: renames it to `gen/android.old-<old id>` (never deletes it, it may hold
-   * a keystore or hand edits) and logs one line, so the build's mobile init writes a fresh
-   * tree. The build plugin calls it before the completeness read. iOS, a missing tree and a
-   * tree whose id cannot be read get undefined.
+   * Sets a `gen/android` or `gen/apple` tree aside when it was initialised for another app id
+   * than `app.identifier` (Android: `applicationId` in `app/build.gradle.kts`; iOS:
+   * `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml`): renames it to `gen/<platform>.old-<old id>`
+   * (never deletes it, it may hold a keystore or hand edits) and logs one line, so the build's
+   * mobile init writes a fresh tree. The build plugin calls it before the completeness read.
+   * A missing tree and a tree whose id cannot be read get undefined.
    *
    * @param opts - The check options.
    * @param opts.target - The mobile platform whose tree to check.

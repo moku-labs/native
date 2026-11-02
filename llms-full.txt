@@ -656,9 +656,10 @@ Behavior:
   Tauri resolves them from; beforeDevCommand/beforeBuildCommand use the OBJECT form with
   an explicit cwd = path.resolve(web.cwd ?? ".").
 - getCompleteness({ target }): mobile gen/<platform> required-file-set gate. Desktop => "not-applicable".
-- setAsideStaleTree({ target }): a gen/android whose applicationId is not app.identifier is renamed to
-  gen/android.old-<old id> (never deleted) with one warn line, so build's mobile init writes a fresh tree.
-  iOS, a missing tree and an unreadable id => undefined.
+- setAsideStaleTree({ target }): a gen/android whose applicationId, or a gen/apple whose project.yml
+  PRODUCT_BUNDLE_IDENTIFIER, is not app.identifier is renamed to gen/<platform>.old-<old id> (never
+  deleted) with one warn line, so build's mobile init writes a fresh tree.
+  A missing tree and an unreadable id => undefined.
 - getBundleLayout({ target }): the target's output root, its desktop bundle-format directories
   with their artifact globs, and its mobile gen/<platform> directory — straight from layout.ts.
   build's collect phase globs against this instead of keeping its own table.

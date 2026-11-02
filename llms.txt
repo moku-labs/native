@@ -90,7 +90,7 @@ native.build.runAll(opts?: { targets?: readonly Target[]; simulator?: boolean; a
 native.project.generate(opts: { target: Target; profile?: BuildProfile }): Promise<{ written: string[]; unchanged: string[]; skipped: string[] }>; // profile default "store"
 native.project.getBundleLayout(opts: { target: Target }): BundleLayout; // { root, formats, genDirectory } — collect globs against it
 native.project.getCompleteness(opts: { target: Target }): Project.CompletenessResult; // "not-applicable" | "not-initialized" | "incomplete" | "complete"
-native.project.setAsideStaleTree(opts: { target: MobileTarget }): Promise<{ found: string; expected: string; movedTo: string } | undefined>; // gen/android made for another app id → renamed to gen/android.old-<id>, init runs again
+native.project.setAsideStaleTree(opts: { target: MobileTarget }): Promise<{ found: string; expected: string; movedTo: string } | undefined>; // gen/android or gen/apple made for another app id → renamed to gen/<platform>.old-<id>, init runs again
 native.project.patchMobile(opts: { target: MobileTarget; runner?: TauriRunner; profile?: BuildProfile }): Promise<{ patched: readonly string[]; unchanged: readonly string[] }>;
 native.project.patchMobileIcons(opts: { target: MobileTarget }): Promise<Project.PatchResult>; // adaptive icon inset; ios => empty result
 native.project.detectPageAgent(): Promise<{ agent: boolean; file?: string }>; // editor agent in web.dist .js files?
