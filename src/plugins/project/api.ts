@@ -21,7 +21,7 @@ import type { BundleLayout } from "./layout";
 import { bundleLayout, genDirectoryPath } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
 import { patchAndroidIcon } from "./mobile/icon";
-import { setAsideStaleAndroidTree } from "./mobile/identity";
+import { setAsideStaleMobileTree } from "./mobile/identity";
 import { patchMobile } from "./mobile/patch";
 import { checkShellLinked } from "./mobile/shell-link";
 import { debugKeystorePath, resolveDebugKeystore } from "./mobile/signing";
@@ -179,8 +179,7 @@ export function createProjectApi(ctx: ProjectContext): Api {
     completeness(ctx.global.projectDir, opts.target);
 
   /**
-   * Implements {@link Api.setAsideStaleTree}: Android only, one plain warn line when a tree
-   * was moved.
+   * Implements {@link Api.setAsideStaleTree}: one plain warn line when a tree was moved.
    *
    * @param opts - See {@link Api.setAsideStaleTree}.
    * @param opts.target - The mobile platform whose tree to check.
@@ -189,15 +188,15 @@ export function createProjectApi(ctx: ProjectContext): Api {
   const runSetAsideStaleTree = async (opts: {
     target: MobileTarget;
   }): Promise<StaleTree | undefined> => {
-    if (opts.target !== "android") return undefined;
     const genDirectory = genDirectoryPath(ctx.global.projectDir, opts.target);
-    const aside = await setAsideStaleAndroidTree({
+    const aside = await setAsideStaleMobileTree({
+      target: opts.target,
       genDirectory,
       identifier: ctx.global.app.identifier
     });
     if (aside !== undefined) {
       ctx.log.warn(
-        `gen/android was made for ${aside.found}, not ${aside.expected}: moved it to ${path.basename(aside.movedTo)} and generating it again`
+        `gen/${path.basename(genDirectory)} was made for ${aside.found}, not ${aside.expected}: moved it to ${path.basename(aside.movedTo)} and generating it again`
       );
     }
     return aside;
