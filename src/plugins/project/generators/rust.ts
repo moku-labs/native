@@ -15,8 +15,10 @@ const IOS_MANAGER_IMPORT = ['#[cfg(target_os = "ios")]', "use tauri::Manager;"];
  * The safe-area setup hook up to the end of the iOS closure, as verified on the iOS 26.3
  * simulator. UIKit shrinks a WKWebView page by the safe area while its scroll view stays on
  * `.automatic`; `.never` gives the page the whole screen, and CSS `env(safe-area-inset-*)`
- * still reports the notch. The `cfg` makes it a no-op off iOS, so `lib.rs` does not differ
- * per target. The window is tauri's default `main` label: the generated `app.windows` entry
+ * still reports the notch. iOS 26 also draws a scroll edge effect under the status bar, which
+ * Reduce Transparency turns into an opaque band in the page colour (seen on an iPhone 13 mini
+ * and on the iOS 27 simulator), so the hook hides the four edge effects. The `cfg` makes it a
+ * no-op off iOS, so `lib.rs` does not differ per target. The window is tauri's default `main` label: the generated `app.windows` entry
  * carries none.
  */
 const SAFE_AREA_SETUP = [
@@ -26,9 +28,19 @@ const SAFE_AREA_SETUP = [
   '      #[cfg(target_os = "ios")]',
   '      if let Some(window) = _app.get_webview_window("main") {',
   "        window.with_webview(|webview| unsafe {",
-  "          use objc2::{msg_send, runtime::AnyObject};",
+  "          use objc2::{msg_send, runtime::AnyObject, sel};",
   "          let wk = &*(webview.inner() as *mut AnyObject);",
   "          let scroll: *mut AnyObject = msg_send![wk, scrollView];",
+  "          // iOS 26 draws a scroll edge effect under the status bar and the home indicator. With",
+  "          // Reduce Transparency it is an opaque band in the page colour over the game, so it is",
+  "          // hidden: the page never scrolls. Older iOS has no such selector and is left alone.",
+  "          for name in [sel!(topEdgeEffect), sel!(leftEdgeEffect), sel!(bottomEdgeEffect), sel!(rightEdgeEffect)] {",
+  "            let has: bool = msg_send![&*scroll, respondsToSelector: name];",
+  "            if has {",
+  "              let effect: *mut AnyObject = msg_send![&*scroll, performSelector: name];",
+  "              let _: () = msg_send![&*effect, setHidden: true];",
+  "            }",
+  "          }",
   "          // UIScrollViewContentInsetAdjustmentNever = 2",
   "          let _: () = msg_send![&*scroll, setContentInsetAdjustmentBehavior: 2isize];"
 ];

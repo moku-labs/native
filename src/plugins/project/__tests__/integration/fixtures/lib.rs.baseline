@@ -12,9 +12,19 @@ pub fn run() {
       #[cfg(target_os = "ios")]
       if let Some(window) = _app.get_webview_window("main") {
         window.with_webview(|webview| unsafe {
-          use objc2::{msg_send, runtime::AnyObject};
+          use objc2::{msg_send, runtime::AnyObject, sel};
           let wk = &*(webview.inner() as *mut AnyObject);
           let scroll: *mut AnyObject = msg_send![wk, scrollView];
+          // iOS 26 draws a scroll edge effect under the status bar and the home indicator. With
+          // Reduce Transparency it is an opaque band in the page colour over the game, so it is
+          // hidden: the page never scrolls. Older iOS has no such selector and is left alone.
+          for name in [sel!(topEdgeEffect), sel!(leftEdgeEffect), sel!(bottomEdgeEffect), sel!(rightEdgeEffect)] {
+            let has: bool = msg_send![&*scroll, respondsToSelector: name];
+            if has {
+              let effect: *mut AnyObject = msg_send![&*scroll, performSelector: name];
+              let _: () = msg_send![&*effect, setHidden: true];
+            }
+          }
           // UIScrollViewContentInsetAdjustmentNever = 2
           let _: () = msg_send![&*scroll, setContentInsetAdjustmentBehavior: 2isize];
         })?;
