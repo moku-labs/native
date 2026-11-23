@@ -18,8 +18,8 @@ const IOS_MANAGER_IMPORT = ['#[cfg(target_os = "ios")]', "use tauri::Manager;"];
  * still reports the notch. iOS 26 also draws a scroll edge effect under the status bar, which
  * Reduce Transparency turns into an opaque band in the page colour (seen on an iPhone 13 mini
  * and on the iOS 27 simulator), so the hook hides the four edge effects. The `cfg` makes it a
- * no-op off iOS, so `lib.rs` does not differ per target. The window is tauri's default `main` label: the generated `app.windows` entry
- * carries none.
+ * no-op off iOS, so `lib.rs` does not differ per target. The window is tauri's default `main`
+ * label: the generated `app.windows` entry carries none.
  */
 const SAFE_AREA_SETUP = [
   "    .setup(|_app| {",
