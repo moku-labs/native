@@ -22,6 +22,7 @@ import { bundleLayout, genDirectoryPath } from "./layout";
 import { completeness, requiredFiles } from "./mobile/completeness";
 import { patchAndroidIcon } from "./mobile/icon";
 import { setAsideStaleMobileTree } from "./mobile/identity";
+import { resolveLaunch } from "./mobile/launch-still";
 import { patchMobile } from "./mobile/patch";
 import { checkShellLinked } from "./mobile/shell-link";
 import { debugKeystorePath, resolveDebugKeystore } from "./mobile/signing";
@@ -225,8 +226,9 @@ export function createProjectApi(ctx: ProjectContext): Api {
 
   /**
    * Implements {@link Api.patchMobile}: hands Android its build profile, its manifest
-   * entries and `app.backgroundColor` (the status bar icons and the window background
-   * follow it), hands iOS `ios.privacyManifest` and its profile through `opts`, then logs.
+   * entries, `app.backgroundColor` (the status bar icons and the window background
+   * follow it) and the resolved `app.launch`, hands iOS `ios.privacyManifest` and its
+   * profile through `opts`, then logs.
    *
    * @param opts - See {@link Api.patchMobile}.
    * @returns See {@link Api.patchMobile}.
@@ -241,7 +243,8 @@ export function createProjectApi(ctx: ProjectContext): Api {
       manifest,
       ctx.global.app.backgroundColor,
       profile,
-      ctx.global.ios?.privacyManifest
+      ctx.global.ios?.privacyManifest,
+      resolveLaunch(ctx.global.app)
     );
     ctx.log.info("project:patchMobile", {
       target: opts.target,

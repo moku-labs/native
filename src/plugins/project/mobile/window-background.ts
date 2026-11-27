@@ -22,8 +22,31 @@ import { androidManifestPath, applicationAttribute } from "./manifest";
 /** The paths a pass collects while it runs, before they become a {@link PatchResult}. */
 type ResultLists = { patched: string[]; unchanged: string[] };
 
+/**
+ * How a theme lookup words its errors: what the app theme is needed for, and the config
+ * field whose unsetting avoids the patch.
+ *
+ * @example
+ * ```ts
+ * const wording: ThemeWording = { purpose: "to start without the system splash in", field: "app.launch" };
+ * ```
+ */
+export type ThemeWording = { readonly purpose: string; readonly field: string };
+
 /** Marks every line and file this patch owns. */
 const MARKER = "<!-- moku:native window background -->";
+
+/**
+ * The marker of this patch's lines, for another patch that places its own lines after
+ * them in the same style.
+ */
+export const WINDOW_BACKGROUND_MARKER = MARKER;
+
+/** The wording of this patch's own theme errors. */
+const WINDOW_BACKGROUND_WORDING: ThemeWording = {
+  purpose: "to set the window background in",
+  field: "app.backgroundColor"
+};
 
 /** The colour resource the theme items point at. */
 const COLOUR_NAME = "moku_window_background";
@@ -53,18 +76,20 @@ const INDENT_STEP = "    ";
 const INDENT_PATTERN = /^[\t ]*/;
 
 /**
- * Builds the `[native]` error for a generated file this patch needs and cannot use.
+ * Builds the `[native]` error for a generated theme file a patch needs and cannot use.
  *
  * @param problem - What is wrong, starting with the file path.
+ * @param wording - The config field the fix line offers to unset.
  * @returns A formatted `[native] ...` error.
  * @example
  * ```ts
- * throw initError("/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res/values/themes.xml not found");
+ * themeInitError("/repo/themes.xml not found", { purpose: "to start without the system splash in", field: "app.launch" }).message;
+ * // "[native] /repo/themes.xml not found.\n  Re-run the mobile init pass (tauri android init), or unset app.launch."
  * ```
  */
-function initError(problem: string): Error {
+export function themeInitError(problem: string, wording: ThemeWording): Error {
   return new Error(
-    `[native] ${problem}.\n  Re-run the mobile init pass (tauri android init), or unset app.backgroundColor.`
+    `[native] ${problem}.\n  Re-run the mobile init pass (tauri android init), or unset ${wording.field}.`
   );
 }
 
@@ -120,8 +145,9 @@ export function applyWindowBackground(
   // The line that opens the app theme, and the one after it for the indentation.
   const index = lines.findIndex(line => line.includes(`<style name="${styleName}"`));
   if (index === -1) {
-    throw initError(
-      `${filePath} has no <style name="${styleName}"> to set the window background in`
+    throw themeInitError(
+      `${filePath} has no <style name="${styleName}"> ${WINDOW_BACKGROUND_WORDING.purpose}`,
+      WINDOW_BACKGROUND_WORDING
     );
   }
   const styleIndent = INDENT_PATTERN.exec(lines[index] ?? "")?.[0] ?? "";
@@ -160,8 +186,13 @@ function colourResource(colour: string): string {
  *
  * @param resourceDirectory - The `app/src/main/res` directory.
  * @returns The theme files found, possibly none.
+ * @example
+ * ```ts
+ * await themeFiles("/repo/.moku/tauri/src-tauri/gen/android/app/src/main/res");
+ * // [".../res/values/themes.xml", ".../res/values-night/themes.xml"]
+ * ```
  */
-async function themeFiles(resourceDirectory: string): Promise<string[]> {
+export async function themeFiles(resourceDirectory: string): Promise<string[]> {
   if (!existsSync(resourceDirectory)) return [];
   const entries = await readdir(resourceDirectory, { withFileTypes: true });
   // Sorted by directory name: as full paths `values-night/` would sort before `values/`.
@@ -177,17 +208,24 @@ async function themeFiles(resourceDirectory: string): Promise<string[]> {
  * Reads the app theme's style name from the manifest's `<application android:theme>`.
  *
  * @param genDirectory - The `src-tauri/gen/android` directory.
+ * @param wording - What the theme is needed for and which field to unset, for the errors.
  * @returns The style name without `@style/`.
  * @throws {Error} `[native]` when the manifest is missing or names no style.
+ * @example
+ * ```ts
+ * await appThemeName(".moku/tauri/src-tauri/gen/android", { purpose: "to start without the system splash in", field: "app.launch" });
+ * // "Theme.my_app"
+ * ```
  */
-async function appThemeName(genDirectory: string): Promise<string> {
+export async function appThemeName(genDirectory: string, wording: ThemeWording): Promise<string> {
   const manifestPath = androidManifestPath(genDirectory);
-  if (!existsSync(manifestPath)) throw initError(`${manifestPath} not found`);
+  if (!existsSync(manifestPath)) throw themeInitError(`${manifestPath} not found`, wording);
 
   const theme = applicationAttribute(await readFile(manifestPath, "utf8"), "android:theme");
   if (!theme?.startsWith(STYLE_REFERENCE_PREFIX)) {
-    throw initError(
-      `${manifestPath} names no android:theme on <application> to set the window background in`
+    throw themeInitError(
+      `${manifestPath} names no android:theme on <application> ${wording.purpose}`,
+      wording
     );
   }
   return theme.slice(STYLE_REFERENCE_PREFIX.length);
@@ -252,8 +290,11 @@ export async function patchAndroidWindowBackground(
   const dayThemes = path.join(resourceDirectory, VALUES_DIRECTORY, THEMES_FILE);
 
   // A colour needs the app theme and the day theme file before anything is written.
-  const styleName = colour === undefined ? "" : await appThemeName(genDirectory);
-  if (colour !== undefined && !existsSync(dayThemes)) throw initError(`${dayThemes} not found`);
+  const styleName =
+    colour === undefined ? "" : await appThemeName(genDirectory, WINDOW_BACKGROUND_WORDING);
+  if (colour !== undefined && !existsSync(dayThemes)) {
+    throw themeInitError(`${dayThemes} not found`, WINDOW_BACKGROUND_WORDING);
+  }
 
   const result: ResultLists = { patched: [], unchanged: [] };
   const colourPath = path.join(resourceDirectory, VALUES_DIRECTORY, `${COLOUR_NAME}.xml`);

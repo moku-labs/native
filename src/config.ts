@@ -152,6 +152,47 @@ export type CapabilityConfigMap = {
 export type Orientation = "portrait" | "landscape" | "any";
 
 /**
+ * The still picture the Android shell holds from its first frame until the page's first
+ * frame (`app.launch`). The window starts translucent on Android 11+, so the system shows
+ * no splash of its own; the shell draws `still.image` at its place in the game frame and
+ * removes it when the page calls `window.__mokuLaunch?.ready()`, or after `holdMaxMs`.
+ * Android 7 to 10 has no translucent start and shows the system preview window in
+ * `app.backgroundColor` until the still's first frame. iOS is not covered yet.
+ *
+ * @example
+ * ```ts
+ * const launch: LaunchConfig = {
+ *   still: { image: "assets/splash/studio.webp", frame: { width: 1024, height: 1536 }, rect: { x: 215, y: 402, width: 600, height: 640 } },
+ *   aspect: { min: 4 / 3, max: 21 / 9 }
+ * };
+ * ```
+ */
+export type LaunchConfig = {
+  /** The picture and where it lies. */
+  still: {
+    /**
+     * A `.png` or `.webp` file, resolved against the cwd as `app.icon` is; transparent
+     * outside the art.
+     */
+    image: string;
+    /** The canvas the place is given in; it covers the game frame, centred (CSS `cover`). */
+    frame: { width: number; height: number };
+    /** Where the picture lies on that canvas, in the canvas's units. */
+    rect: { x: number; y: number; width: number; height: number };
+  };
+  /**
+   * The range of the game frame's long side / short side, read in `orientation`: the game
+   * frame is the largest centred rectangle whose ratio is inside it (the engine's
+   * `fitFrame`). Unset: the game frame is the whole window.
+   */
+  aspect?: { min: number; max: number };
+  /** The orientation the aspect range is read in; `app.orientation` when it is one of the two, else `"portrait"`. */
+  orientation?: "portrait" | "landscape";
+  /** How long the still waits for `ready()` before it goes by itself, in ms; `8000` when unset. */
+  holdMaxMs?: number;
+};
+
+/**
  * One Info.plist value: a `<string>`, a `<true/>`/`<false/>`, an `<array>` or a `<dict>`,
  * nested as deep as the key needs.
  *
@@ -219,7 +260,8 @@ export type Config = {
    * relative to cwd (a placeholder is generated when unset); `category` maps to
    * `bundle.category`; `buildNumber` maps to the iOS/macOS `bundleVersion` and, a whole
    * number from 1 to 2 100 000 000, to the Android `versionCode`; `orientation` locks the mobile screen at build time; `backgroundColor` paints the
-   * native window behind the page.
+   * native window behind the page; `launch` is the still the Android shell holds until the
+   * page's first frame.
    */
   app: {
     name: string;
@@ -264,6 +306,28 @@ export type Config = {
      * ```
      */
     keepScreenOn?: boolean;
+    /**
+     * Android: the still the shell holds from its first frame to the page's first frame, so
+     * no system splash shows on Android 11+. The page removes it with
+     * `window.__mokuLaunch?.ready()` once its first frame is on screen; without that call it
+     * goes after `holdMaxMs` (8000) with a logcat warning. Unset changes nothing. iOS is not
+     * covered yet. See {@link LaunchConfig}.
+     *
+     * @example
+     * ```ts
+     * createApp({ config: { app: {
+     *   name: "A Memory Missing",
+     *   identifier: "studio.kitto.memorymissing",
+     *   backgroundColor: "#F4E6CA",
+     *   launch: {
+     *     still: { image: "assets/splash/studio.webp", frame: { width: 1024, height: 1536 }, rect: { x: 215, y: 402, width: 600, height: 640 } },
+     *     aspect: { min: 4 / 3, max: 21 / 9 }
+     *   }
+     * } } });
+     * // Page side, once the first frame is on screen: window.__mokuLaunch?.ready();
+     * ```
+     */
+    launch?: LaunchConfig;
   };
   /** Web build/dev wiring codegenned into tauri.conf.json. cwd for monorepo layouts. */
   web: { build: string; devCommand: string; devUrl: string; dist: string; cwd?: string };

@@ -23,7 +23,7 @@
  *
  * | Field | Type | Default |
  * |---|---|---|
- * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor?; adaptiveIconInset?; keepScreenOn? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `buildNumber` is also the Android `versionCode` (a whole number from 1 to 2100000000, checked at generate, android only); `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour, `adaptiveIconInset` the Android adaptive icon inset (percent per side, `0 < n ≤ 30`), `keepScreenOn` turns the iOS idle timer off |
+ * | `app` | `{ name; identifier; version?; icon?; category?; buildNumber?; orientation?; backgroundColor?; adaptiveIconInset?; keepScreenOn?; launch? }` | `{ name: "", identifier: "" }` — both validated non-empty at composition; `buildNumber` is also the Android `versionCode` (a whole number from 1 to 2100000000, checked at generate, android only); `orientation` (`"portrait" \| "landscape" \| "any"`) is a build-time mobile lock, `backgroundColor` a hex window colour, `adaptiveIconInset` the Android adaptive icon inset (percent per side, `0 < n ≤ 30`), `keepScreenOn` turns the iOS idle timer off, `launch` is the still the Android shell holds until the page calls `window.__mokuLaunch?.ready()` |
  * | `web` | `{ build; devCommand; devUrl; dist; cwd? }` | `"bun run build"`, `"bun run dev"`, `"http://localhost:5173"`, `"dist"` |
  * | `system` | `ReadonlyArray<{ name: string }>` | `[]` — the composed `@moku-labs/system` plugins |
  * | `capabilities` | `Partial<CapabilityConfigMap>` | `{}` — keys: `store`, `notification`, `clipboard-manager`, `tray`, `deep-link`, `back`, `haptics`, `shell` |
@@ -131,6 +131,7 @@ export type {
   CapabilityConfigMap,
   Config,
   Events,
+  LaunchConfig,
   MobileTarget,
   NativeCompleteEvent,
   NativePhase,
