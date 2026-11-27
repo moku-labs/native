@@ -15,7 +15,10 @@ target-set). The XML this plugin does write is presentation: the orientation loc
 `Info.ios.plist` keys and an `android:screenOrientation` attribute on the main activity.
 The one Kotlin source it styles is presentation too: the Android status bar icons follow
 `app.backgroundColor` through the generated `MainActivity.kt`, and the same colour paints
-the Android window and icon splash through the generated app theme. An iOS app's own
+the Android window and icon splash through the generated app theme. With `app.launch` the
+Android shell also holds the game's still picture from its first frame until the page's
+first frame, through a generated `MokuLaunch.kt` and two hooks in `MainActivity.kt`; see
+[The Android launch still](#the-android-launch-still). An iOS app's own
 `Info.plist` keys and privacy manifest come from the `ios` config block, and the mobile patch
 pass keeps a kept iOS tree on them.
 
@@ -72,6 +75,8 @@ namespaced API slice does.
 | `mobile/shell-link.ts` | the check that the shell plugin is linked into `gen/android` |
 | `mobile/system-bars.ts` | the Android status bar icon style in `app/src/main/java/**/MainActivity.kt`, from `app.backgroundColor` |
 | `mobile/window-background.ts` | the Android window and icon-splash background in `res/values*/themes.xml` and `res/values/moku_window_background.xml`, from `app.backgroundColor` |
+| `mobile/launch-still.ts` | the Android launch still from `app.launch`: the drawable, the translucent-start bools and theme item, the `MainActivity.kt` hooks, the placement maths and the image check |
+| `mobile/launch-kotlin.ts` | the generated `MokuLaunch.kt` the launch still patch writes |
 | `mobile/runner.ts` | the Xcode / Android-Studio runner-command rewrite |
 | `mobile/xcode-settings.ts` | the iOS entitlements-modification setting (`project.pbxproj` + `project.yml`) |
 | `mobile/ios-project.ts` | the iOS deployment target and privacy manifest (`project.pbxproj` + `project.yml`) |
@@ -255,7 +260,7 @@ paints the window and the icon splash, see [The Android window background](#the-
 
 | Platform | Patches |
 |---|---|
-| android | build profile → release signing → main-activity manifest attributes → status bar style → window background → runner command |
+| android | build profile → release signing → main-activity manifest attributes → status bar style → window background → launch still → runner command |
 | ios | Xcode entitlements-modification setting → deployment target → privacy manifest → debug keys out of `Info.plist` (outside the debug profile) → runner command |
 
 The profile patches run first, so the store profile cuts its Gradle block out byte for byte
@@ -264,7 +269,8 @@ wherever the signing block sits; see [Build profiles](#build-profiles).
 The runner rewrite runs only when `runner` is passed. The api wrapper hands the Android
 pass its manifest entries: every capability's `activity-attribute` entries, then the
 orientation lock (last, so it wins a clash). It also hands it `app.backgroundColor`, for
-the status bar style and the window background. The iOS pass gets `ios.privacyManifest`, reads
+the status bar style, the window background and the still's background, and the resolved
+`app.launch`. The iOS pass gets `ios.privacyManifest`, reads
 the minimum from `signing` and its profile from the `profile` option. A `gen/apple` tree that
 was never initialised reports nothing.
 
@@ -383,6 +389,77 @@ is never touched. With a colour set, a manifest that names no `@style/` theme, a
 `res/values/themes.xml`, or one without the app theme is a `[native]` error with a fix-it.
 Without a colour the patch only restores, and never fails. The patch runs in every
 `patchMobile` pass, so it comes back after `tauri android init` rewrites the theme.
+
+### The Android launch still
+
+From Android 12 the system draws its own splash (the launcher icon on the theme colour)
+until the app's first frame, and the WebView's first frame comes later still. With
+`app.launch` set, the app shows the game's still picture instead, at the place the game
+draws it, from the shell's first frame until the page says its own first frame is on screen:
+
+```ts
+createApp({ config: { app: {
+  name: "A Memory Missing",
+  identifier: "studio.kitto.memorymissing",
+  backgroundColor: "#F4E6CA",
+  launch: {
+    still: { image: "assets/splash/studio.webp", frame: { width: 1024, height: 1536 }, rect: { x: 215, y: 402, width: 600, height: 640 } },
+    aspect: { min: 4 / 3, max: 21 / 9 }
+  }
+} } });
+// Page side, once the first frame is on screen: window.__mokuLaunch?.ready();
+```
+
+| Field | Default | What |
+|---|---|---|
+| `still.image` | required | a `.png` or `.webp` file, resolved against the cwd as `app.icon` is; transparent outside the art |
+| `still.frame` | required | the canvas the place is given in; it covers the game frame, centred (CSS `cover`) |
+| `still.rect` | required | where the picture lies on that canvas |
+| `aspect` | `{ min: 4 / 3, max: 21 / 9 }`, the engine's default | `{ min, max }` of the game frame's long side / short side; the frame is the largest centred rectangle inside it (the engine's `fitFrame`). The engine always fits its frame into a range, so a game that changes its renderer's range repeats it here |
+| `orientation` | `app.orientation` when it is `"portrait"` or `"landscape"`, else `"portrait"` | the orientation the range is read in |
+| `holdMaxMs` | `8000` | the still goes by itself when no `ready()` came |
+
+The Android pass writes, after the window background:
+
+| File | What |
+|---|---|
+| `res/drawable-nodpi/moku_launch_still.png` or `.webp` | the image's bytes; the extension follows its first bytes, and the file of the other extension is removed |
+| `res/values/moku_launch.xml` | `<bool name="moku_launch_translucent">false</bool>` |
+| `res/values-v30/moku_launch.xml` | the same bool, `true`: the window starts translucent on Android 11+, so the system shows no splash |
+| `res/values*/themes.xml` | one item of the app theme, after the start tag and after the window background lines: `android:windowIsTranslucent` = `@bool/moku_launch_translucent` |
+| `MokuLaunch.kt` beside `MainActivity.kt`, same package | the generated object: it adds a view to the decor view that draws `app.backgroundColor` (alpha forced opaque, white unset) and the still at its place; after the first frame (API 30+, 700 ms later) the window turns opaque (a still that cannot be decoded logs `launch: the still picture could not be decoded` and the window still turns opaque); with no `ready()` the still goes after `holdMaxMs`, with `launch: no ready() in <n> ms, the still is removed` in logcat |
+| `MainActivity.kt` | `MokuLaunch.attach(this)` after `super.onCreate(savedInstanceState)`, and an `onWebViewCreate` member that calls `MokuLaunch.bind(this, webView)` |
+
+**The page contract.** `bind` adds `window.__mokuLaunch` to the page with one method,
+`ready()`. The page calls `window.__mokuLaunch?.ready()` once its first frame is on screen
+(the `?.` keeps a browser and an app without the still working). The first call waits for
+the WebView to have that frame on screen (`postVisualStateCallback`) and then removes the
+still; later calls do nothing.
+
+The placement is `stillPlacement(window, launch)` in `launch-still.ts`, the tested twin of
+the Kotlin maths: on the A26 (a 384 × 832 window) the A Memory Missing still lies at
+`{ x: 31.125, y: 217.75, width: 325, height: 346.667 }`.
+
+Every written line and the two bool files carry the marker `moku:native launch still`
+(`<!-- … -->` in XML, `// …` in Kotlin); the drawable is owned by its name. Each pass strips
+its own lines first and writes them again, so a second pass reports every file unchanged,
+other bytes are kept (CRLF included), and unsetting `app.launch` removes the owned files and
+gives back `MainActivity.kt` and `themes.xml` byte for byte. A file without the marker is
+never removed, and a `MokuLaunch.kt` without it is never overwritten. The system bar patch
+touches other lines of `MainActivity.kt`, so either order gives the same file.
+
+With `app.launch` set, these are `[native]` errors, raised before the patch writes anything:
+not exactly one `MainActivity.kt` that calls `super.onCreate(savedInstanceState)` (a second
+one without that line is left alone), one without a `package` line, one that already overrides
+`onWebViewCreate`, a `MokuLaunch.kt` native did not write, a manifest that names no app theme
+or a `res/values/themes.xml` without it. The image is read in the first step of the Android
+pass, next to the debug keystore check, so a missing file, or one that is not a PNG or WebP by
+its first bytes, stops the pass before `build.gradle.kts` or the manifest is touched. Unset
+never fails, and a tree it never touched reports nothing.
+
+Not covered: Android 7 to 10 has no translucent start (no `Activity.setTranslucent` there),
+so it shows the system preview window in `app.backgroundColor` until the still's first frame.
+iOS has no launch still yet.
 
 ### The runner command
 
@@ -830,6 +907,7 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 | `app.backgroundColor` | not `#rrggbb` or `#rrggbbaa` |
 | `app.orientation` | not `"portrait"`, `"landscape"` or `"any"` — config arrives as plain JS too |
 | `app.adaptiveIconInset` | not a finite number with `0 < n ≤ 30` |
+| `app.launch` | not an object, or `still`, `still.frame`, `still.rect` or `aspect` not an object; `still.image` not a string, or not a `.png`/`.webp` name (any case); a frame or rect size not finite and `> 0`; `rect.x`/`rect.y` not finite and `>= 0`; the rect reaching past the frame; `aspect` without finite `min >= 0.000001` (a smaller bound prints as `0.000000f`) and `max >= min`; `orientation` not a string, or not `"portrait"`/`"landscape"`; `holdMaxMs` not a whole number in `1…60000`. The image file itself is checked by the patch pass |
 | `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
 | `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
 | `signing.apple.iosMinimumSystemVersion` | not `MAJOR.MINOR[.PATCH]` — it lands raw in `project.yml` and `project.pbxproj` |

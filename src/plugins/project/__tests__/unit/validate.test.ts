@@ -6,6 +6,7 @@ import process from "node:process";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../../../../config";
+import type { LaunchConfig } from "../../../../index";
 import { validateProjectConfig } from "../../validate";
 
 const VALID: Config = {
@@ -335,6 +336,165 @@ describe("validateProjectConfig — the iOS fields", () => {
     // Config arrives as plain JS too, so the type does not protect the generated plist.
     expect(() => validateProjectConfig(config({ ios: { infoPlist } }))).toThrow(
       `[native] ${key} is not a plist value.\n  Use a string, a boolean, an array or a plain object.`
+    );
+  });
+});
+
+describe("validateProjectConfig — app.launch", () => {
+  const LAUNCH: LaunchConfig = {
+    still: {
+      image: "assets/splash/studio.webp",
+      frame: { width: 1024, height: 1536 },
+      rect: { x: 215, y: 402, width: 600, height: 640 }
+    },
+    aspect: { min: 4 / 3, max: 21 / 9 }
+  };
+
+  /** A config whose app.launch is `launch`, typed or not: plain-JS config can carry anything. */
+  const withLaunch = (launch: unknown) =>
+    config({ app: { ...VALID.app, launch: launch as LaunchConfig } });
+
+  /** {@link LAUNCH} with its still replaced in part. */
+  const withStill = (still: Record<string, unknown>) =>
+    withLaunch({ ...LAUNCH, still: { ...LAUNCH.still, ...still } });
+
+  it("accepts the A Memory Missing still, a range below 1, and every optional field at its bound", () => {
+    expect(() => validateProjectConfig(withLaunch(LAUNCH))).not.toThrow();
+    expect(() =>
+      validateProjectConfig(withLaunch({ ...LAUNCH, aspect: { min: 0.4, max: 2.6 } }))
+    ).not.toThrow();
+    expect(() =>
+      validateProjectConfig(
+        withLaunch({
+          still: {
+            ...LAUNCH.still,
+            image: "STILL.PNG",
+            rect: { x: 0, y: 0, width: 1024, height: 1536 }
+          },
+          orientation: "landscape",
+          holdMaxMs: 60_000
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["app.launch that is not an object", "splash.png", "[native] app.launch must be an object."],
+    ["a missing still", { aspect: LAUNCH.aspect }, "[native] app.launch.still must be an object."],
+    [
+      "a missing still.frame",
+      { still: { image: "a.png", rect: LAUNCH.still.rect } },
+      "[native] app.launch.still.frame must be an object."
+    ],
+    [
+      "a missing still.rect",
+      { still: { image: "a.png", frame: LAUNCH.still.frame } },
+      "[native] app.launch.still.rect must be an object."
+    ],
+    [
+      "an aspect that is not an object",
+      { ...LAUNCH, aspect: "wide" },
+      "[native] app.launch.aspect must be an object."
+    ]
+  ])("rejects %s, naming it (bug: a TypeError deep in the patch)", (_label, launch, message) => {
+    expect(() => validateProjectConfig(withLaunch(launch))).toThrow(message);
+  });
+
+  it.each([
+    [
+      "an empty image",
+      { image: "" },
+      '[native] app.launch.still.image "" is not a .png or .webp file.'
+    ],
+    [
+      "a .jpg image",
+      { image: "a.jpg" },
+      '[native] app.launch.still.image "a.jpg" is not a .png or .webp file.'
+    ],
+    [
+      "an image that is a list (bug: path.resolve throws a TypeError later)",
+      { image: ["studio.png"] },
+      '[native] app.launch.still.image must be a string.\n  Point it at the still picture, such as "assets/splash/studio.webp".'
+    ],
+    [
+      "a zero frame width",
+      { frame: { width: 0, height: 1536 } },
+      "[native] app.launch.still.frame.width must be a finite number above 0, got 0."
+    ],
+    [
+      "a NaN frame height",
+      { frame: { width: 1024, height: Number.NaN } },
+      "[native] app.launch.still.frame.height must be a finite number above 0, got NaN."
+    ],
+    [
+      "a zero rect width",
+      { rect: { x: 0, y: 0, width: 0, height: 10 } },
+      "[native] app.launch.still.rect.width must be a finite number above 0, got 0."
+    ],
+    [
+      "an infinite rect height",
+      { rect: { x: 0, y: 0, width: 10, height: Number.POSITIVE_INFINITY } },
+      "[native] app.launch.still.rect.height must be a finite number above 0, got Infinity."
+    ],
+    [
+      "a negative rect x",
+      { rect: { x: -1, y: 0, width: 10, height: 10 } },
+      "[native] app.launch.still.rect.x must be a finite number of 0 or more, got -1."
+    ],
+    [
+      "a NaN rect y",
+      { rect: { x: 0, y: Number.NaN, width: 10, height: 10 } },
+      "[native] app.launch.still.rect.y must be a finite number of 0 or more, got NaN."
+    ],
+    [
+      "a rect past the frame's right edge",
+      { rect: { x: 425, y: 402, width: 600, height: 640 } },
+      "[native] app.launch.still.rect reaches past app.launch.still.frame: x + width is 1025, frame.width is 1024."
+    ],
+    [
+      "a rect past the frame's bottom edge",
+      { rect: { x: 215, y: 897, width: 600, height: 640 } },
+      "[native] app.launch.still.rect reaches past app.launch.still.frame: y + height is 1537, frame.height is 1536."
+    ]
+  ])("rejects %s (bug: the still is drawn off its canvas or not at all)", (_label, still, message) => {
+    expect(() => validateProjectConfig(withStill(still))).toThrow(message);
+  });
+
+  it.each([
+    ["a min of 0", { min: 0, max: 2 }],
+    ["a min that prints as 0.000000f", { min: 0.000_000_5, max: 2 }],
+    ["a max below min", { min: 2, max: 1.5 }],
+    ["a NaN min", { min: Number.NaN, max: 2 }],
+    ["an infinite max", { min: 1, max: Number.POSITIVE_INFINITY }]
+  ])("rejects %s as app.launch.aspect (bug: the Kotlin clamp throws or never clamps)", (_label, aspect) => {
+    expect(() => validateProjectConfig(withLaunch({ ...LAUNCH, aspect }))).toThrow(
+      `[native] app.launch.aspect must have a finite min of at least 0.000001 and a finite max of at least min, got { min: ${String(aspect.min)}, max: ${String(aspect.max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
+    );
+  });
+
+  it("rejects an orientation other than portrait or landscape", () => {
+    expect(() => validateProjectConfig(withLaunch({ ...LAUNCH, orientation: "any" }))).toThrow(
+      '[native] app.launch.orientation "any" is not a valid orientation.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.'
+    );
+  });
+
+  it('rejects an orientation that is not a string (bug: ["portrait"] passes the pattern and is read as landscape)', () => {
+    expect(() =>
+      validateProjectConfig(withLaunch({ ...LAUNCH, orientation: ["portrait"] }))
+    ).toThrow(
+      '[native] app.launch.orientation must be a string.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.'
+    );
+  });
+
+  it("accepts the smallest aspect bound the Kotlin can print", () => {
+    expect(() =>
+      validateProjectConfig(withLaunch({ ...LAUNCH, aspect: { min: 0.000_001, max: 2 } }))
+    ).not.toThrow();
+  });
+
+  it.each([0, 60_001, 1.5, Number.NaN])("rejects %s as app.launch.holdMaxMs", holdMaxMs => {
+    expect(() => validateProjectConfig(withLaunch({ ...LAUNCH, holdMaxMs }))).toThrow(
+      `[native] app.launch.holdMaxMs must be a whole number above 0 and at most 60000, got ${String(holdMaxMs)}.\n  Use the milliseconds the still may wait for ready(), such as 8000, or unset it for 8000.`
     );
   });
 });

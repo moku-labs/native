@@ -412,6 +412,62 @@ describe("complex tier: project plugin (integration)", () => {
       ).toContain('<color name="moku_window_background">#10161d</color>');
     });
 
+    it("patchMobile carries app.launch into the Android pass (bug: the config never reaches the patch)", async () => {
+      const genDir = path.join(projectDir, "src-tauri", "gen", "android");
+      await seedAndroid(manifestWithMainActivity(""));
+      const image = path.join(projectDir, "studio.png");
+      await writeFile(image, Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const app = framework.createApp({
+        config: {
+          ...validAppConfig,
+          projectDir,
+          app: {
+            ...validAppConfig.app,
+            launch: {
+              still: {
+                image,
+                frame: { width: 1024, height: 1536 },
+                rect: { x: 215, y: 402, width: 600, height: 640 }
+              },
+              holdMaxMs: 5000
+            }
+          }
+        }
+      });
+
+      await app.project.patchMobile({ target: "android" });
+
+      const activityPath = mainActivityPath(genDir);
+      expect(await readFile(activityPath, "utf8")).toContain("MokuLaunch.attach(this)");
+      const kotlin = await readFile(path.join(path.dirname(activityPath), "MokuLaunch.kt"), "utf8");
+      expect(kotlin).toContain("private const val HOLD_MAX_MS = 5000L");
+      // No aspect configured: the engine's default range, 4/3 to 21/9.
+      expect(kotlin).toContain("private const val ASPECT_MIN = 1.333333f");
+      expect(await readFile(themesPath(genDir), "utf8")).toContain(
+        '<item name="android:windowIsTranslucent">@bool/moku_launch_translucent</item>'
+      );
+    });
+
+    it("rejects a launch still placed off its canvas at createApp", () => {
+      const framework = createCore(coreConfig, { plugins: [projectPlugin] });
+      const still = {
+        image: "studio.png",
+        frame: { width: 100, height: 100 },
+        rect: { x: 50, y: 0, width: 60, height: 10 }
+      };
+
+      expect(() =>
+        framework.createApp({
+          config: {
+            ...validAppConfig,
+            projectDir,
+            app: { ...validAppConfig.app, launch: { still } }
+          }
+        })
+      ).toThrow("[native] app.launch.still.rect reaches past app.launch.still.frame");
+    });
+
     it("patchMobile removes a stale Android lock when the orientation is unset", async () => {
       const manifestPath = await seedAndroid(
         manifestWithMainActivity('android:screenOrientation="portrait"')

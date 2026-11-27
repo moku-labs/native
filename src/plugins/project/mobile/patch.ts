@@ -5,7 +5,8 @@
  * release-signing block), `manifest.ts` (the Android main activity's attributes, such as
  * the orientation lock), `system-bars.ts` (the Android status bar icon style from
  * `app.backgroundColor`), `window-background.ts` (the Android window and icon-splash
- * background from the same colour), `runner.ts` (the Xcode / Android-Studio runner command),
+ * background from the same colour), `launch-still.ts` (the Android launch still from
+ * `app.launch`), `runner.ts` (the Xcode / Android-Studio runner command),
  * `xcode-settings.ts` (the iOS entitlements-modification setting that makes a REBUILD work),
  * `ios-project.ts` (the iOS deployment target and privacy manifest) and `ios-plist.ts` (the
  * debug keys a debug build left in the iOS `Info.plist`).
@@ -15,9 +16,16 @@ import path from "node:path";
 import type { BuildProfile, SigningConfig, TauriRunner } from "../../../config";
 import { DEFAULT_IOS_MINIMUM_SYSTEM_VERSION } from "../generators/tauri-conf";
 import { genDirectoryPath } from "../layout";
-import type { AndroidProfile, ManifestEntry, PatchMobileOptions, PatchResult } from "../types";
+import type {
+  AndroidProfile,
+  ManifestEntry,
+  PatchMobileOptions,
+  PatchResult,
+  ResolvedLaunch
+} from "../types";
 import { patchIosInfoPlist } from "./ios-plist";
 import { patchDeploymentTarget, patchPrivacyManifest, readPrivacyManifest } from "./ios-project";
+import { patchAndroidLaunchStill, readLaunchImage } from "./launch-still";
 import { patchAndroidManifest } from "./manifest";
 import { patchAndroidProfile } from "./profile";
 import { patchRunner } from "./runner";
@@ -109,7 +117,7 @@ async function patchIos(options: {
 /**
  * The Android half of {@link patchMobile}: the build-profile patches, the release signing
  * block, the main activity's manifest attributes, the status bar style, the window
- * background, then the runner command when the caller supplies a runner.
+ * background, the launch still, then the runner command when the caller supplies a runner.
  *
  * @param options - What to patch.
  * @param options.projectDirectory - The Tauri project root.
@@ -120,9 +128,11 @@ async function patchIos(options: {
  * @param options.backgroundColor - `app.backgroundColor`, which the status bar icons and the
  *   window background follow.
  * @param options.profile - The Android build profile.
+ * @param options.launch - The resolved `app.launch`, or undefined when unset.
  * @returns The paths patched vs. left unchanged, merged over every patch.
  * @throws {Error} When the `gen/android` tree (or its `app/build.gradle.kts`) is missing, the
- *   debug keystore is missing in the debug profile, or a patch meets a tree it cannot patch.
+ *   debug keystore is missing in the debug profile or the launch image is missing or not an
+ *   image (both before anything is written), or a patch meets a tree it cannot patch.
  */
 async function patchAndroid(options: {
   projectDirectory: string;
@@ -132,6 +142,7 @@ async function patchAndroid(options: {
   manifest: readonly ManifestEntry[];
   backgroundColor: string | undefined;
   profile: AndroidProfile;
+  launch: ResolvedLaunch | undefined;
 }): Promise<PatchResult> {
   const { projectDirectory, genDirectory, runner, profile } = options;
 
@@ -143,9 +154,11 @@ async function patchAndroid(options: {
     );
   }
 
-  // Check the debug keystore before anything is written.
+  // Check the debug keystore and the launch image before anything is written.
   const debugKeystore = profile.profile === "debug" ? profile.debugKeystore : undefined;
   if (debugKeystore !== undefined) assertDebugKeystore(debugKeystore);
+  const { launch } = options;
+  const launchImage = launch === undefined ? undefined : await readLaunchImage(launch.image);
 
   // Profile before signing, so the store profile cuts its Gradle block out byte for byte.
   const profileResult = await patchAndroidProfile({ projectDirectory, genDirectory, profile });
@@ -170,12 +183,21 @@ async function patchAndroid(options: {
     genDirectory,
     options.backgroundColor
   );
+  // After the window background: the launch theme item goes below that patch's lines.
+  const launchResult = await patchAndroidLaunchStill(
+    projectDirectory,
+    genDirectory,
+    launch,
+    options.backgroundColor,
+    launchImage
+  );
   const androidResults = [
     profileResult,
     signingResult,
     manifestResult,
     systemBarsResult,
-    windowResult
+    windowResult,
+    launchResult
   ];
   if (!runner) return mergePatchResults(...androidResults);
 
@@ -191,7 +213,8 @@ async function patchAndroid(options: {
  * Deterministic, idempotent post-init patch pass over an existing complete gen/ tree.
  * Android gets, in this order, its build-profile patches, its release signing block, the
  * main activity's manifest attributes, the system bar style in MainActivity.kt, the window
- * and icon-splash background in the app theme, then the runner command. The profile
+ * and icon-splash background in the app theme, the launch still (`app.launch`: a
+ * translucent start, `MokuLaunch.kt` and two MainActivity.kt hooks), then the runner command. The profile
  * patches run before signing so that the store profile cuts its Gradle block out byte for
  * byte, wherever the signing block sits. iOS gets the Xcode
  * entitlements-modification setting (without it the SECOND build of the same tree fails),
@@ -215,10 +238,13 @@ async function patchAndroid(options: {
  *   when omitted (ignored on iOS).
  * @param privacyManifest - `ios.privacyManifest`, an absolute path; unset removes one a
  *   previous pass added (ignored on Android).
+ * @param launch - The resolved `app.launch`; unset removes what a previous pass added
+ *   (ignored on iOS).
  * @returns The paths patched vs. left unchanged, one merged report over every patch.
  * @throws {Error} When the Android `gen/android` tree (or its `app/build.gradle.kts`) is
  *   missing, the debug keystore is missing in the debug profile (before anything is
- *   written), manifest entries meet a missing manifest or an unclear main activity, a
+ *   written), the launch image is missing or not a PNG or WebP (before anything is written),
+ *   manifest entries meet a missing manifest or an unclear main activity, a
  *   background colour meets a tree without exactly one MainActivity.kt to style or without
  *   the app theme to set the window background in; or when the iOS privacy manifest source
  *   is missing (before anything is written), `project.yml` or `project.pbxproj` lacks a line
@@ -231,7 +257,8 @@ export async function patchMobile(
   manifest: readonly ManifestEntry[] = [],
   backgroundColor?: string,
   profile: AndroidProfile = STORE_PROFILE,
-  privacyManifest?: string
+  privacyManifest?: string,
+  launch?: ResolvedLaunch
 ): Promise<PatchResult> {
   const genDirectory = genDirectoryPath(projectDirectory, opts.target);
 
@@ -255,6 +282,7 @@ export async function patchMobile(
     signing,
     manifest,
     backgroundColor,
-    profile
+    profile,
+    launch
   });
 }

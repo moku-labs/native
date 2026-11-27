@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { patchMobile } from "../../../mobile/patch";
 import { applySigningBlock } from "../../../mobile/signing";
 import { orientationManifest } from "../../../orientation";
+import type { ResolvedLaunch } from "../../../types";
 import {
   androidManifest,
   CLEAN_INFO_PLIST,
@@ -33,6 +34,16 @@ const seedAndroidManifest = async (genDir: string) => {
   await writeFile(manifestPath, androidManifest(), "utf8");
   return manifestPath;
 };
+
+/** The A Memory Missing still, its image at `image`. */
+const launchAt = (image: string): ResolvedLaunch => ({
+  image,
+  frame: { width: 1024, height: 1536 },
+  rect: { x: 215, y: 402, width: 600, height: 640 },
+  aspect: { min: 4 / 3, max: 21 / 9 },
+  orientation: "portrait",
+  holdMaxMs: 8000
+});
 
 describe("patchMobile", () => {
   let dir: string;
@@ -86,6 +97,39 @@ describe("patchMobile", () => {
     await writeFile(pbxproj, REAL_PBXPROJ, "utf8");
     await writeFile(source, "<plist/>\n", "utf8");
     return { projectYml, pbxproj, source, manifest: path.join(genDir, "PrivacyInfo.xcprivacy") };
+  };
+
+  /** An Android pass with an optional colour and launch. */
+  const patchAndroid = (backgroundColor: string | undefined, launch: ResolvedLaunch | undefined) =>
+    patchMobile(dir, { target: "android" }, {}, [], backgroundColor, undefined, undefined, launch);
+
+  /** A gen/android tree with everything the colour and launch patches read, and a PNG. */
+  const seedLaunchTree = async () => {
+    const genDir = await seedAndroid();
+    const manifestPath = await seedAndroidManifest(genDir);
+    const activityPath = mainActivityPath(genDir);
+    await mkdir(path.dirname(activityPath), { recursive: true });
+    await writeFile(activityPath, REAL_MAIN_ACTIVITY, "utf8");
+    const resDir = path.join(genDir, "app", "src", "main", "res");
+    const themesPath = path.join(resDir, "values", "themes.xml");
+    await mkdir(path.dirname(themesPath), { recursive: true });
+    await writeFile(
+      themesPath,
+      '<resources>\n    <style name="Theme.my_app" parent="P">\n    </style>\n</resources>\n',
+      "utf8"
+    );
+    const image = path.join(dir, "studio.png");
+    await writeFile(image, Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    return {
+      genDir,
+      manifestPath,
+      activityPath,
+      themesPath,
+      gradlePath: path.join(genDir, "app", "build.gradle.kts"),
+      kotlinPath: path.join(path.dirname(activityPath), "MokuLaunch.kt"),
+      drawablePath: path.join(resDir, "drawable-nodpi", "moku_launch_still.png"),
+      launch: launchAt(image)
+    };
   };
 
   /** An iOS pass with the given minimum and privacy manifest. */
@@ -464,6 +508,102 @@ describe("patchMobile", () => {
     const result = await patchMobile(dir, { target: "ios" }, {}, [], "#10161d");
 
     expect(result.patched).toEqual([]);
+  });
+
+  describe("the launch still", () => {
+    it("runs after the window background and lands in the one report (bug: the launch files are written but never reported)", async () => {
+      const tree = await seedLaunchTree();
+
+      const result = await patchAndroid("#F4E6CA", tree.launch);
+
+      expect(result.patched).toEqual(
+        expect.arrayContaining([
+          tree.drawablePath,
+          tree.kotlinPath,
+          tree.activityPath,
+          tree.themesPath
+        ])
+      );
+      expect(await readFile(tree.activityPath, "utf8")).toContain("MokuLaunch.attach(this)");
+    });
+
+    it("with a colour and a launch, a second pass reports every file unchanged (bug: the window patch moves the launch line every build)", async () => {
+      const tree = await seedLaunchTree();
+      await patchAndroid("#F4E6CA", tree.launch);
+
+      const second = await patchAndroid("#F4E6CA", tree.launch);
+
+      expect(second.patched).toEqual([]);
+      expect(second.unchanged).toEqual(
+        expect.arrayContaining([tree.themesPath, tree.activityPath, tree.kotlinPath])
+      );
+    });
+
+    it("colour unset, set, unset again with the launch kept ends byte-equal to the first state", async () => {
+      const tree = await seedLaunchTree();
+      const files = [tree.activityPath, tree.themesPath, tree.kotlinPath];
+      await patchAndroid(undefined, tree.launch);
+      const first = await Promise.all(files.map(file => readFile(file, "utf8")));
+
+      await patchAndroid("#10161d", tree.launch);
+      await patchAndroid(undefined, tree.launch);
+
+      expect(await Promise.all(files.map(file => readFile(file, "utf8")))).toEqual(first);
+    });
+
+    it("unsetting the launch gives back the files of a pass without it", async () => {
+      const tree = await seedLaunchTree();
+      const files = [tree.activityPath, tree.themesPath];
+      await patchAndroid("#10161d", undefined);
+      const before = await Promise.all(files.map(file => readFile(file, "utf8")));
+      await patchAndroid("#10161d", tree.launch);
+
+      await patchAndroid("#10161d", undefined);
+
+      expect(await Promise.all(files.map(file => readFile(file, "utf8")))).toEqual(before);
+      expect(existsSync(tree.kotlinPath)).toBe(false);
+      expect(existsSync(tree.drawablePath)).toBe(false);
+    });
+
+    it.each([
+      ["a missing image", "gone.png", "was not found at"],
+      ["a file that is not an image", "notes.png", "is not a PNG or WebP image by its first bytes"]
+    ])("%s is refused before build.gradle.kts or the manifest is touched (bug: a half-patched tree)", async (_label, name, message) => {
+      const tree = await seedLaunchTree();
+      await writeFile(path.join(dir, "notes.png"), "notes", "utf8");
+
+      await expect(
+        patchMobile(
+          dir,
+          { target: "android" },
+          { android: SIGNING },
+          orientationManifest("portrait"),
+          undefined,
+          undefined,
+          undefined,
+          launchAt(path.join(dir, name))
+        )
+      ).rejects.toThrow(message);
+      expect(await readFile(tree.gradlePath, "utf8")).toBe("plugins {}\n");
+      expect(await readFile(tree.manifestPath, "utf8")).toBe(androidManifest());
+    });
+
+    it("ios ignores the launch", async () => {
+      await seedApple();
+
+      const result = await patchMobile(
+        dir,
+        { target: "ios" },
+        {},
+        [],
+        undefined,
+        undefined,
+        undefined,
+        launchAt(path.join(dir, "gone.png"))
+      );
+
+      expect(result.patched).toEqual([]);
+    });
   });
 
   describe("the debug keys a kept Info.plist carries", () => {

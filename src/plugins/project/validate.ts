@@ -4,7 +4,7 @@
  * instead of deep inside `tauri build`.
  */
 import path from "node:path";
-import type { Config } from "../../config";
+import type { Config, LaunchConfig } from "../../config";
 import { isDeliveryPath, isDerivedPath } from "./paths";
 import { assertKnownCapabilities } from "./registry";
 
@@ -31,6 +31,18 @@ const ORIENTATION_PATTERN = /^(?:portrait|landscape|any)$/;
 
 /** `MAJOR.MINOR[.PATCH]` — lands raw in `project.yml` and `project.pbxproj`. */
 const IOS_VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?$/;
+
+/** A `.png` or `.webp` file name, any case — the two formats the launch drawable may be. */
+const STILL_IMAGE_PATTERN = /\.(?:png|webp)$/i;
+
+/** The two orientations the launch aspect range is read in. */
+const LAUNCH_ORIENTATION_PATTERN = /^(?:portrait|landscape)$/;
+
+/** The longest the launch still may wait for `ready()`, in ms. */
+const MAX_HOLD_MS = 60_000;
+
+/** The smallest aspect bound: anything below prints as `0.000000f` in the Kotlin. */
+const MIN_ASPECT = 0.000_001;
 
 /**
  * Validates one free-text config value that is interpolated verbatim into a generated
@@ -198,6 +210,185 @@ function assertIosConfig(ios: Config["ios"]): void {
 }
 
 /**
+ * Validates that a config value is a plain object, so a missing block is a `[native]` error
+ * naming it instead of a TypeError further on. Config arrives as plain JS too.
+ *
+ * @param field - The dotted config path, used verbatim in the error.
+ * @param value - The configured value.
+ * @param fix - The second error line.
+ * @throws {Error} When the value is not a plain object.
+ * @example
+ * ```ts
+ * assertObject("app.launch.still", undefined, "Set it."); // throws: [native] app.launch.still must be an object.
+ * ```
+ */
+function assertObject(field: string, value: unknown, fix: string): void {
+  if (isPlainObject(value)) return;
+
+  throw new Error(`[native] ${field} must be an object.\n  ${fix}`);
+}
+
+/**
+ * Validates one size or offset of the launch still: finite, and above 0 (a size) or at least
+ * 0 (an offset).
+ *
+ * @param field - The dotted config path, used verbatim in the error.
+ * @param value - The configured number.
+ * @param minimum - `"positive"` for a size, `"non-negative"` for an offset.
+ * @throws {Error} When the number is out of range.
+ * @example
+ * ```ts
+ * assertLaunchNumber("app.launch.still.rect.x", -1, "non-negative"); // throws: [native] app.launch.still.rect.x must be a finite number of 0 or more, got -1.
+ * ```
+ */
+function assertLaunchNumber(
+  field: string,
+  value: number,
+  minimum: "positive" | "non-negative"
+): void {
+  const positive = minimum === "positive";
+  if (Number.isFinite(value) && (positive ? value > 0 : value >= 0)) return;
+
+  throw new Error(
+    `[native] ${field} must be a finite number ${positive ? "above 0" : "of 0 or more"}, got ${String(value)}.\n  Use a number in the units of app.launch.still.frame.`
+  );
+}
+
+/**
+ * Validates `app.launch.still`: the image is a `.png` or `.webp` file name, the frame and
+ * rectangle are objects of finite numbers, and the rectangle lies inside the frame. The
+ * file itself is the patch's check, at build time.
+ *
+ * @param still - The configured still.
+ * @throws {Error} When a field is missing or out of range.
+ */
+function assertLaunchStill(still: LaunchConfig["still"]): void {
+  assertObject(
+    "app.launch.still.frame",
+    still.frame,
+    "Set it to the size of the canvas the place is given in, such as { width: 1024, height: 1536 }."
+  );
+  assertObject(
+    "app.launch.still.rect",
+    still.rect,
+    "Set it to where the picture lies on that canvas, such as { x: 215, y: 402, width: 600, height: 640 }."
+  );
+  const image: unknown = still.image;
+  if (typeof image !== "string") {
+    throw new TypeError(
+      `[native] app.launch.still.image must be a string.\n  Point it at the still picture, such as "assets/splash/studio.webp".`
+    );
+  }
+  if (!STILL_IMAGE_PATTERN.test(image)) {
+    throw new Error(
+      `[native] app.launch.still.image "${image}" is not a .png or .webp file.\n  Point it at the still picture, such as "assets/splash/studio.webp".`
+    );
+  }
+
+  const { frame, rect } = still;
+  assertLaunchNumber("app.launch.still.frame.width", frame.width, "positive");
+  assertLaunchNumber("app.launch.still.frame.height", frame.height, "positive");
+  assertLaunchNumber("app.launch.still.rect.width", rect.width, "positive");
+  assertLaunchNumber("app.launch.still.rect.height", rect.height, "positive");
+  assertLaunchNumber("app.launch.still.rect.x", rect.x, "non-negative");
+  assertLaunchNumber("app.launch.still.rect.y", rect.y, "non-negative");
+
+  // The picture lies on its canvas.
+  const edges = [
+    ["x + width", rect.x + rect.width, "frame.width", frame.width],
+    ["y + height", rect.y + rect.height, "frame.height", frame.height]
+  ] as const;
+  for (const [reach, end, side, size] of edges) {
+    if (end <= size) continue;
+    throw new Error(
+      `[native] app.launch.still.rect reaches past app.launch.still.frame: ${reach} is ${String(end)}, ${side} is ${String(size)}.\n  Keep the rectangle inside the canvas.`
+    );
+  }
+}
+
+/**
+ * Validates `app.launch.aspect`: both bounds finite, `min >= 0.000001` (a smaller bound
+ * prints as `0.000000f`) and `max >= min`. The ratio is the long side / short side in the
+ * launch orientation, so a range below 1 is legal.
+ *
+ * @param aspect - The configured range, or undefined when unset.
+ * @throws {Error} When the range is set and invalid.
+ * @example
+ * ```ts
+ * assertLaunchAspect({ min: 0.4, max: 2.6 }); // ok
+ * assertLaunchAspect({ min: 0, max: 2 }); // throws: [native] app.launch.aspect must have …
+ * ```
+ */
+function assertLaunchAspect(aspect: LaunchConfig["aspect"]): void {
+  if (aspect === undefined) return;
+  assertObject(
+    "app.launch.aspect",
+    aspect,
+    "Set it to { min, max }, the range of the game frame's long side / short side, or unset it."
+  );
+
+  const { min, max } = aspect;
+  if (Number.isFinite(min) && Number.isFinite(max) && min >= MIN_ASPECT && max >= min) return;
+  throw new Error(
+    `[native] app.launch.aspect must have a finite min of at least ${String(MIN_ASPECT)} and a finite max of at least min, got { min: ${String(min)}, max: ${String(max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
+  );
+}
+
+/**
+ * Validates `app.launch.holdMaxMs`: a whole number above 0 and at most 60000.
+ *
+ * @param holdMaxMs - The configured hold, or undefined when unset.
+ * @throws {Error} When the hold is set and out of range.
+ * @example
+ * ```ts
+ * assertHoldMaxMs(1.5); // throws: [native] app.launch.holdMaxMs must be a whole number …
+ * ```
+ */
+function assertHoldMaxMs(holdMaxMs: number | undefined): void {
+  if (holdMaxMs === undefined) return;
+  if (Number.isInteger(holdMaxMs) && holdMaxMs > 0 && holdMaxMs <= MAX_HOLD_MS) return;
+
+  throw new Error(
+    `[native] app.launch.holdMaxMs must be a whole number above 0 and at most ${MAX_HOLD_MS}, got ${String(holdMaxMs)}.\n  Use the milliseconds the still may wait for ready(), such as 8000, or unset it for 8000.`
+  );
+}
+
+/**
+ * Validates `app.launch`, when set: every block is an object, the still and its place are
+ * in range, and the aspect, orientation and hold are what the Kotlin can use. Config
+ * arrives as plain JS too, so the `LaunchConfig` type is not trusted.
+ *
+ * @param launch - The configured launch, or undefined when unset.
+ * @throws {Error} When a block is missing or a field is out of range, naming the field.
+ */
+function assertLaunchConfig(launch: Config["app"]["launch"]): void {
+  if (launch === undefined) return;
+  assertObject("app.launch", launch, "Set it to { still: { image, frame, rect } }, or unset it.");
+  assertObject(
+    "app.launch.still",
+    launch.still,
+    "Set it to { image, frame, rect }: the picture and where it lies."
+  );
+
+  assertLaunchStill(launch.still);
+  assertLaunchAspect(launch.aspect);
+  const orientation: unknown = launch.orientation;
+  if (orientation !== undefined && typeof orientation !== "string") {
+    throw new TypeError(
+      `[native] app.launch.orientation must be a string.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.`
+    );
+  }
+  assertShape(
+    "app.launch.orientation",
+    launch.orientation,
+    LAUNCH_ORIENTATION_PATTERN,
+    "orientation",
+    'Use "portrait" or "landscape", or unset it to follow app.orientation.'
+  );
+  assertHoldMaxMs(launch.holdMaxMs);
+}
+
+/**
  * Validates the app identity and web wiring: `app.name`, a reverse-DNS `app.identifier`,
  * and every `web.*` field. Each lands verbatim in tauri.conf.json, where a missing value
  * fails deep inside `tauri build` instead of at `createApp`.
@@ -268,8 +459,8 @@ function assertDeepLinkScheme(global: Readonly<Config>): void {
 /**
  * Validates the global config at composition time — throws `[native]`-formatted errors
  * for missing app identity, missing web wiring, values that would break out of the
- * generated file they are written into, a window colour, orientation or adaptive icon
- * inset outside its allowed shape, an `ios` block a build could not use, a `projectDir`
+ * generated file they are written into, a window colour, orientation, adaptive icon
+ * inset or launch still outside its allowed shape, an `ios` block a build could not use, a `projectDir`
  * outside the project, an `outDir` this app must not deliver into, unknown `config.system`
  * names, or a `deep-link` composition missing its scheme.
  *
@@ -317,6 +508,7 @@ export function validateProjectConfig(global: Readonly<Config>): void {
     'Use "portrait", "landscape" or "any".'
   );
   assertIconInset(global.app.adaptiveIconInset);
+  assertLaunchConfig(global.app.launch);
   assertShape(
     "signing.android.keystorePasswordEnv",
     global.signing.android?.keystorePasswordEnv,

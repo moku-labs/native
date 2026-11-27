@@ -115,6 +115,30 @@ Each `build.run({ target })` walks the phase pipeline `scaffold → codegen → 
 
 The shell is **Android only** for now — on iOS the row is filtered out like any platform-limited row, so a browser, iOS, or an app without the shell has no `__MOKU_NATIVE__` and the page keeps its fallback. `capabilities.shell` is its empty parameter object and composes nothing on its own. The full contract is in the [`project` README](./src/plugins/project/README.md#page-contract-v1).
 
+### The launch still on Android
+
+From Android 12 the system draws its own splash, the launcher icon, until the app's first frame, and the page's first frame comes later still. Set `app.launch` and the Android shell shows the game's still picture instead, at the place the game draws it, from its very first frame until the page says it is ready:
+
+```ts
+createApp({ config: { app: {
+  name: "A Memory Missing",
+  identifier: "studio.kitto.memorymissing",
+  backgroundColor: "#F4E6CA",
+  launch: {
+    still: { image: "assets/splash/studio.webp", frame: { width: 1024, height: 1536 }, rect: { x: 215, y: 402, width: 600, height: 640 } },
+    aspect: { min: 4 / 3, max: 21 / 9 }
+  }
+} } });
+```
+
+The page calls this once its first frame is on screen; the `?.` keeps a browser and an app without the still working:
+
+```ts
+window.__mokuLaunch?.ready();
+```
+
+The still then leaves as soon as the WebView shows that frame. Without a `ready()` it leaves after `holdMaxMs` (8000 by default), with `launch: no ready() in 8000 ms, the still is removed` in logcat. The Android pass of `patchMobile` writes the still as a drawable, a translucent start window for Android 11+ (so the system shows no splash), a generated `MokuLaunch.kt` beside `MainActivity.kt` and two hooks in `MainActivity.kt`; unset removes all of it again. Android 7 to 10 has no translucent start and shows the system preview window in `app.backgroundColor` until the still's first frame. iOS is not covered yet. The files and the rules are in the [`project` README](./src/plugins/project/README.md#the-android-launch-still).
+
 The packaged page's origin depends on the platform, which matters for any server-side CORS allowlist:
 
 | Platform | `location.origin` |
@@ -180,6 +204,7 @@ The substantive surface is **global** `Config` — every plugin reads it via `ct
 | `app.backgroundColor` | `string?` | unset | Hex window colour (`"#10161d"`, `"#10161dff"`) → `app.windows[0].backgroundColor`. Shows during launch and behind any gap the page does not cover. On Android it also paints the activity window and the Android 12+ icon splash, so no dark frame shows between the icon splash and the page's first paint; the status bar icons follow it: light on a dark colour, dark on a light one. |
 | `app.adaptiveIconInset` | `number?` | unset | Android adaptive icon inset, percent per side of the 108 dp canvas (`0 < n ≤ 30`, validated at composition). Wraps the launcher foreground in an `<inset>` so full-bleed art survives the mask; `19.44` keeps it inside the 66 dp safe zone. Re-applied after `tauri icon` on every Android build; unset leaves the icon untouched. |
 | `app.keepScreenOn` | `boolean?` | unset | iOS: the app turns the idle timer off at launch, because iOS refuses `navigator.wakeLock` until the first tap. Android keeps the screen on from the page. |
+| `app.launch` | `LaunchConfig?` | unset | Android: the still picture the shell holds from its first frame until the page calls `window.__mokuLaunch?.ready()`, see [The launch still on Android](#the-launch-still-on-android). `still: { image, frame, rect }` (a `.png`/`.webp` resolved against the cwd, its canvas, its place on it), `aspect?: { min, max }` (the game frame's long / short side range; default 4/3…21/9, the engine's default, so repeat the renderer's range here when the game changes it), `orientation?` (`app.orientation` when it is portrait or landscape, else portrait), `holdMaxMs?` (`8000`). Validated at composition; the image file at patch time. |
 | `web.build` | `string` | `"bun run build"` | Runs before a build, in `web.cwd`. |
 | `web.devCommand` | `string` | `"bun run dev"` | Runs before `dev`, in `web.cwd`. |
 | `web.devUrl` | `string` | `"http://localhost:5173"` | Dev server URL — also the `DevHandle.url` and the readiness-poll target. |
@@ -427,7 +452,7 @@ One **per-plugin event** is declared by `doctor` (hookable via a `depends: [doct
 
 ## Breaking changes in this release
 
-The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them. So are the `dev` profile, `debug` on iOS, `ios`, `app.keepScreenOn` and the store-build changes, with one earlier stop: a non-numeric `app.buildNumber` on an android build is now refused at generate, where Tauri would have failed on it anyway. `Project.PlistValue` widens to the recursive `PlistValue`, which the package root exports too.
+The Android shell, the debug profile, `app.adaptiveIconInset` and the two new doctor checks are additive — nothing in the table below comes from them. So are the `dev` profile, `debug` on iOS, `ios`, `app.keepScreenOn`, `app.launch` and the store-build changes, with one earlier stop: a non-numeric `app.buildNumber` on an android build is now refused at generate, where Tauri would have failed on it anyway. `Project.PlistValue` widens to the recursive `PlistValue`, which the package root exports too.
 
 | What breaks | Migration |
 |---|---|

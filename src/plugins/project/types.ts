@@ -77,6 +77,54 @@ export type AndroidProfile =
     };
 
 /**
+ * A rectangle in some canvas's units: the still's place on its canvas, or a place in the
+ * window.
+ *
+ * @example
+ * ```ts
+ * const rect: LaunchRect = { x: 215, y: 402, width: 600, height: 640 };
+ * ```
+ */
+export type LaunchRect = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+/**
+ * `app.launch` with every default filled: the image as an absolute path (resolved against
+ * the cwd, as `app.icon` is), the aspect range, the orientation it is read in, and the hold.
+ * The Android patch pass and the placement maths take this, never the raw config.
+ *
+ * @example
+ * ```ts
+ * const launch: ResolvedLaunch = {
+ *   image: "/games/memory-missing/assets/splash/studio.webp",
+ *   frame: { width: 1024, height: 1536 },
+ *   rect: { x: 215, y: 402, width: 600, height: 640 },
+ *   aspect: { min: 4 / 3, max: 21 / 9 },
+ *   orientation: "portrait",
+ *   holdMaxMs: 8000
+ * };
+ * ```
+ */
+export type ResolvedLaunch = {
+  /** The still's absolute path. */
+  readonly image: string;
+  /** The canvas the still's place is given in. */
+  readonly frame: { readonly width: number; readonly height: number };
+  /** Where the still lies on that canvas. */
+  readonly rect: LaunchRect;
+  /** The game frame's long / short side range; 4/3 to 21/9 when the config sets none. */
+  readonly aspect: { readonly min: number; readonly max: number };
+  /** The orientation the aspect range is read in. */
+  readonly orientation: "portrait" | "landscape";
+  /** How long the still waits for `ready()`, in ms. */
+  readonly holdMaxMs: number;
+};
+
+/**
  * What a scan of the built page found: whether the editor agent ships in it, and the
  * first `.js` file (relative to `web.dist`, POSIX separators) that carries it.
  *
@@ -294,9 +342,12 @@ export type Api = {
    * patches (debug: the `.debug` id suffix, the `"<name> (debug)"` label, a cleartext
    * network security config; store and dev: all three reverted to the bytes before), its
    * release signing (the debug keystore under `HOME` ?? `USERPROFILE` in the debug profile), the
-   * main activity's manifest attributes (the orientation lock among them) and the status
+   * main activity's manifest attributes (the orientation lock among them), the status
    * bar style in MainActivity.kt (light icons on a dark `app.backgroundColor`, dark icons
-   * on a light one); iOS gets the Xcode entitlements-modification setting, the deployment
+   * on a light one), the window background, and with `app.launch` the launch still: a
+   * translucent start on Android 11+, `MokuLaunch.kt` beside MainActivity.kt drawing the
+   * still from the first frame, and `window.__mokuLaunch.ready()` for the page (unset
+   * removes all of it again); iOS gets the Xcode entitlements-modification setting, the deployment
    * target (`signing.apple.iosMinimumSystemVersion`, or its default) and the privacy manifest
    * (`ios.privacyManifest`; unset removes one an earlier pass added), each in `project.yml`
    * and `project.pbxproj`, because a kept tree never runs xcodegen again, and outside the
@@ -312,7 +363,8 @@ export type Api = {
    * @param opts.profile - The build profile; `"store"` when omitted.
    * @returns The paths patched vs. left unchanged.
    * @throws {Error} `[native]` in the debug profile when the debug keystore is missing,
-   *   with the `keytool` command that creates it; when `ios.privacyManifest` names no file,
+   *   with the `keytool` command that creates it; when `app.launch.still.image` is missing or
+   *   not a PNG or WebP, before anything is written; when `ios.privacyManifest` names no file,
    *   before anything is written; when `project.yml` or `project.pbxproj` lacks a line a
    *   patch needs; when a debug key in `Info.plist` has no value.
    * @example
