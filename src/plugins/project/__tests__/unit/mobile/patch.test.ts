@@ -128,6 +128,7 @@ describe("patchMobile", () => {
       gradlePath: path.join(genDir, "app", "build.gradle.kts"),
       kotlinPath: path.join(path.dirname(activityPath), "MokuLaunch.kt"),
       drawablePath: path.join(resDir, "drawable-nodpi", "moku_launch_still.png"),
+      keepPath: path.join(resDir, "raw", "moku_launch_keep.xml"),
       launch: launchAt(image)
     };
   };
@@ -519,6 +520,7 @@ describe("patchMobile", () => {
       expect(result.patched).toEqual(
         expect.arrayContaining([
           tree.drawablePath,
+          tree.keepPath,
           tree.kotlinPath,
           tree.activityPath,
           tree.themesPath
@@ -563,6 +565,7 @@ describe("patchMobile", () => {
       expect(await Promise.all(files.map(file => readFile(file, "utf8")))).toEqual(before);
       expect(existsSync(tree.kotlinPath)).toBe(false);
       expect(existsSync(tree.drawablePath)).toBe(false);
+      expect(existsSync(tree.keepPath)).toBe(false);
     });
 
     it.each([

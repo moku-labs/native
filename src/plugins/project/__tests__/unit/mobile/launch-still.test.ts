@@ -541,7 +541,8 @@ describe("patchAndroidLaunchStill", () => {
   const owned = (extension = "webp") => [
     path.join(resDir, "drawable-nodpi", `moku_launch_still.${extension}`),
     path.join(resDir, "values", "moku_launch.xml"),
-    path.join(resDir, "values-v30", "moku_launch.xml")
+    path.join(resDir, "values-v30", "moku_launch.xml"),
+    path.join(resDir, "raw", "moku_launch_keep.xml")
   ];
 
   beforeEach(async () => {
@@ -572,7 +573,7 @@ describe("patchAndroidLaunchStill", () => {
   /** A pass with app.launch unset. */
   const unset = () => patchAndroidLaunchStill(dir, genDir, undefined, "#F4E6CA");
 
-  it("writes all six kinds of file, then reports every one unchanged (bug: every build rewrites them and Gradle rebuilds)", async () => {
+  it("writes all seven kinds of file, then reports every one unchanged (bug: every build rewrites them and Gradle rebuilds)", async () => {
     const files = [...owned(), dayThemes, nightThemes, kotlin, activity];
 
     const first = await patch();
@@ -580,13 +581,23 @@ describe("patchAndroidLaunchStill", () => {
 
     expect(first).toEqual({ patched: files, unchanged: [] });
     expect(second).toEqual({ patched: [], unchanged: files });
-    const [drawable, values, valuesV30] = owned();
+    const [drawable, values, valuesV30, keep] = owned();
     expect(await readFile(drawable ?? "")).toEqual(Buffer.from(WEBP_BYTES));
     expect(await readFile(values ?? "", "utf8")).toContain(
       '<bool name="moku_launch_translucent">false</bool>'
     );
     expect(await readFile(valuesV30 ?? "", "utf8")).toContain(
       '<bool name="moku_launch_translucent">true</bool>'
+    );
+    // The shrinker keeps the still only when a resource file names it: MokuLaunch.kt looks it up
+    // by name at run time, which the shrinker cannot see.
+    expect(await readFile(keep ?? "", "utf8")).toBe(
+      [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        `<!-- ${MARKER} -->`,
+        '<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/moku_launch_still" />',
+        ""
+      ].join("\n")
     );
     expect(await readFile(dayThemes, "utf8")).toBe(LAUNCH_THEMES);
     expect(await readFile(nightThemes, "utf8")).toBe(LAUNCH_THEMES);
@@ -643,6 +654,25 @@ describe("patchAndroidLaunchStill", () => {
 
     expect(await readFile(values, "utf8")).toBe("<resources/>\n");
     expect(await readFile(kotlin, "utf8")).toBe("object MokuLaunch\n");
+  });
+
+  it("unset keeps a moku_launch_keep.xml native did not write; a set pass takes the name over, as it does the bool files (bug: unset deletes a keep file of the app)", async () => {
+    const keep = owned()[3] ?? "";
+    await seed(keep, '<resources tools:keep="@drawable/mine" />\n');
+
+    await unset();
+    expect(await readFile(keep, "utf8")).toBe('<resources tools:keep="@drawable/mine" />\n');
+
+    await patch();
+    expect(await readFile(keep, "utf8")).toContain('tools:keep="@drawable/moku_launch_still" />');
+  });
+
+  it("writes nothing, the keep file included, when a check fails (bug: a failed pass leaves a half-written tree)", async () => {
+    await seed(kotlin, "object MokuLaunch\n");
+
+    await expect(patch()).rejects.toThrow("was not written by @moku-labs/native");
+
+    expect(existsSync(owned()[3] ?? "")).toBe(false);
   });
 
   it("refuses a file that is not an image before anything is written", async () => {
