@@ -55,6 +55,12 @@ type LaunchActivity = { readonly path: string; readonly source: string };
 /** How long the still waits for `ready()` when `holdMaxMs` is unset. */
 const DEFAULT_HOLD_MAX_MS = 8000;
 
+/**
+ * The aspect range when `aspect` is unset: the engine renderer's default. The engine always
+ * fits its frame into a range, so the whole window would misplace the still outside it.
+ */
+const DEFAULT_ASPECT = { min: 4 / 3, max: 21 / 9 };
+
 /** The wording of this patch's theme errors. */
 const LAUNCH_WORDING: ThemeWording = {
   purpose: "to start without the system splash in",
@@ -171,9 +177,10 @@ function indentOf(line: string | undefined): string {
 }
 
 /**
- * Fills the defaults of `app.launch`: the orientation (`launch.orientation`, else
- * `app.orientation` when it is `"portrait"` or `"landscape"`, else `"portrait"`), the hold
- * (8000 ms), and the image resolved against the cwd, the rule `app.icon` follows.
+ * Fills the defaults of `app.launch`: the aspect range (4/3 to 21/9, the engine renderer's
+ * default), the orientation (`launch.orientation`, else `app.orientation` when it is
+ * `"portrait"` or `"landscape"`, else `"portrait"`), the hold (8000 ms), and the image
+ * resolved against the cwd, the rule `app.icon` follows.
  *
  * @param app - The `app` block of the global config.
  * @returns The resolved launch, or undefined when `app.launch` is unset.
@@ -191,7 +198,7 @@ export function resolveLaunch(app: Config["app"]): ResolvedLaunch | undefined {
     image: path.resolve(launch.still.image),
     frame: launch.still.frame,
     rect: launch.still.rect,
-    aspect: launch.aspect,
+    aspect: launch.aspect ?? DEFAULT_ASPECT,
     orientation: launch.orientation ?? appOrientation,
     holdMaxMs: launch.holdMaxMs ?? DEFAULT_HOLD_MAX_MS
   };
@@ -200,7 +207,6 @@ export function resolveLaunch(app: Config["app"]): ResolvedLaunch | undefined {
 /**
  * Fits the game frame into a window, the engine's `fitFrame`: the largest centred rectangle
  * whose long side / short side, read in the launch orientation, is inside the aspect range.
- * Without an aspect the frame is the whole window.
  *
  * @param windowSize - The window's size.
  * @param launch - The aspect range and the orientation it is read in.
@@ -215,8 +221,6 @@ export function launchFrame(
   launch: Pick<ResolvedLaunch, "aspect" | "orientation">
 ): LaunchRect {
   const { aspect } = launch;
-  if (aspect === undefined)
-    return { x: 0, y: 0, width: windowSize.width, height: windowSize.height };
 
   // The window's sides in the designed orientation, and the ratio the range allows.
   const portrait = launch.orientation === "portrait";

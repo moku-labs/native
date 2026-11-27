@@ -415,7 +415,7 @@ createApp({ config: { app: {
 | `still.image` | required | a `.png` or `.webp` file, resolved against the cwd as `app.icon` is; transparent outside the art |
 | `still.frame` | required | the canvas the place is given in; it covers the game frame, centred (CSS `cover`) |
 | `still.rect` | required | where the picture lies on that canvas |
-| `aspect` | unset: the game frame is the whole window | `{ min, max }` of the game frame's long side / short side; the frame is the largest centred rectangle inside it (the engine's `fitFrame`) |
+| `aspect` | `{ min: 4 / 3, max: 21 / 9 }`, the engine's default | `{ min, max }` of the game frame's long side / short side; the frame is the largest centred rectangle inside it (the engine's `fitFrame`). The engine always fits its frame into a range, so a game that changes its renderer's range repeats it here |
 | `orientation` | `app.orientation` when it is `"portrait"` or `"landscape"`, else `"portrait"` | the orientation the range is read in |
 | `holdMaxMs` | `8000` | the still goes by itself when no `ready()` came |
 
@@ -427,7 +427,7 @@ The Android pass writes, after the window background:
 | `res/values/moku_launch.xml` | `<bool name="moku_launch_translucent">false</bool>` |
 | `res/values-v30/moku_launch.xml` | the same bool, `true`: the window starts translucent on Android 11+, so the system shows no splash |
 | `res/values*/themes.xml` | one item of the app theme, after the start tag and after the window background lines: `android:windowIsTranslucent` = `@bool/moku_launch_translucent` |
-| `MokuLaunch.kt` beside `MainActivity.kt`, same package | the generated object: it adds a view to the decor view that draws `app.backgroundColor` (alpha forced opaque, white unset) and the still at its place; after the first frame (API 30+, 700 ms later) the window turns opaque; with no `ready()` the still goes after `holdMaxMs`, with `launch: no ready() in <n> ms, the still is removed` in logcat |
+| `MokuLaunch.kt` beside `MainActivity.kt`, same package | the generated object: it adds a view to the decor view that draws `app.backgroundColor` (alpha forced opaque, white unset) and the still at its place; after the first frame (API 30+, 700 ms later) the window turns opaque (a still that cannot be decoded logs `launch: the still picture could not be decoded` and the window still turns opaque); with no `ready()` the still goes after `holdMaxMs`, with `launch: no ready() in <n> ms, the still is removed` in logcat |
 | `MainActivity.kt` | `MokuLaunch.attach(this)` after `super.onCreate(savedInstanceState)`, and an `onWebViewCreate` member that calls `MokuLaunch.bind(this, webView)` |
 
 **The page contract.** `bind` adds `window.__mokuLaunch` to the page with one method,
@@ -907,7 +907,7 @@ This plugin has no per-plugin config — it reads global config only (`ctx.globa
 | `app.backgroundColor` | not `#rrggbb` or `#rrggbbaa` |
 | `app.orientation` | not `"portrait"`, `"landscape"` or `"any"` — config arrives as plain JS too |
 | `app.adaptiveIconInset` | not a finite number with `0 < n ≤ 30` |
-| `app.launch` | not an object, or `still`, `still.frame`, `still.rect` or `aspect` not an object; `still.image` not a `.png`/`.webp` name (any case); a frame or rect size not finite and `> 0`; `rect.x`/`rect.y` not finite and `>= 0`; the rect reaching past the frame; `aspect` without finite `min > 0` and `max >= min`; `orientation` not `"portrait"`/`"landscape"`; `holdMaxMs` not a whole number in `1…60000`. The image file itself is checked by the patch pass |
+| `app.launch` | not an object, or `still`, `still.frame`, `still.rect` or `aspect` not an object; `still.image` not a string, or not a `.png`/`.webp` name (any case); a frame or rect size not finite and `> 0`; `rect.x`/`rect.y` not finite and `>= 0`; the rect reaching past the frame; `aspect` without finite `min >= 0.000001` (a smaller bound prints as `0.000000f`) and `max >= min`; `orientation` not a string, or not `"portrait"`/`"landscape"`; `holdMaxMs` not a whole number in `1…60000`. The image file itself is checked by the patch pass |
 | `web.build` / `web.devCommand` / `web.devUrl` / `web.dist` | missing |
 | `signing.android.keystorePasswordEnv` / `keyPasswordEnv` | not a POSIX env-var NAME — it lands raw inside a Kotlin `System.getenv("…")` |
 | `signing.apple.iosMinimumSystemVersion` | not `MAJOR.MINOR[.PATCH]` — it lands raw in `project.yml` and `project.pbxproj` |

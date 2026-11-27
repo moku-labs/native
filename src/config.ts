@@ -183,7 +183,8 @@ export type LaunchConfig = {
   /**
    * The range of the game frame's long side / short side, read in `orientation`: the game
    * frame is the largest centred rectangle whose ratio is inside it (the engine's
-   * `fitFrame`). Unset: the game frame is the whole window.
+   * `fitFrame`). Default: 4/3…21/9, the engine's default; repeat the renderer's range here
+   * when the game changes it.
    */
   aspect?: { min: number; max: number };
   /** The orientation the aspect range is read in; `app.orientation` when it is one of the two, else `"portrait"`. */

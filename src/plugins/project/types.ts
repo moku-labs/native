@@ -94,7 +94,7 @@ export type LaunchRect = {
 
 /**
  * `app.launch` with every default filled: the image as an absolute path (resolved against
- * the cwd, as `app.icon` is), the orientation the aspect range is read in, and the hold.
+ * the cwd, as `app.icon` is), the aspect range, the orientation it is read in, and the hold.
  * The Android patch pass and the placement maths take this, never the raw config.
  *
  * @example
@@ -116,8 +116,8 @@ export type ResolvedLaunch = {
   readonly frame: { readonly width: number; readonly height: number };
   /** Where the still lies on that canvas. */
   readonly rect: LaunchRect;
-  /** The game frame's long / short side range; undefined: the frame is the whole window. */
-  readonly aspect: { readonly min: number; readonly max: number } | undefined;
+  /** The game frame's long / short side range; 4/3 to 21/9 when the config sets none. */
+  readonly aspect: { readonly min: number; readonly max: number };
   /** The orientation the aspect range is read in. */
   readonly orientation: "portrait" | "landscape";
   /** How long the still waits for `ready()`, in ms. */

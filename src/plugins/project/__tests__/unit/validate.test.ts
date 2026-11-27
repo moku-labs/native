@@ -412,9 +412,9 @@ describe("validateProjectConfig — app.launch", () => {
       '[native] app.launch.still.image "a.jpg" is not a .png or .webp file.'
     ],
     [
-      "an image that is not a string",
-      { image: 7 },
-      '[native] app.launch.still.image "7" is not a .png or .webp file.'
+      "an image that is a list (bug: path.resolve throws a TypeError later)",
+      { image: ["studio.png"] },
+      '[native] app.launch.still.image must be a string.\n  Point it at the still picture, such as "assets/splash/studio.webp".'
     ],
     [
       "a zero frame width",
@@ -462,12 +462,13 @@ describe("validateProjectConfig — app.launch", () => {
 
   it.each([
     ["a min of 0", { min: 0, max: 2 }],
+    ["a min that prints as 0.000000f", { min: 0.000_000_5, max: 2 }],
     ["a max below min", { min: 2, max: 1.5 }],
     ["a NaN min", { min: Number.NaN, max: 2 }],
     ["an infinite max", { min: 1, max: Number.POSITIVE_INFINITY }]
   ])("rejects %s as app.launch.aspect (bug: the Kotlin clamp throws or never clamps)", (_label, aspect) => {
     expect(() => validateProjectConfig(withLaunch({ ...LAUNCH, aspect }))).toThrow(
-      `[native] app.launch.aspect must have a finite min above 0 and a finite max of at least min, got { min: ${String(aspect.min)}, max: ${String(aspect.max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
+      `[native] app.launch.aspect must have a finite min of at least 0.000001 and a finite max of at least min, got { min: ${String(aspect.min)}, max: ${String(aspect.max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
     );
   });
 
@@ -475,6 +476,20 @@ describe("validateProjectConfig — app.launch", () => {
     expect(() => validateProjectConfig(withLaunch({ ...LAUNCH, orientation: "any" }))).toThrow(
       '[native] app.launch.orientation "any" is not a valid orientation.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.'
     );
+  });
+
+  it('rejects an orientation that is not a string (bug: ["portrait"] passes the pattern and is read as landscape)', () => {
+    expect(() =>
+      validateProjectConfig(withLaunch({ ...LAUNCH, orientation: ["portrait"] }))
+    ).toThrow(
+      '[native] app.launch.orientation must be a string.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.'
+    );
+  });
+
+  it("accepts the smallest aspect bound the Kotlin can print", () => {
+    expect(() =>
+      validateProjectConfig(withLaunch({ ...LAUNCH, aspect: { min: 0.000_001, max: 2 } }))
+    ).not.toThrow();
   });
 
   it.each([0, 60_001, 1.5, Number.NaN])("rejects %s as app.launch.holdMaxMs", holdMaxMs => {

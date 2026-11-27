@@ -112,25 +112,35 @@ const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const ascii = (text: string) => [...new TextEncoder().encode(text)];
 const WEBP_BYTES = Uint8Array.from([...ascii("RIFF"), 4, 0, 0, 0, ...ascii("WEBPVP8 ")]);
 
+/** The A Memory Missing `app.launch` as a game writes it, with no aspect. */
+const CONFIGURED = {
+  still: {
+    image: "assets/splash/studio.webp",
+    frame: { width: 1024, height: 1536 },
+    rect: { x: 215, y: 402, width: 600, height: 640 }
+  }
+};
+
+/** {@link CONFIGURED} through `resolveLaunch`, defaults filled. */
+const resolvedDefaults = (): ResolvedLaunch => {
+  const resolved = resolveLaunch(app({ launch: CONFIGURED }));
+  if (resolved === undefined) throw new Error("app.launch did not resolve");
+  return resolved;
+};
+
 describe("resolveLaunch", () => {
-  const launch = {
-    still: {
-      image: "assets/splash/studio.webp",
-      frame: { width: 1024, height: 1536 },
-      rect: { x: 215, y: 402, width: 600, height: 640 }
-    }
-  };
+  const launch = CONFIGURED;
 
   it("is undefined without app.launch (bug: an app without a still gets one)", () => {
     expect(resolveLaunch(app({}))).toBeUndefined();
   });
 
-  it("fills the defaults and resolves the image against the cwd, as app.icon is (bug: the patch reads the image from the gen tree)", () => {
+  it("fills the defaults, the engine's aspect range among them, and resolves the image against the cwd, as app.icon is (bug: the patch reads the image from the gen tree)", () => {
     expect(resolveLaunch(app({ launch }))).toEqual({
       image: path.resolve("assets/splash/studio.webp"),
       frame: launch.still.frame,
       rect: launch.still.rect,
-      aspect: undefined,
+      aspect: { min: 4 / 3, max: 21 / 9 },
       orientation: "portrait",
       holdMaxMs: 8000
     });
@@ -183,14 +193,12 @@ describe("launchFrame", () => {
     });
   });
 
-  it("is the whole window without an aspect", () => {
-    expect(
-      rounded(launchFrame({ width: 360, height: 1000 }, still({ aspect: undefined })))
-    ).toEqual({
+  it("clamps to the engine's default range when the config gives no aspect (bug: the still is placed on the whole window the engine never fills)", () => {
+    expect(rounded(launchFrame({ width: 360, height: 1000 }, resolvedDefaults()))).toEqual({
       x: 0,
-      y: 0,
+      y: 80,
       width: 360,
-      height: 1000
+      height: 840
     });
   });
 
@@ -211,10 +219,10 @@ describe("stillPlacement", () => {
     const place = stillPlacement({ width: 384, height: 832 }, MEMORY_MISSING);
 
     expect(rounded(place, 3)).toEqual({ x: 31.125, y: 217.75, width: 325, height: 346.667 });
-    // The point (515, 702) of the canvas lands at (193.625, 380.25).
-    const k = place.width / MEMORY_MISSING.rect.width;
-    expect(place.x + (515 - MEMORY_MISSING.rect.x) * k).toBeCloseTo(193.625, 3);
-    expect(place.y + (702 - MEMORY_MISSING.rect.y) * k).toBeCloseTo(380.25, 3);
+    // The point (515, 702) of the canvas lands at (193.625, 380.25): 300 canvas units past
+    // the rect's corner on both axes, at the scale 832 / 1536 of this window.
+    expect(place.x + 300 * (832 / 1536)).toBeCloseTo(193.625, 3);
+    expect(place.y + 300 * (832 / 1536)).toBeCloseTo(380.25, 3);
   });
 
   it("places the still inside the clamped frame, not the window", () => {
@@ -226,14 +234,13 @@ describe("stillPlacement", () => {
     });
   });
 
-  it("covers the whole window without an aspect", () => {
-    // k = max(360 / 1024, 1000 / 1536); the canvas overflows the window sideways.
-    const k = 1000 / 1536;
-    expect(
-      rounded(stillPlacement({ width: 360, height: 1000 }, still({ aspect: undefined })))
-    ).toEqual(
-      rounded({ x: (360 - 1024 * k) / 2 + 215 * k, y: 402 * k, width: 600 * k, height: 640 * k })
-    );
+  it("places the still in the default range's frame when the config gives no aspect, the canvas overflowing it vertically", () => {
+    expect(rounded(stillPlacement({ width: 600, height: 700 }, resolvedDefaults()))).toEqual({
+      x: 147.729_492,
+      y: 162.353_516,
+      width: 307.617_188,
+      height: 328.125
+    });
   });
 
   it("covers a landscape frame with a landscape canvas", () => {
@@ -401,19 +408,19 @@ describe("launchKotlin", () => {
     }
   });
 
-  it("writes 0f for an unset aspect, false for landscape and a fractional place as is", () => {
+  it("writes the aspect to six decimals, false for landscape and a fractional place as is", () => {
     const landscape = launchKotlin({
       packageName: "a.b",
       launch: still({
-        aspect: undefined,
+        aspect: { min: 0.4, max: 2.6 },
         orientation: "landscape",
         rect: { x: 12.5, y: 0, width: 600, height: 640 }
       }),
       backgroundColor: "#10161d"
     });
 
-    expect(landscape).toContain("  private const val ASPECT_MIN = 0f\n");
-    expect(landscape).toContain("  private const val ASPECT_MAX = 0f\n");
+    expect(landscape).toContain("  private const val ASPECT_MIN = 0.400000f\n");
+    expect(landscape).toContain("  private const val ASPECT_MAX = 2.600000f\n");
     expect(landscape).toContain("  private const val PORTRAIT = false\n");
     expect(landscape).toContain("  private const val RECT_X = 12.5f\n");
   });
@@ -432,6 +439,49 @@ describe("launchKotlin", () => {
 
     expect(withAlpha).toContain("  private const val BACKGROUND = 0xFF10161D.toInt()\n");
     expect(unset).toContain("  private const val BACKGROUND = 0xFFFFFFFF.toInt()\n");
+  });
+
+  it("turns the window opaque and warns when the still cannot be decoded (bug: the window stays translucent all session)", () => {
+    expect(kotlin).toContain(
+      [
+        "    val bitmap = BitmapFactory.decodeResource(activity.resources, id, options)",
+        "    if (bitmap == null) {",
+        "      // No still to draw: the window must still turn opaque, or it stays translucent all session.",
+        '      Log.w("moku", "launch: the still picture could not be decoded")',
+        "      if (Build.VERSION.SDK_INT >= 30) activity.window.decorView.postDelayed({ activity.setTranslucent(false) }, OPAQUE_AFTER_MS)",
+        "      return",
+        "    }",
+        "    val view = StillView(activity, bitmap)"
+      ].join("\n")
+    );
+  });
+
+  it("draws by the same maths as stillPlacement (bug: the shell puts the still elsewhere than the page)", () => {
+    expect(kotlin).toContain(
+      [
+        "    override fun onDraw(canvas: Canvas) {",
+        "      canvas.drawColor(BACKGROUND)",
+        "      val w = width.toFloat()",
+        "      val h = height.toFloat()",
+        "      if (w <= 0f || h <= 0f) return",
+        "      // The game frame: the largest centred rectangle whose long / short side is inside the aspect range.",
+        "      val short = if (PORTRAIT) w else h",
+        "      val long = if (PORTRAIT) h else w",
+        "      val ratio = long / short",
+        "      val wanted = ratio.coerceIn(ASPECT_MIN, ASPECT_MAX)",
+        "      val frameShort = if (ratio < wanted) long / wanted else short",
+        "      val frameLong = if (ratio > wanted) short * wanted else long",
+        "      val frameW = if (PORTRAIT) frameShort else frameLong",
+        "      val frameH = if (PORTRAIT) frameLong else frameShort",
+        "      // The still's canvas covers that frame, centred; the picture lies in its rectangle.",
+        "      val k = maxOf(frameW / FRAME_W, frameH / FRAME_H)",
+        "      val left = (w - frameW) / 2f + (frameW - FRAME_W * k) / 2f + RECT_X * k",
+        "      val top = (h - frameH) / 2f + (frameH - FRAME_H * k) / 2f + RECT_Y * k",
+        "      place.set(left, top, left + RECT_W * k, top + RECT_H * k)",
+        "      canvas.drawBitmap(bitmap, null, place, paint)",
+        "    }"
+      ].join("\n")
+    );
   });
 
   it("leaves no placeholder of the template", () => {

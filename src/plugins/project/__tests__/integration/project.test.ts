@@ -442,7 +442,8 @@ describe("complex tier: project plugin (integration)", () => {
       expect(await readFile(activityPath, "utf8")).toContain("MokuLaunch.attach(this)");
       const kotlin = await readFile(path.join(path.dirname(activityPath), "MokuLaunch.kt"), "utf8");
       expect(kotlin).toContain("private const val HOLD_MAX_MS = 5000L");
-      expect(kotlin).toContain("private const val ASPECT_MIN = 0f");
+      // No aspect configured: the engine's default range, 4/3 to 21/9.
+      expect(kotlin).toContain("private const val ASPECT_MIN = 1.333333f");
       expect(await readFile(themesPath(genDir), "utf8")).toContain(
         '<item name="android:windowIsTranslucent">@bool/moku_launch_translucent</item>'
       );

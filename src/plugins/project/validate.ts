@@ -41,6 +41,9 @@ const LAUNCH_ORIENTATION_PATTERN = /^(?:portrait|landscape)$/;
 /** The longest the launch still may wait for `ready()`, in ms. */
 const MAX_HOLD_MS = 60_000;
 
+/** The smallest aspect bound: anything below prints as `0.000000f` in the Kotlin. */
+const MIN_ASPECT = 0.000_001;
+
 /**
  * Validates one free-text config value that is interpolated verbatim into a generated
  * file. Every generated format (TOML, Kotlin, plist, XML) has its own escape rules, so a
@@ -270,7 +273,12 @@ function assertLaunchStill(still: LaunchConfig["still"]): void {
     still.rect,
     "Set it to where the picture lies on that canvas, such as { x: 215, y: 402, width: 600, height: 640 }."
   );
-  const image = String(still.image);
+  const image: unknown = still.image;
+  if (typeof image !== "string") {
+    throw new TypeError(
+      `[native] app.launch.still.image must be a string.\n  Point it at the still picture, such as "assets/splash/studio.webp".`
+    );
+  }
   if (!STILL_IMAGE_PATTERN.test(image)) {
     throw new Error(
       `[native] app.launch.still.image "${image}" is not a .png or .webp file.\n  Point it at the still picture, such as "assets/splash/studio.webp".`
@@ -299,8 +307,9 @@ function assertLaunchStill(still: LaunchConfig["still"]): void {
 }
 
 /**
- * Validates `app.launch.aspect`: both bounds finite, `min > 0` and `max >= min`. The ratio is
- * the long side / short side in the launch orientation, so a range below 1 is legal.
+ * Validates `app.launch.aspect`: both bounds finite, `min >= 0.000001` (a smaller bound
+ * prints as `0.000000f`) and `max >= min`. The ratio is the long side / short side in the
+ * launch orientation, so a range below 1 is legal.
  *
  * @param aspect - The configured range, or undefined when unset.
  * @throws {Error} When the range is set and invalid.
@@ -319,9 +328,9 @@ function assertLaunchAspect(aspect: LaunchConfig["aspect"]): void {
   );
 
   const { min, max } = aspect;
-  if (Number.isFinite(min) && Number.isFinite(max) && min > 0 && max >= min) return;
+  if (Number.isFinite(min) && Number.isFinite(max) && min >= MIN_ASPECT && max >= min) return;
   throw new Error(
-    `[native] app.launch.aspect must have a finite min above 0 and a finite max of at least min, got { min: ${String(min)}, max: ${String(max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
+    `[native] app.launch.aspect must have a finite min of at least ${String(MIN_ASPECT)} and a finite max of at least min, got { min: ${String(min)}, max: ${String(max)} }.\n  Use the range of the game frame's long side / short side, such as { min: 4 / 3, max: 21 / 9 }.`
   );
 }
 
@@ -363,6 +372,12 @@ function assertLaunchConfig(launch: Config["app"]["launch"]): void {
 
   assertLaunchStill(launch.still);
   assertLaunchAspect(launch.aspect);
+  const orientation: unknown = launch.orientation;
+  if (orientation !== undefined && typeof orientation !== "string") {
+    throw new TypeError(
+      `[native] app.launch.orientation must be a string.\n  Use "portrait" or "landscape", or unset it to follow app.orientation.`
+    );
+  }
   assertShape(
     "app.launch.orientation",
     launch.orientation,

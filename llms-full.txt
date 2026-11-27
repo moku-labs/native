@@ -166,7 +166,7 @@ export type LaunchConfig = {
     frame: { width: number; height: number };       // the canvas; it covers the game frame, centred (CSS cover)
     rect: { x: number; y: number; width: number; height: number }; // the picture's place on the canvas
   };
-  aspect?: { min: number; max: number };            // game frame long / short side range; unset = the whole window
+  aspect?: { min: number; max: number };            // game frame long / short side range; default 4/3…21/9, the engine's default
   orientation?: "portrait" | "landscape";           // default: app.orientation when one of the two, else "portrait"
   holdMaxMs?: number;                               // default 8000
 };
@@ -832,7 +832,7 @@ Behavior:
       <item name="android:windowIsTranslucent">@bool/moku_launch_translucent</item>,
       MokuLaunch.kt beside MainActivity.kt (same package; an object with attach(activity) and
       bind(activity, webView); BACKGROUND = app.backgroundColor with alpha forced FF, white
-      unset; FRAME_W/H, RECT_X/Y/W/H literals; ASPECT_MIN/MAX toFixed(6), 0f = no aspect;
+      unset; FRAME_W/H, RECT_X/Y/W/H literals; ASPECT_MIN/MAX toFixed(6), from the default 4/3…21/9 when aspect is unset;
       PORTRAIT; HOLD_MAX_MS; OPAQUE_AFTER_MS = 700L), and in MainActivity.kt
       `MokuLaunch.attach(this)` after `super.onCreate(savedInstanceState)` plus an
       `override fun onWebViewCreate(webView: android.webkit.WebView)` member that calls
@@ -1733,12 +1733,13 @@ indented actionable second line ("  <fix-it / next command>").
     untouched.' (a finite number with 0 < n ≤ 30)
   - app.launch, when set: '[native] app.launch must be an object.' (and app.launch.still,
     app.launch.still.frame, app.launch.still.rect, app.launch.aspect — a missing block is never a
-    TypeError); '[native] app.launch.still.image "<x>" is not a .png or .webp file.' (any case);
+    TypeError); '[native] app.launch.still.image must be a string.' and app.launch.orientation
+    likewise; '[native] app.launch.still.image "<x>" is not a .png or .webp file.' (any case);
     '[native] app.launch.still.<frame|rect>.<width|height> must be a finite number above 0, got
     <x>.'; '[native] app.launch.still.rect.<x|y> must be a finite number of 0 or more, got <x>.';
     '[native] app.launch.still.rect reaches past app.launch.still.frame: x + width is <n>,
     frame.width is <n>.' (and y + height); '[native] app.launch.aspect must have a finite min
-    above 0 and a finite max of at least min, got { min: <a>, max: <b> }.' (the ratio is long /
+    of at least 0.000001 and a finite max of at least min, got { min: <a>, max: <b> }.' (the ratio is long /
     short side, so a range below 1 is legal); '[native] app.launch.orientation "<x>" is not a
     valid orientation.' (portrait or landscape); '[native] app.launch.holdMaxMs must be a whole
     number above 0 and at most 60000, got <x>.' The image file is the patch's check, not this one.

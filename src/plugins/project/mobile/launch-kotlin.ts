@@ -39,19 +39,17 @@ function floatLiteral(value: number): string {
 }
 
 /**
- * Writes an aspect bound as a Kotlin `Float` literal, six decimals; `0f` when unset, which
- * the Kotlin reads as "no aspect".
+ * Writes an aspect bound as a Kotlin `Float` literal, six decimals.
  *
- * @param value - The bound, or undefined.
+ * @param value - The bound.
  * @returns The literal.
  * @example
  * ```ts
  * aspectLiteral(4 / 3); // "1.333333f"
- * aspectLiteral(undefined); // "0f"
  * ```
  */
-function aspectLiteral(value: number | undefined): string {
-  return value === undefined ? "0f" : `${value.toFixed(6)}f`;
+function aspectLiteral(value: number): string {
+  return `${value.toFixed(6)}f`;
 }
 
 /**
@@ -112,8 +110,8 @@ object MokuLaunch {
   private const val RECT_Y = ${floatLiteral(launch.rect.y)}
   private const val RECT_W = ${floatLiteral(launch.rect.width)}
   private const val RECT_H = ${floatLiteral(launch.rect.height)}
-  private const val ASPECT_MIN = ${aspectLiteral(launch.aspect?.min)}
-  private const val ASPECT_MAX = ${aspectLiteral(launch.aspect?.max)}
+  private const val ASPECT_MIN = ${aspectLiteral(launch.aspect.min)}
+  private const val ASPECT_MAX = ${aspectLiteral(launch.aspect.max)}
   private const val PORTRAIT = ${String(launch.orientation === "portrait")}
   private const val HOLD_MAX_MS = ${String(launch.holdMaxMs)}L
   private const val OPAQUE_AFTER_MS = 700L
@@ -127,7 +125,13 @@ object MokuLaunch {
     remove()
     val id = activity.resources.getIdentifier("moku_launch_still", "drawable", activity.packageName)
     val options = BitmapFactory.Options().apply { inScaled = false }
-    val bitmap = BitmapFactory.decodeResource(activity.resources, id, options) ?: return
+    val bitmap = BitmapFactory.decodeResource(activity.resources, id, options)
+    if (bitmap == null) {
+      // No still to draw: the window must still turn opaque, or it stays translucent all session.
+      Log.w("moku", "launch: the still picture could not be decoded")
+      if (Build.VERSION.SDK_INT >= 30) activity.window.decorView.postDelayed({ activity.setTranslucent(false) }, OPAQUE_AFTER_MS)
+      return
+    }
     val view = StillView(activity, bitmap)
     (activity.window.decorView as ViewGroup).addView(
       view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -185,18 +189,14 @@ object MokuLaunch {
       val h = height.toFloat()
       if (w <= 0f || h <= 0f) return
       // The game frame: the largest centred rectangle whose long / short side is inside the aspect range.
-      var frameW = w
-      var frameH = h
-      if (ASPECT_MIN > 0f) {
-        val short = if (PORTRAIT) w else h
-        val long = if (PORTRAIT) h else w
-        val ratio = long / short
-        val wanted = ratio.coerceIn(ASPECT_MIN, ASPECT_MAX)
-        val frameShort = if (ratio < wanted) long / wanted else short
-        val frameLong = if (ratio > wanted) short * wanted else long
-        frameW = if (PORTRAIT) frameShort else frameLong
-        frameH = if (PORTRAIT) frameLong else frameShort
-      }
+      val short = if (PORTRAIT) w else h
+      val long = if (PORTRAIT) h else w
+      val ratio = long / short
+      val wanted = ratio.coerceIn(ASPECT_MIN, ASPECT_MAX)
+      val frameShort = if (ratio < wanted) long / wanted else short
+      val frameLong = if (ratio > wanted) short * wanted else long
+      val frameW = if (PORTRAIT) frameShort else frameLong
+      val frameH = if (PORTRAIT) frameLong else frameShort
       // The still's canvas covers that frame, centred; the picture lies in its rectangle.
       val k = maxOf(frameW / FRAME_W, frameH / FRAME_H)
       val left = (w - frameW) / 2f + (frameW - FRAME_W * k) / 2f + RECT_X * k
