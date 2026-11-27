@@ -4,8 +4,9 @@
  * own), draws the game's still picture in its first frame at the game's place, and removes
  * it when the page calls `window.__mokuLaunch.ready()` or after `holdMaxMs`. The patch
  * writes the still as a drawable, a `moku_launch_translucent` bool (false, true from API 30),
- * one theme item that points `android:windowIsTranslucent` at it, the generated
- * `MokuLaunch.kt` (see `launch-kotlin.ts`) and two hooks in MainActivity.kt.
+ * one theme item that points `android:windowIsTranslucent` at it, a `res/raw` file that keeps
+ * the drawable through the release resource shrinker, the generated `MokuLaunch.kt` (see
+ * `launch-kotlin.ts`) and two hooks in MainActivity.kt.
  *
  * Every line and file this patch writes carries the marker `moku:native launch still`
  * (the drawable is owned by its name), so a pass first strips its own lines and then writes
@@ -108,6 +109,16 @@ const DRAWABLE_EXTENSIONS = ["png", "webp"] as const;
 
 /** The bool resource file, in `values` (false) and `values-v30` (true). */
 const BOOL_FILE = "moku_launch.xml";
+
+/**
+ * The shrinker's keep file, in `res/raw`. `MokuLaunch.kt` looks the drawable up by name at run
+ * time, so a release build's resource shrinker sees no reference and strips it; `tools:keep`
+ * names it. Owned by the marker, like the bool files.
+ */
+const KEEP_FILE = "moku_launch_keep.xml";
+
+/** The directory of {@link KEEP_FILE}. */
+const RAW_DIRECTORY = "raw";
 
 /** The unqualified resource directory: the day theme and the default bool live there. */
 const VALUES_DIRECTORY = "values";
@@ -452,6 +463,24 @@ function boolResource(translucent: boolean): string {
 }
 
 /**
+ * Builds the resource file that keeps the launch drawable through the resource shrinker.
+ *
+ * @returns The `moku_launch_keep.xml` content.
+ * @example
+ * ```ts
+ * keepResource(); // a <resources> file with tools:keep="@drawable/moku_launch_still"
+ * ```
+ */
+function keepResource(): string {
+  return [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    XML_MARKER,
+    `<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/${DRAWABLE_NAME}" />`,
+    ""
+  ].join("\n");
+}
+
+/**
  * Finds the main activity: the one MainActivity.kt that calls `super.onCreate`. A second
  * MainActivity.kt without that line is legal and left alone.
  *
@@ -531,7 +560,7 @@ async function removeLaunchStill(
   const result: ResultLists = { patched: [], unchanged: [] };
   const resourceDirectory = androidResourceDirectory(genDirectory);
 
-  // The owned resources: the drawable by its name, the bool files by their marker.
+  // The owned resources: the drawable by its name, the bool files and the keep file by their marker.
   for (const extension of DRAWABLE_EXTENSIONS) {
     const drawable = path.join(
       resourceDirectory,
@@ -543,6 +572,7 @@ async function removeLaunchStill(
   for (const directory of [VALUES_DIRECTORY, VALUES_V30_DIRECTORY]) {
     await removeFile(path.join(resourceDirectory, directory, BOOL_FILE), result, true);
   }
+  await removeFile(path.join(resourceDirectory, RAW_DIRECTORY, KEEP_FILE), result, true);
 
   // The theme item, the generated object and the activity hooks.
   const edits: FileEdit[] = await themeEdits(resourceDirectory);
@@ -597,7 +627,7 @@ async function kotlinEdits(
 /**
  * Holds the game's still from the app's first frame on Android, through the write-if-changed
  * writer: the drawable (the file of the other extension removed), the `values` and
- * `values-v30` bools, the theme item in every `themes.xml` that holds the app theme,
+ * `values-v30` bools, the shrinker's keep file in `res/raw`, the theme item in every `themes.xml` that holds the app theme,
  * `MokuLaunch.kt` beside MainActivity.kt, then MainActivity.kt's two hooks. Every check runs
  * before the first write. Without a launch the patch's own lines and files are removed, and a
  * tree it never touched reports nothing.
@@ -617,7 +647,7 @@ async function kotlinEdits(
  * // First pass on the generated tree; a second pass lists every file under `unchanged`.
  * await patchAndroidLaunchStill(".moku/tauri", ".moku/tauri/src-tauri/gen/android", launch, "#F4E6CA");
  * // { patched: [".../drawable-nodpi/moku_launch_still.webp", ".../values/moku_launch.xml", ".../values-v30/moku_launch.xml",
- * //             ".../values/themes.xml", ".../values-night/themes.xml", ".../MokuLaunch.kt", ".../MainActivity.kt"], unchanged: [] }
+ * //             ".../raw/moku_launch_keep.xml", ".../values/themes.xml", ".../values-night/themes.xml", ".../MokuLaunch.kt", ".../MainActivity.kt"], unchanged: [] }
  * ```
  */
 export async function patchAndroidLaunchStill(
@@ -661,6 +691,10 @@ export async function patchAndroidLaunchStill(
   // The translucent start from API 30, then the theme item, the object and the hooks.
   await write(path.join(resourceDirectory, VALUES_DIRECTORY, BOOL_FILE), boolResource(false));
   await write(path.join(resourceDirectory, VALUES_V30_DIRECTORY, BOOL_FILE), boolResource(true));
+
+  // The release shrinker strips a resource no code names statically; the still is named at run
+  // time. Like the bool files, a file of that name without the marker is replaced on a set pass.
+  await write(path.join(resourceDirectory, RAW_DIRECTORY, KEEP_FILE), keepResource());
   for (const edit of [...themes, ...kotlin]) await write(edit.path, edit.content);
   return result;
 }

@@ -827,7 +827,11 @@ Behavior:
       res/drawable-nodpi/moku_launch_still.<png|webp> (the image bytes; the extension follows
       the first bytes, PNG 89 50 4E 47 or RIFF....WEBP; the other extension's file is
       removed), res/values/moku_launch.xml (<bool name="moku_launch_translucent">false</bool>),
-      res/values-v30/moku_launch.xml (the same, true), one item in the app theme of every
+      res/values-v30/moku_launch.xml (the same, true), res/raw/moku_launch_keep.xml (<resources
+      xmlns:tools=... tools:keep="@drawable/moku_launch_still" />; MokuLaunch.kt looks the
+      drawable up by name at run time, so the release resource shrinker would strip it
+      otherwise; a set pass takes over a file of that name, unset removes it only with the
+      marker), one item in the app theme of every
       themes.xml holding it, after the start tag AND after the window-background lines:
       <item name="android:windowIsTranslucent">@bool/moku_launch_translucent</item>,
       MokuLaunch.kt beside MainActivity.kt (same package; an object with attach(activity) and
@@ -837,7 +841,7 @@ Behavior:
       `MokuLaunch.attach(this)` after `super.onCreate(savedInstanceState)` plus an
       `override fun onWebViewCreate(webView: android.webkit.WebView)` member that calls
       super and `MokuLaunch.bind(this, webView)`, before the class's last `}`. Every owned
-      line and the bool files carry 'moku:native launch still' (<!-- --> in XML, // in
+      line and the bool and keep files carry 'moku:native launch still' (<!-- --> in XML, // in
       Kotlin); the drawable is owned by its name. Strip-then-write: CRLF-safe,
       write-if-changed, idempotent (with app.backgroundColor too); unset strips the lines,
       removes the owned files that exist (a file without the marker is never removed) and

@@ -426,6 +426,7 @@ The Android pass writes, after the window background:
 | `res/drawable-nodpi/moku_launch_still.png` or `.webp` | the image's bytes; the extension follows its first bytes, and the file of the other extension is removed |
 | `res/values/moku_launch.xml` | `<bool name="moku_launch_translucent">false</bool>` |
 | `res/values-v30/moku_launch.xml` | the same bool, `true`: the window starts translucent on Android 11+, so the system shows no splash |
+| `res/raw/moku_launch_keep.xml` | `<resources tools:keep="@drawable/moku_launch_still" />`: `MokuLaunch.kt` looks the still up by name at run time, so a release build's resource shrinker, which removes resources no code refers to statically, would strip it and the shell would draw the plain background |
 | `res/values*/themes.xml` | one item of the app theme, after the start tag and after the window background lines: `android:windowIsTranslucent` = `@bool/moku_launch_translucent` |
 | `MokuLaunch.kt` beside `MainActivity.kt`, same package | the generated object: it adds a view to the decor view that draws `app.backgroundColor` (alpha forced opaque, white unset) and the still at its place; after the first frame (API 30+, 700 ms later) the window turns opaque (a still that cannot be decoded logs `launch: the still picture could not be decoded` and the window still turns opaque); with no `ready()` the still goes after `holdMaxMs`, with `launch: no ready() in <n> ms, the still is removed` in logcat |
 | `MainActivity.kt` | `MokuLaunch.attach(this)` after `super.onCreate(savedInstanceState)`, and an `onWebViewCreate` member that calls `MokuLaunch.bind(this, webView)` |
@@ -440,12 +441,13 @@ The placement is `stillPlacement(window, launch)` in `launch-still.ts`, the test
 the Kotlin maths: on the A26 (a 384 × 832 window) the A Memory Missing still lies at
 `{ x: 31.125, y: 217.75, width: 325, height: 346.667 }`.
 
-Every written line and the two bool files carry the marker `moku:native launch still`
+Every written line, the two bool files and the keep file carry the marker `moku:native launch still`
 (`<!-- … -->` in XML, `// …` in Kotlin); the drawable is owned by its name. Each pass strips
 its own lines first and writes them again, so a second pass reports every file unchanged,
 other bytes are kept (CRLF included), and unsetting `app.launch` removes the owned files and
 gives back `MainActivity.kt` and `themes.xml` byte for byte. A file without the marker is
-never removed, and a `MokuLaunch.kt` without it is never overwritten. The system bar patch
+never removed on unset, and a `MokuLaunch.kt` without it is never overwritten; a set pass
+takes over a `moku_launch.xml` or `moku_launch_keep.xml` of that name, as the bool files are. The system bar patch
 touches other lines of `MainActivity.kt`, so either order gives the same file.
 
 With `app.launch` set, these are `[native]` errors, raised before the patch writes anything:
